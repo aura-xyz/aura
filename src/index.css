@@ -394,6 +394,23 @@
 }
 
 /* ---------------------------------------------------------------
+   Reduced motion
+   --------------------------------------------------------------- */
+
+/* 侧边栏折叠是首个显式指定时长的动画（200ms），此前各处 transition
+   都吃 Tailwind 默认值。系统开启「减少动态效果」时统一压掉，
+   避免宽度/透明度过渡引发不适。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---------------------------------------------------------------
    highlight.js (light / dark)
    --------------------------------------------------------------- */
 

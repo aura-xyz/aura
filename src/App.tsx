@@ -8,6 +8,8 @@ import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import SettingsPage from "./pages/SettingsPage";
+import McpPage from "./pages/McpPage";
+import SkillsPage from "./pages/SkillsPage";
 import { StoreProvider, useStore } from "./store";
 
 function basename(p: string): string {
@@ -49,7 +51,9 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     deleteSession,
     removeWorkspace,
   } = useStore();
-  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp">(
+    "chat",
+  );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -108,8 +112,10 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
 
       <div className="flex min-h-0 flex-1">
         <Sidebar
-          settingsActive={view === "settings"}
+          view={view}
           onOpenSettings={() => setView("settings")}
+          onOpenSkills={() => setView("skills")}
+          onOpenMcp={() => setView("mcp")}
           onNavigate={() => setView("chat")}
         />
 
@@ -121,6 +127,14 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
                 theme={theme}
                 setTheme={setTheme}
               />
+            </div>
+          ) : view === "skills" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <SkillsPage onClose={() => setView("chat")} />
+            </div>
+          ) : view === "mcp" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <McpPage onClose={() => setView("chat")} />
             </div>
           ) : (
             <>

@@ -1,21 +1,28 @@
-﻿import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChevronRight,
+  MessageSquarePlus,
   PanelLeftClose,
-  Plus,
+  Plug,
   Settings,
+  Sparkles,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
 
+export type View = "chat" | "settings" | "skills" | "mcp";
+
 interface Props {
+  /** 当前视图，用于高亮导航项 */
+  view: View;
   onOpenSettings: () => void;
-  /** 选中会话/工作区后回调，用于从设置页切回对话视图 */
+  onOpenSkills: () => void;
+  onOpenMcp: () => void;
+  /** 选中会话后回调，用于从设置/Skills/MCP 页切回对话视图 */
   onNavigate?: () => void;
-  settingsActive?: boolean;
 }
 
 function basename(p: string): string {
@@ -23,25 +30,40 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-export default function Sidebar({ onOpenSettings, onNavigate, settingsActive }: Props) {
+export default function Sidebar({
+  view,
+  onOpenSettings,
+  onOpenSkills,
+  onOpenMcp,
+  onNavigate,
+}: Props) {
   const {
     workspaces,
     workspace,
     sessions,
     activeId,
     switchWorkspace,
-    newSession,
     openSession,
     deleteSession,
     renamingId,
     cancelRename,
     renameSession,
-    } = useStore();
+  } = useStore();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
+
+  // 工作区列表异步加载完毕后默认全部展开一次，之后完全交给用户控制。
+  // 不再像以前那样跟随「当前工作区」自动展开：工作区已不再是切换目标，
+  // 只是对话的归类方式，把所有组都露出来才能看见归类结果。
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || workspaces.length === 0) return;
+    seeded.current = true;
+    setExpanded(new Set(workspaces));
+  }, [workspaces]);
 
   function toggleCollapsed() {
     setCollapsed((v) => {
@@ -49,12 +71,6 @@ export default function Sidebar({ onOpenSettings, onNavigate, settingsActive }: 
       return !v;
     });
   }
-
-  useEffect(() => {
-    if (workspace) {
-      setExpanded((prev) => new Set(prev).add(workspace));
-    }
-  }, [workspace]);
 
   function toggleExpand(w: string) {
     setExpanded((prev) => {
@@ -65,90 +81,50 @@ export default function Sidebar({ onOpenSettings, onNavigate, settingsActive }: 
     });
   }
 
+  /** 「新建对话」= 选一个本地目录，在该目录下开会话。 */
   async function pickWorkspace() {
     try {
       const dir = await open({ directory: true, title: "选择工作区目录" });
       if (typeof dir === "string") {
         await switchWorkspace(dir);
+        onNavigate?.();
       }
     } catch {
       /* 用户取消或目录无效时静默 */
     }
   }
 
-  if (collapsed) {
-    return (
-      <aside className="flex w-14 shrink-0 flex-col border-r border-line">
+  // 折叠时宽度收窄会由 overflow-hidden 裁掉内容。让文字靠 max-width +
+  // opacity 过渡而不是直接 hidden，收窄过程中才不会拦腰截断。
+  const label =
+    "whitespace-nowrap transition-[max-width,opacity] duration-200 ease-in-out";
+  const labelOff = "max-w-0 opacity-0";
+  const labelOn = "max-w-40 opacity-100";
+
+  return (
+    <aside
+      className={`flex shrink-0 flex-col overflow-hidden border-r border-line transition-[width] duration-200 ease-in-out ${
+        collapsed ? "w-14" : "w-64"
+      }`}
+    >
+      <header className="flex h-[49px] shrink-0 items-center gap-2 px-3">
         {/* 折叠态下 logo 即展开入口。此前下方还有一个独立的展开按钮，
             与 logo 功能完全重复，用户反馈两个入口让人困惑。 */}
         <button
           type="button"
           onClick={toggleCollapsed}
+          disabled={!collapsed}
           aria-label="展开侧边栏"
           title="展开侧边栏"
-          className="mx-auto mt-3 mb-3 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          className="shrink-0 rounded-tag p-1.5 text-subtle transition-colors enabled:hover:bg-bubble enabled:hover:text-foreground disabled:pointer-events-none"
         >
           <img src="/logo.png" alt="Aura" draggable={false} className="h-5 w-5" />
         </button>
-
-        <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto px-2 py-1">
-          {workspaces.map((w) => (
-            <button
-              key={w}
-              type="button"
-              onClick={() => {
-                switchWorkspace(w);
-                onNavigate?.();
-              }}
-              title={w}
-              aria-label={w}
-              className="mx-auto flex w-full items-center justify-center rounded-tag py-2 transition-colors hover:bg-bubble"
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  w === workspace ? "bg-brand" : "bg-line"
-                }`}
-              />
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={pickWorkspace}
-            aria-label="添加工作区"
-            title="添加工作区"
-            className="mx-auto flex w-full items-center justify-center rounded-tag py-2 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-
-        <div className="px-2 py-2">
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            aria-label="设置"
-            title="设置"
-            className={`mx-auto flex w-full items-center justify-center rounded-tag py-1.5 transition-colors hover:bg-bubble hover:text-foreground ${
-              settingsActive ? "bg-bubble text-foreground" : "text-subtle"
-            }`}
-          >
-            <Settings size={14} />
-          </button>
-        </div>
-      </aside>
-    );
-  }
-
-  return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-line">
-      <header className="flex items-center gap-2 px-4 py-3">
-        <img
-          src="/logo.png"
-          alt=""
-          draggable={false}
-          className="h-5 w-5 shrink-0"
-        />
-        <span className="text-base font-semibold tracking-[-0.02em]">
+        <span
+          className={`${label} text-base font-semibold tracking-[-0.02em] ${
+            collapsed ? labelOff : labelOn
+          }`}
+        >
           Aura
         </span>
         <button
@@ -156,165 +132,185 @@ export default function Sidebar({ onOpenSettings, onNavigate, settingsActive }: 
           onClick={toggleCollapsed}
           aria-label="收起侧边栏"
           title="收起侧边栏"
-          className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          className={`ml-auto shrink-0 rounded-tag p-1 text-subtle transition-[opacity] duration-200 hover:bg-bubble hover:text-foreground ${
+            collapsed ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
         >
           <PanelLeftClose size={14} />
         </button>
       </header>
 
-      <div className="flex items-center justify-between px-4 pb-1">
-        <span className="text-[11px] font-medium tracking-[0.08em] text-subtle">
-          工作区
-        </span>
-        <button
-          type="button"
-          onClick={pickWorkspace}
-          aria-label="添加工作区"
-          className="rounded-tag p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
+      {/* 顶部导航：新建对话 / Skills / MCP。
+          独立卡片边框，与下方工作区分组在视觉上分开。 */}
+      <nav className="mx-3 mb-3 shrink-0 rounded-card border border-line bg-surface p-1">
+        {(
+          [
+            { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: pickWorkspace },
+            { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
+            { key: "mcp", label: "MCP", icon: Plug, onClick: onOpenMcp },
+          ] as const
+        ).map(({ key, label: text, icon: Icon, onClick }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={onClick}
+            aria-current={key !== "new" && view === key ? "page" : undefined}
+            className={`flex w-full items-center gap-2.5 rounded-tag px-2 py-1.5 text-left text-sm transition-colors ${
+              key !== "new" && view === key
+                ? "bg-bubble font-medium text-foreground"
+                : "text-subtle hover:bg-bubble hover:text-foreground"
+            }`}
+          >
+            <Icon size={15} className="shrink-0" />
+            <span className={`${label} ${collapsed ? labelOff : labelOn}`}>{text}</span>
+          </button>
+        ))}
+      </nav>
 
-      <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-        {workspaces.map((w) => {
-          const isOpen = expanded.has(w);
-          const wsSessions = sessions.filter((s) => s.workspace === w);
-          const isCurrent = w === workspace;
-          return (
-            <section key={w} className="mb-0.5">
-              <div
-                data-ctx-workspace={w}
-                className={`group flex items-center rounded-tag transition-colors ${
-                  isCurrent ? "bg-bubble" : "hover:bg-bubble"
-                }`}
+      {/* 工作区列表。折叠态是圆点指示器、展开态是可折叠分组，
+          两者结构不同构，只能各自渲染；宽度过渡期间被 overflow-hidden 裁切。 */}
+      <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto pb-2">
+        {collapsed ? (
+          <div className="px-2 py-1">
+            {workspaces.map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => {
+                  switchWorkspace(w);
+                  onNavigate?.();
+                }}
+                title={w}
+                aria-label={w}
+                className="mx-auto flex w-full items-center justify-center rounded-tag py-2 transition-colors hover:bg-bubble"
               >
-                <button
-                  type="button"
-                  onClick={() => toggleExpand(w)}
-                  aria-label={isOpen ? "折叠工作区" : "展开工作区"}
-                  className="flex w-6 shrink-0 items-center justify-center py-1.5 text-subtle"
-                >
-                  <ChevronRight
-                    size={13}
-                    className={`transition-transform ${isOpen ? "rotate-90" : ""}`}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    switchWorkspace(w);
-                    onNavigate?.();
-                  }}
-                  title={w}
-                  className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-sm"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                      isCurrent ? "bg-brand" : "bg-line"
-                    }`}
-                  />
-                  <span
-                    className={`truncate ${
-                      isCurrent ? "font-medium" : "text-subtle"
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    w === workspace ? "bg-brand" : "bg-line"
+                  }`}
+                />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3">
+            {workspaces.map((w) => {
+              const isOpen = expanded.has(w);
+              const wsSessions = sessions.filter((s) => s.workspace === w);
+              const isCurrent = w === workspace;
+              return (
+                <section key={w} className="mb-0.5">
+                  {/* 整行一个按钮。此前箭头与工作区名是两个按钮做同一件事，
+                      可访问名相同、行为却要写两遍。 */}
+                  <button
+                    type="button"
+                    data-ctx-workspace={w}
+                    onClick={() => toggleExpand(w)}
+                    aria-expanded={isOpen}
+                    title={w}
+                    className={`flex w-full min-w-0 items-center gap-2 rounded-tag py-1.5 pl-1 pr-2 text-left text-sm transition-colors ${
+                      isCurrent ? "bg-bubble" : "hover:bg-bubble"
                     }`}
                   >
-                    {basename(w)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    newSession(w);
-                    onNavigate?.();
-                  }}
-                  aria-label="在此工作区新建对话"
-                  className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-all hover:bg-surface hover:text-foreground group-hover:opacity-100"
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
+                    <ChevronRight
+                      size={13}
+                      className={`shrink-0 text-subtle transition-transform ${
+                        isOpen ? "rotate-90" : ""
+                      }`}
+                    />
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        isCurrent ? "bg-brand" : "bg-line"
+                      }`}
+                    />
+                    <span
+                      className={`truncate ${
+                        isCurrent ? "font-medium" : "text-subtle"
+                      }`}
+                    >
+                      {basename(w)}
+                    </span>
+                  </button>
 
-              {isOpen && (
-                <ul className="ml-5 mt-0.5 space-y-0.5">
-                  {wsSessions.map((s) => (
-                    <li key={s.id}>
-                      <div
-                        data-ctx-session={s.id}
-                        className={`group flex items-center rounded-tag transition-colors ${
-                          s.id === activeId
-                            ? "bg-bubble"
-                            : "hover:bg-bubble"
-                        }`}
-                      >
-                        {renamingId === s.id ? (
-                          <input
-                            autoFocus
-                            defaultValue={s.title}
-                            onFocus={(e) => e.target.select()}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                renameSession(s.id, e.currentTarget.value);
-                                cancelRename();
-                              } else if (e.key === "Escape") {
-                                cancelRename();
-                              }
-                            }}
-                            onBlur={(e) => {
-                              renameSession(s.id, e.currentTarget.value);
-                              cancelRename();
-                            }}
-                            className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              openSession(s.id);
-                              onNavigate?.();
-                            }}
-                            className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+                  {isOpen && (
+                    <ul className="ml-5 mt-0.5 space-y-0.5">
+                      {wsSessions.map((s) => (
+                        <li key={s.id}>
+                          <div
+                            data-ctx-session={s.id}
+                            className={`group flex items-center rounded-tag transition-colors ${
+                              s.id === activeId ? "bg-bubble" : "hover:bg-bubble"
+                            }`}
                           >
-                            {s.title}
-                          </button>
-                        )}
-                        {renamingId !== s.id && (
-                          <button
-                            type="button"
-                            onClick={() => deleteSession(s.id)}
-                            aria-label="删除对话"
-                            className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                  {wsSessions.length === 0 && (
-                    <li className="px-2 py-1.5 text-xs text-subtle">
-                      暂无对话
-                    </li>
+                            {renamingId === s.id ? (
+                              <input
+                                autoFocus
+                                defaultValue={s.title}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    renameSession(s.id, e.currentTarget.value);
+                                    cancelRename();
+                                  } else if (e.key === "Escape") {
+                                    cancelRename();
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  renameSession(s.id, e.currentTarget.value);
+                                  cancelRename();
+                                }}
+                                className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  openSession(s.id);
+                                  onNavigate?.();
+                                }}
+                                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+                              >
+                                {s.title}
+                              </button>
+                            )}
+                            {renamingId !== s.id && (
+                              <button
+                                type="button"
+                                onClick={() => deleteSession(s.id)}
+                                aria-label="删除对话"
+                                className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                      {wsSessions.length === 0 && (
+                        <li className="px-2 py-1.5 text-xs text-subtle">暂无对话</li>
+                      )}
+                    </ul>
                   )}
-                </ul>
-              )}
-            </section>
-          );
-        })}
+                </section>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      <footer className="px-3 py-2">
+      <footer className="shrink-0 px-3 pb-3">
         <button
           type="button"
           onClick={onOpenSettings}
+          aria-current={view === "settings" ? "page" : undefined}
           className={`flex w-full items-center gap-2 rounded-tag px-2 py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
-            settingsActive
+            view === "settings"
               ? "bg-bubble font-medium text-foreground"
               : "text-subtle"
           }`}
         >
-          <Settings size={14} />
-          设置
+          <Settings size={14} className="shrink-0" />
+          <span className={`${label} ${collapsed ? labelOff : labelOn}`}>设置</span>
         </button>
       </footer>
     </aside>
