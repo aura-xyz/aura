@@ -443,9 +443,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .filter((w, i, arr) => arr.indexOf(w) === i);
           let sessions = restored;
           let activeId = "";
+          // workspace 必须跟着实际选中的会话走。`picked` 可能来自
+          // restored[0]（上次工作区下已无会话时的回退），此时若仍写回
+          // ws，就会出现「激活的会话属于 Y、全局 workspace 却是 X」的错位。
+          let activeWs = ws;
           const picked =
             pickSessionInWorkspace(restored, ws) ?? restored[0];
-          if (picked) activeId = picked.id;
+          if (picked) {
+            activeId = picked.id;
+            activeWs = picked.workspace;
+          }
           if (!sessions.some((x) => x.id === activeId)) {
             const ns = createSession(ws);
             sessions = [...sessions, ns];
@@ -454,7 +461,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return {
             ...s,
             workspaces,
-            workspace: ws,
+            workspace: activeWs,
             sessions,
             activeId,
             models,

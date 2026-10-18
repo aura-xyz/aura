@@ -149,7 +149,20 @@ pub async fn send_message(
         }
     }
     state.cancelled.store(false, Ordering::Relaxed);
-    let workspace = state.workspace.lock().map_err(lock_err)?.clone();
+    // 执行目录取**会话自己的** workspace，不信任全局单值——后者只是
+    // 「当前聚焦哪个」的 UI 状态，与实际发送的会话未必一致（启动水合、
+    // 手动切工作区都可能让两者错开）。错开时模型会在错误的目录里改文件。
+    //
+    // 内存新建、尚未落库的会话在 DB 里查不到（save_session 只在首次发消息
+    // 时才写），此时回落全局值：前端创建会话时已同步 setWorkspace，两者一致。
+    let ws_from_db = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id).map_err(|e| e.to_string())?
+    };
+    let workspace = match ws_from_db.filter(|s| !s.is_empty()).map(PathBuf::from) {
+        Some(p) => p,
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
 
     let mut sessions = state.sessions.lock().await;

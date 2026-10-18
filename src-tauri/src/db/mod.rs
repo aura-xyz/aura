@@ -189,6 +189,26 @@ pub fn load_todos(
     Ok(serde_json::from_str(&json).unwrap_or_default())
 }
 
+/// 取单个会话的工作区（`load_sessions` 的单项版本）。
+///
+/// `send_message` 用它决定工具的执行目录。**不能改用 `AppState.workspace`**
+/// 那个全局单值：那是「当前聚焦哪个」的 UI 状态，一旦与实际发送的会话
+/// 不一致，模型就会在错误的目录里读写文件（Build 模式的沙盒边界正是它）。
+///
+/// 内存新建、尚未落库的会话查不到（`save_session` 只在首次发消息时才写），
+/// 返回 `None` 由调用方回落全局值。
+pub fn load_session_workspace(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached("SELECT workspace FROM sessions WHERE id = ?1")?;
+    let mut rows = stmt.query(params![id])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(row.get(0)?))
+}
+
 fn load_messages(conn: &Connection, session_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
     let mut stmt =
         conn.prepare_cached("SELECT payload FROM messages WHERE session_id = ?1 ORDER BY seq")?;
@@ -391,6 +411,46 @@ mod tests {
         let loaded = load_sessions(&conn).unwrap();
         assert_eq!(loaded[0].title, "标题");
         assert_eq!(loaded[0].workspace, "E:/dev/aura");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_session_workspace_distinguishes_hit_miss_and_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "aura-db-test-{}-{}",
+            std::process::id(),
+            "session-workspace"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+
+        // 命中：返回该会话自己的工作区
+        save_session(&conn, "s1", "A", "E:/dev/aura", &[]).unwrap();
+        save_session(&conn, "s2", "B", "E:/dev/other", &[]).unwrap();
+        assert_eq!(
+            load_session_workspace(&conn, "s1").unwrap().as_deref(),
+            Some("E:/dev/aura")
+        );
+        assert_eq!(
+            load_session_workspace(&conn, "s2").unwrap().as_deref(),
+            Some("E:/dev/other")
+        );
+
+        // 未命中：内存新建、尚未落库的会话走这条，由调用方回落全局值
+        assert_eq!(load_session_workspace(&conn, "not-yet-saved").unwrap(), None);
+
+        // 空串：脏数据。返回 Some("") 而非 None，调用方需自行 filter——
+        // 这里只固定 db 层的原样返回，不替调用方做判断
+        conn.execute(
+            "UPDATE sessions SET workspace = '' WHERE id = 's2'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            load_session_workspace(&conn, "s2").unwrap().as_deref(),
+            Some("")
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
