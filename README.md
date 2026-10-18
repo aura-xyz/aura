@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.5.1-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.5.2-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -45,6 +45,12 @@
 > **行为变更提醒**
 >
 > - 从 v0.5.0 起：对话模式由全权限改为只读。升级后若希望 Aura 直接修改文件，请将模式切换到「执行」。
+> - v0.5.2：
+>   - 侧边栏顶部新增「新建对话」「Skills」「MCP」入口，后两者为后续功能预留
+>   - 侧边栏折叠与展开改为平滑过渡动画
+>   - 新建对话时再选择工作目录，未选择前无法发送消息
+>   - 同一目录下的对话自动归为一组
+>   - 修复重启后首次发送消息时可能读到上一个工作区目录的问题
 > - v0.5.1：
 >   - 修复执行输出较多的命令（如安装依赖、编译项目）时界面长时间无响应的问题
 >   - 一轮内可以给出多个工具调用并按顺序依次执行，无需再等每个结果返回后才继续
