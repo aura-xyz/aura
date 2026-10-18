@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChevronRight,
   MessageSquarePlus,
@@ -18,6 +17,7 @@ export type View = "chat" | "settings" | "skills" | "mcp";
 interface Props {
   /** 当前视图，用于高亮导航项 */
   view: View;
+  onNew: () => void;
   onOpenSettings: () => void;
   onOpenSkills: () => void;
   onOpenMcp: () => void;
@@ -32,6 +32,7 @@ function basename(p: string): string {
 
 export default function Sidebar({
   view,
+  onNew,
   onOpenSettings,
   onOpenSkills,
   onOpenMcp,
@@ -72,26 +73,13 @@ export default function Sidebar({
     });
   }
 
-  function toggleExpand(w: string) {
+function toggleExpand(w: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(w)) next.delete(w);
       else next.add(w);
       return next;
     });
-  }
-
-  /** 「新建对话」= 选一个本地目录，在该目录下开会话。 */
-  async function pickWorkspace() {
-    try {
-      const dir = await open({ directory: true, title: "选择工作区目录" });
-      if (typeof dir === "string") {
-        await switchWorkspace(dir);
-        onNavigate?.();
-      }
-    } catch {
-      /* 用户取消或目录无效时静默 */
-    }
   }
 
   // 折叠时宽度收窄会由 overflow-hidden 裁掉内容。让文字靠 max-width +
@@ -140,28 +128,33 @@ export default function Sidebar({
         </button>
       </header>
 
-      {/* 顶部导航：新建对话 / Skills / MCP。
-          独立卡片边框，与下方工作区分组在视觉上分开。 */}
-      <nav className="mx-3 mb-3 shrink-0 rounded-card border border-line bg-surface p-1">
+{/* 顶部导航：新建对话 / Skills / MCP。平铺，不加卡片边框——
+          折叠态下边框会在 56px 宽里挤成一条窄条，图标也就跟着偏了。 */}
+      <nav className="shrink-0 px-3">
         {(
-          [
-            { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: pickWorkspace },
-            { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
+   [
+            { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },
+   { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
             { key: "mcp", label: "MCP", icon: Plug, onClick: onOpenMcp },
           ] as const
         ).map(({ key, label: text, icon: Icon, onClick }) => (
-          <button
-            key={key}
+     <button
+      key={key}
             type="button"
-            onClick={onClick}
-            aria-current={key !== "new" && view === key ? "page" : undefined}
-            className={`flex w-full items-center gap-2.5 rounded-tag px-2 py-1.5 text-left text-sm transition-colors ${
-              key !== "new" && view === key
-                ? "bg-bubble font-medium text-foreground"
-                : "text-subtle hover:bg-bubble hover:text-foreground"
-            }`}
+        onClick={onClick}
+ aria-current={key !== "new" && view === key ? "page" : undefined}
+            title={collapsed ? text : undefined}
+            className={`flex w-full items-center gap-2.5 rounded-tag py-2 text-left text-sm transition-colors ${
+   collapsed
+     ? "justify-center px-0"
+     : "px-2"
+        } ${
+     key !== "new" && view === key
+        ? "bg-bubble font-medium text-foreground"
+     : "text-subtle hover:bg-bubble hover:text-foreground"
+     }`}
           >
-            <Icon size={15} className="shrink-0" />
+     <Icon size={15} className="shrink-0" />
             <span className={`${label} ${collapsed ? labelOff : labelOn}`}>{text}</span>
           </button>
         ))}
@@ -195,8 +188,11 @@ export default function Sidebar({
         ) : (
           <div className="px-3">
             {workspaces.map((w) => {
-              const isOpen = expanded.has(w);
-              const wsSessions = sessions.filter((s) => s.workspace === w);
+const isOpen = expanded.has(w);
+   // 空对话是内存草稿，不进侧边栏：发过第一条消息才归类显示
+          const wsSessions = sessions.filter(
+      (s) => s.workspace === w && s.messages.length > 0,
+      );
               const isCurrent = w === workspace;
               return (
                 <section key={w} className="mb-0.5">

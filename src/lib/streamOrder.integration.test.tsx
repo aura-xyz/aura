@@ -20,10 +20,14 @@ beforeEach(() => {
   vi.resetModules();
   // send_message 永不 resolve，把这一轮「挂住」，才能在流进行中注入事件
   vi.doMock("@tauri-apps/api/core", () => ({
-    invoke: vi.fn(async (cmd: string) => {
+    invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       switch (cmd) {
         case "get_workspace":
           return "E:/ws";
+        // 新对话在选定工作区前 workspace 为空，后端会拒收。这里按真实
+        // 流程先选目录（set_workspace 回显传入路径）再发消息。
+        case "set_workspace":
+          return args?.path;
         case "load_sessions":
           return [];
         case "get_models":
@@ -87,6 +91,10 @@ async function mountAndSend(text: string) {
   );
 
   await waitFor(() => expect(api?.activeId).toBeTruthy());
+  // 新对话要先选定工作区，否则 sendMessage 会被拦下（后端同样拒收）
+  await act(async () => {
+    await api!.setSessionWorkspace("E:/ws");
+  });
   const sessionId = api!.activeId;
   act(() => {
     void api!.sendMessage(text);

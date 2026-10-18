@@ -154,7 +154,7 @@ pub async fn send_message(
     // 手动切工作区都可能让两者错开）。错开时模型会在错误的目录里改文件。
     //
     // 内存新建、尚未落库的会话在 DB 里查不到（save_session 只在首次发消息
-    // 时才写），此时回落全局值：前端创建会话时已同步 setWorkspace，两者一致。
+    // 时才写），此时回落全局值：前端选工作区时已同步 setWorkspace，两者一致。
     let ws_from_db = {
         let db = state.db.lock().map_err(lock_err)?;
         db::load_session_workspace(&db, &session_id).map_err(|e| e.to_string())?
@@ -163,6 +163,13 @@ pub async fn send_message(
         Some(p) => p,
         None => state.workspace.lock().map_err(lock_err)?.clone(),
     };
+    // 新建对话在用户选定目录前 workspace 为空，全局值也可能为空。
+    // 没有执行目录就必须拦下——否则工具会以进程当前目录为根去读写文件，
+    // 静默落到 Aura 的安装位置附近。
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        *state.running.lock().await = None;
+        return Err("请先为这个对话选择工作区目录".into());
+    }
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
 
     let mut sessions = state.sessions.lock().await;

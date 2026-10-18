@@ -4,6 +4,7 @@ import type { ModelInfo } from "../lib/api";
 import type { Mode } from "../lib/mode";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
+import WorkspaceSelect from "./WorkspaceSelect";
 
 interface Props {
   onSend: (text: string) => void;
@@ -14,6 +15,9 @@ interface Props {
   onModelChange: (id: string) => void;
   mode: Mode;
   onModeChange: (m: Mode) => void;
+  /** 当前对话已绑定的工作区；空串表示尚未选定 */
+  workspace: string;
+  onWorkspaceChange: (path: string) => Promise<void>;
 }
 
 export default function InputArea({
@@ -25,6 +29,8 @@ export default function InputArea({
   onModelChange,
   mode,
   onModeChange,
+  workspace,
+  onWorkspaceChange,
 }: Props) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -40,6 +46,9 @@ export default function InputArea({
   function submit() {
     const text = value.trim();
     if (!text || busy) return;
+    // 没定工作区就发不出去：后端拿不到执行目录，工具会落到默认目录。
+    // 发送键同时置灰，这里拦住 Enter 快捷键那条路径。
+    if (!workspace) return;
     onSend(text);
     setValue("");
   }
@@ -86,21 +95,26 @@ export default function InputArea({
           <button
             type="button"
             onClick={submit}
-            disabled={!value.trim()}
-            aria-label="发送"
-            className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
+disabled={!value.trim() || !workspace}
+            aria-label={workspace ? "发送" : "请先选择工作区"}
+     className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
           >
-            <ArrowUp size={14} />
+       <ArrowUp size={14} />
           </button>
         )}
       </div>
       <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ModeTabs mode={mode} onChange={onModeChange} />
-          <ModelSelect
-            models={models}
+          <WorkspaceSelect
+   workspace={workspace}
+            onChange={onWorkspaceChange}
+          />
+    <span className="h-3 w-px bg-line" />
+      <ModelSelect
+         models={models}
             selectedModel={selectedModel}
-            onChange={onModelChange}
+     onChange={onModelChange}
           />
         </div>
         <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行</p>

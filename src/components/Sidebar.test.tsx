@@ -11,9 +11,11 @@ beforeEach(() => {
 
 const WORKSPACES = ["E:/dev/aura", "E:/dev/other"];
 const SESSIONS = [
-  { id: "s1", title: "修 bug", workspace: "E:/dev/aura", messages: [], todos: [] },
-  { id: "s2", title: "写测试", workspace: "E:/dev/aura", messages: [], todos: [] },
-  { id: "s3", title: "别的组", workspace: "E:/dev/other", messages: [], todos: [] },
+  { id: "s1", title: "修 bug", workspace: "E:/dev/aura", messages: [{}], todos: [] },
+  { id: "s2", title: "写测试", workspace: "E:/dev/aura", messages: [{}], todos: [] },
+  { id: "s3", title: "别的组", workspace: "E:/dev/other", messages: [{}], todos: [] },
+  // 空对话：内存草稿，不该出现在侧边栏
+  { id: "s4", title: "新对话", workspace: "E:/dev/aura", messages: [], todos: [] },
 ];
 
 /**
@@ -40,8 +42,9 @@ async function mount(props: Partial<Record<string, unknown>> = {}) {
     ...render(
       <Sidebar
         view="chat"
+        onNew={vi.fn()}
         onOpenSettings={vi.fn()}
-        onOpenSkills={vi.fn()}
+    onOpenSkills={vi.fn()}
         onOpenMcp={vi.fn()}
         {...props}
       />,
@@ -142,10 +145,47 @@ describe("Sidebar", () => {
   });
 
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），
-  /// 合并 DOM 时漏掉任何一个，右键会静默失效
+/// 合并 DOM 时漏掉任何一个，右键会静默失效
   it("保留右键菜单锚点属性", async () => {
     const { container } = await mount();
     expect(container.querySelector("[data-ctx-workspace]")).toBeInTheDocument();
+    // s4 是空对话，不该出现在侧边栏
     expect(container.querySelectorAll("[data-ctx-session]")).toHaveLength(3);
+  });
+
+  /// 「发第一条消息才确定工作区、才显示在侧边栏」是这次改造的核心诉求。
+/// 空对话即使已绑定目录，也不进列表。
+  it("空对话不进侧边栏", async () => {
+    await mount();
+    expect(screen.queryByText("新对话")).toBeNull();
+  });
+
+  /// 折叠态里 56px 放不下「图标+文字」，曾经用卡片边框收窄，
+/// 结果图标整体偏移。导航区必须平铺无边框。
+  it("导航区不带卡片边框", async () => {
+    const { container } = await mount();
+    const nav = container.querySelector("nav");
+    expect(nav?.className).not.toContain("border");
+    expect(nav?.className).not.toContain("bg-surface");
+  });
+
+  /// 折叠后三个图标要真正居中：按钮内容用 justify-center 且去掉左右内边距，
+  /// 否则文字的 max-w-0 仍会占掉右侧空间，视觉上偏右。
+  it("折叠态导航图标居中", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    const { container } = await mount();
+    const btns = Array.from(container.querySelectorAll("nav button"));
+    expect(btns).toHaveLength(3);
+    for (const b of btns) {
+      expect(b.className).toContain("justify-center");
+      expect(b.className).toContain("px-0");
+    }
+  });
+
+  it("点新建对话交给外部处理，不自己弹目录选择器", async () => {
+    const onNew = vi.fn();
+    await mount({ onNew });
+    await userEvent.click(screen.getByText("新建对话"));
+    expect(onNew).toHaveBeenCalledTimes(1);
   });
 });

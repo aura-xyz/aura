@@ -83,7 +83,8 @@ interface StoreValue extends State {
   sendMessage: (text: string) => Promise<void>;
   stop: () => Promise<void>;
   switchWorkspace: (path: string) => Promise<void>;
-  newSession: (workspace?: string) => Promise<void>;
+  newSession: () => Promise<void>;
+  setSessionWorkspace: (path: string) => Promise<void>;
   selectSession: (id: string) => void;
   openSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => void;
@@ -112,7 +113,14 @@ interface StreamTarget {
   textIndex: number;
 }
 
-function createSession(workspace: string): Session {
+/**
+ * 新建一个尚未落库的会话。
+ *
+ * `workspace` 默认为空串，表示「还没定在哪个目录工作」。这样的会话不进
+ * 侧边栏工作区列表（那里只列出有消息的会话），也不会被 `save_session`
+ * 写进库——`purge_empty_sessions` 同样会清理空工作区的行。
+ */
+function createSession(workspace = ""): Session {
   return {
     id: crypto.randomUUID(),
     title: "新对话",
@@ -128,15 +136,23 @@ function deriveTitle(text: string): string {
 }
 
 /**
- * 选定某工作区应激活的会话：优先未发送消息的空对话（与「新建对话」语义一致），
- * 否则取最近更新的一个。sessions 从数据库加载时按 updated_at DESC 排列，故首项最新。
+ * 选定某工作区应激活的会话。
+ *
+ * 只考虑**有消息**的：空对话只是内存里的草稿，不该把用户从正在看的
+ * 对话拽走。sessions 从数据库加载时按 updated_at DESC 排列，故首项最新。
  */
 function pickSessionInWorkspace(
   sessions: Session[],
   ws: string,
 ): Session | undefined {
-  const inWs = sessions.filter((x) => x.workspace === ws);
-  return inWs.find((x) => x.messages.length === 0) ?? inWs[0];
+  return sessions.find(
+    (x) => x.workspace === ws && x.messages.length > 0,
+  );
+}
+
+/** 进侧边栏的会话：发过第一条消息才确定工作区、才归类显示。 */
+function listedSessions(sessions: Session[]): Session[] {
+  return sessions.filter((s) => s.messages.length > 0);
 }
 
 /**
@@ -418,44 +434,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     Promise.all([getWorkspace(), loadSessions(), getModels(), getSelectedModel()])
       .then(([rawWs, saved, models, selectedModel]) => {
         const ws = normWs(rawWs);
-        setState((s) => {
-          // 过滤历史脏行（工作区为空），避免侧边栏出现空白工作区分组；
-          // 每工作区最多保留一个空对话，多余的丢弃
-          const blankSeen = new Set<string>();
-          const restored: Session[] = saved
-            .map((x) => ({
-              id: x.id,
-              title: x.title,
-              workspace: normWs(x.workspace),
-              messages: x.messages,
-              // 旧版本会话没有 todos 字段，按空清单处理
-              todos: normalizeTodos(x.todos),
-            }))
-            .filter((r) => {
-              if (!r.workspace) return false;
-              if (r.messages.length > 0) return true;
-              if (blankSeen.has(r.workspace)) return false;
-              blankSeen.add(r.workspace);
-              return true;
-            });
-          const workspaces = [ws, ...restored.map((r) => r.workspace), ...s.workspaces]
-            .map(normWs)
+setState((s) => {
+   // 过滤历史脏行（工作区为空），避免侧边栏出现空白工作区分组
+   const restored: Session[] = saved
+        .map((x) => ({
+            id: x.id,
+    title: x.title,
+       workspace: normWs(x.workspace),
+            messages: x.messages,
+      // 旧版本会话没有 todos 字段，按空清单处理
+      todos: normalizeTodos(x.todos),
+          }))
+       .filter((r) => r.workspace !== "");
+          // 侧边栏的工作区来自「有消息的会话」去重。空对话是内存草稿，
+          // 不该凭空造出一个工作区分组。
+          const listed = listedSessions(restored);
+          const workspaces = listed
+            .map((r) => r.workspace)
             .filter((w, i, arr) => arr.indexOf(w) === i);
-          let sessions = restored;
-          let activeId = "";
-          // workspace 必须跟着实际选中的会话走。`picked` 可能来自
+let sessions = restored;
+  let activeId = "";
+   // workspace 必须跟着实际选中的会话走。`picked` 可能来自
           // restored[0]（上次工作区下已无会话时的回退），此时若仍写回
           // ws，就会出现「激活的会话属于 Y、全局 workspace 却是 X」的错位。
-          let activeWs = ws;
-          const picked =
-            pickSessionInWorkspace(restored, ws) ?? restored[0];
+      let activeWs = ws;
+  const picked = pickSessionInWorkspace(restored, ws) ?? listed[0];
           if (picked) {
-            activeId = picked.id;
+      activeId = picked.id;
             activeWs = picked.workspace;
           }
           if (!sessions.some((x) => x.id === activeId)) {
-            const ns = createSession(ws);
-            sessions = [...sessions, ns];
+     // 没有任何历史会话：开一个未定工作区的空对话，等用户在输入框旁选目录
+  const ns = createSession();
+   sessions = [...sessions, ns];
             activeId = ns.id;
           }
           return {
@@ -595,6 +606,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setState((s) => ({ ...s, busy: false }));
         return;
       }
+      // 没定工作区就不能发：后端拿不到执行目录，工具会落到默认目录去。
+      // UI 已禁用发送键，这里是防绕过（快捷键 / 直接调 store）。
+      if (!current.workspace) {
+        setState((s) => ({ ...s, busy: false }));
+        return;
+      }
       const title =
         current.title === "新对话" ? deriveTitle(text) : current.title;
       const messages = [...current.messages, userMsg, assistantMsg];
@@ -642,53 +659,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+/**
+   * 切到某个已有工作区的最近一个对话。
+   *
+   * 侧边栏列出的工作区必然有已落库的会话，所以这里只会「找到」而不会
+   * 「新建」——工作区列表本身只从有消息的会话派生，不靠这个函数维护。
+   */
   const switchWorkspace = useCallback(async (path: string) => {
     const canonical = await setWorkspace(path);
     setState((s) => {
-      const workspaces = [canonical, ...s.workspaces.filter((w) => w !== canonical)].filter(
-        (w, i, arr) => arr.indexOf(w) === i,
-      );
-      let sessions = s.sessions;
       let activeId = s.activeId;
-      const active = sessions.find((x) => x.id === activeId);
+      const active = s.sessions.find((x) => x.id === activeId);
       if (!active || active.workspace !== canonical) {
-        const picked = pickSessionInWorkspace(sessions, canonical);
-        if (picked) {
-          activeId = picked.id;
-        } else {
-          const ns = createSession(canonical);
-          sessions = [...sessions, ns];
-          activeId = ns.id;
-        }
-      }
-      return { ...s, workspaces, workspace: canonical, sessions, activeId };
+    const picked = pickSessionInWorkspace(s.sessions, canonical);
+        if (picked) activeId = picked.id;
+   }
+      return { ...s, workspace: canonical, activeId };
     });
   }, []);
 
-  const newSession = useCallback(async (workspace?: string) => {
-    const ws = workspace ?? stateRef.current.workspace;
-    if (ws !== stateRef.current.workspace) {
-      try {
-        await setWorkspace(ws);
-      } catch {
-        return;
-      }
-    }
+  /** 新建空对话。工作区留空，等用户在输入框旁选目录后再定。 */
+  const newSession = useCallback(async () => {
     setState((s) => {
-      // 每个工作区只保留一个空对话：已有空对话则直接聚焦，不重复创建，
-      // 避免工作区被「新对话」挤满
-      const blank = s.sessions.find(
-        (x) => x.workspace === ws && x.messages.length === 0,
-      );
-      if (blank) {
-        return { ...s, workspace: ws, activeId: blank.id };
-      }
-      const ns = createSession(ws);
-      return {
+   // 复用当前那个还没发过消息的空对话，避免连点几次堆出多个草稿
+  const draft = s.sessions.find((x) => x.messages.length === 0);
+      if (draft) return { ...s, activeId: draft.id };
+ const ns = createSession();
+      return { ...s, sessions: [...s.sessions, ns], activeId: ns.id };
+    });
+  }, []);
+
+  /**
+   * 给当前对话指定工作区目录。
+   *
+   * 选中即调用 `setWorkspace`，让全局值与 `last_workspace` 跟着走——后端对
+   * 尚未落库的会话要走全局回落分支取执行目录，两者必须一致。
+   */
+  const setSessionWorkspace = useCallback(async (path: string) => {
+    const canonical = await setWorkspace(path);
+    setState((s) => {
+      const active = s.sessions.find((x) => x.id === s.activeId);
+      if (!active) return s;
+      const sessions = s.sessions.map((x) =>
+        x.id === active.id ? { ...x, workspace: canonical } : x,
+    );
+   return {
         ...s,
-        workspace: ws,
-        sessions: [...s.sessions, ns],
-        activeId: ns.id,
+     workspace: canonical,
+        sessions,
+        // 选完工作区后该会话就归类显示了（即便还没发消息），
+        // 与「发第一条消息才出现」略有出入，但能避免用户不知道自己选到哪了
+        workspaces: listedSessions(sessions)
+          .map((x) => x.workspace)
+          .filter((w, i, arr) => arr.indexOf(w) === i),
       };
     });
   }, []);
@@ -710,9 +733,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, workspace: sess.workspace, activeId: id }));
   }, []);
 
-  const deleteSession = useCallback((id: string) => {
+const deleteSession = useCallback((id: string) => {
     removeSession(id).catch(() => {});
-    setState((s) => {
+setState((s) => {
       let sessions = s.sessions.filter((x) => x.id !== id);
       let activeId = s.activeId;
       if (activeId === id) {
@@ -720,12 +743,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (picked) {
           activeId = picked.id;
         } else {
-          const ns = createSession(s.workspace);
+        // 该工作区没别的对话了：开一个未定工作区的空对话，
+    // 否则 activeId 悬空，输入框会失去上下文
+     const ns = createSession();
           sessions = [...sessions, ns];
           activeId = ns.id;
-        }
+     }
       }
-      return { ...s, sessions, activeId };
+      return {
+        ...s,
+        sessions,
+      activeId,
+        // 删掉的可能正是某工作区最后一个会话，那个分组要一起消失
+    workspaces: listedSessions(sessions)
+        .map((x) => x.workspace)
+      .filter((w, i, arr) => arr.indexOf(w) === i),
+      };
     });
   }, []);
 
@@ -753,6 +786,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       stop,
       switchWorkspace,
       newSession,
+      setSessionWorkspace,
       selectSession,
       openSession,
       deleteSession,
@@ -773,7 +807,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       sendMessage,
       stop,
       switchWorkspace,
-      newSession,
+    newSession,
+      setSessionWorkspace,
       selectSession,
       openSession,
       deleteSession,

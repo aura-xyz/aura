@@ -47,6 +47,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     mode,
     setMode: changeMode,
     workspace,
+    newSession,
+    setSessionWorkspace,
     startRename,
     deleteSession,
     removeWorkspace,
@@ -111,12 +113,16 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       <TitleBar />
 
       <div className="flex min-h-0 flex-1">
-        <Sidebar
+<Sidebar
           view={view}
-          onOpenSettings={() => setView("settings")}
+          onNew={() => {
+   newSession();
+    setView("chat");
+          }}
+      onOpenSettings={() => setView("settings")}
           onOpenSkills={() => setView("skills")}
           onOpenMcp={() => setView("mcp")}
-          onNavigate={() => setView("chat")}
+  onNavigate={() => setView("chat")}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -141,16 +147,18 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
                 <MessageList />
               </div>
-              <InputArea
-                busy={busy}
-                onSend={sendMessage}
-                onStop={stop}
-                models={models}
-                selectedModel={selectedModel}
-                onModelChange={setModel}
-                mode={mode}
-                onModeChange={changeMode}
-              />
+<InputArea
+      busy={busy}
+   onSend={sendMessage}
+  onStop={stop}
+       models={models}
+   selectedModel={selectedModel}
+       onModelChange={setModel}
+  mode={mode}
+     onModeChange={changeMode}
+   workspace={activeSession?.workspace ?? ""}
+      onWorkspaceChange={setSessionWorkspace}
+    />
             </>
           )}
         </main>
