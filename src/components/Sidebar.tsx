@@ -144,15 +144,15 @@ function toggleExpand(w: string) {
         onClick={onClick}
  aria-current={key !== "new" && view === key ? "page" : undefined}
             title={collapsed ? text : undefined}
-            className={`flex w-full items-center gap-2.5 rounded-tag py-2 text-left text-sm transition-colors ${
-   collapsed
-     ? "justify-center px-0"
-     : "px-2"
-        } ${
-     key !== "new" && view === key
-        ? "bg-bubble font-medium text-foreground"
-     : "text-subtle hover:bg-bubble hover:text-foreground"
-     }`}
+// 折叠态必须连 gap 一起去掉：文字虽然 max-w-0 宽度为 0，
+            // 但 gap 仍会占满 10px，把图标连同那 10px 一起左推。
+            className={`flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
+              collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
+            } ${
+              key !== "new" && view === key
+                ? "bg-bubble font-medium text-foreground"
+                : "text-subtle hover:bg-bubble hover:text-foreground"
+            }`}
           >
      <Icon size={15} className="shrink-0" />
             <span className={`${label} ${collapsed ? labelOff : labelOn}`}>{text}</span>
@@ -299,7 +299,9 @@ const isOpen = expanded.has(w);
           type="button"
           onClick={onOpenSettings}
           aria-current={view === "settings" ? "page" : undefined}
-          className={`flex w-full items-center gap-2 rounded-tag px-2 py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
+          className={`flex w-full items-center rounded-tag py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
+            collapsed ? "justify-center gap-0 px-0" : "gap-2 px-2"
+          } ${
             view === "settings"
               ? "bg-bubble font-medium text-foreground"
               : "text-subtle"

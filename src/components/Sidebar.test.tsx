@@ -169,8 +169,9 @@ describe("Sidebar", () => {
     expect(nav?.className).not.toContain("bg-surface");
   });
 
-  /// 折叠后三个图标要真正居中：按钮内容用 justify-center 且去掉左右内边距，
-  /// 否则文字的 max-w-0 仍会占掉右侧空间，视觉上偏右。
+  /// 折叠后三个图标要真正居中：按钮内容用 justify-center，并**连 gap 与左右
+/// 内边距一起去掉**。文字虽 max-w-0 宽度为 0，但 gap 仍占满 10px，
+/// 会把图标连同那段空白一起左推——只断言 px-0 抓不到这个偏差。
   it("折叠态导航图标居中", async () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     const { container } = await mount();
@@ -178,8 +179,19 @@ describe("Sidebar", () => {
     expect(btns).toHaveLength(3);
     for (const b of btns) {
       expect(b.className).toContain("justify-center");
+      expect(b.className).toContain("gap-0");
       expect(b.className).toContain("px-0");
     }
+  });
+
+  /// 设置按钮与导航项同构，同样要居中
+  it("折叠态设置按钮也居中", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    const { container } = await mount();
+    const btn = container.querySelector("footer button");
+    expect(btn?.className).toContain("justify-center");
+    expect(btn?.className).toContain("gap-0");
+    expect(btn?.className).toContain("px-0");
   });
 
   it("点新建对话交给外部处理，不自己弹目录选择器", async () => {
