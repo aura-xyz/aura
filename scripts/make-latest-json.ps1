@@ -49,7 +49,13 @@ if ($msi -and -not $msiSigPath) {
 
 # 安装包统一放到 Release 的 Aura_<version>_win_x64_Setup.exe
 $releaseName = "Aura_${Version}_win_x64_Setup.exe"
-$base = "$Repo/releases/download/v$Version"
+
+# **必须补成绝对 URL**。`-Repo` 允许传 "Jack-Sai/aura" 或完整地址，两种都要归一。
+# Tauri updater 拿到相对路径的 url 时不会在生成 manifest 时报错，只在客户端
+# 点下载时才失败——静默失败。v0.5.1 发布时是手工改过这个前缀才正确的，
+# 脚本本身一直有洞。
+if ($Repo -notmatch '^https?://') { $Repo = "https://github.com/$Repo" }
+$base = "$($Repo.TrimEnd('/'))/releases/download/v$Version"
 
 $platforms = @(
     @{ architecture = 'x86_64';  url = "$base/$releaseName"; sig = $nsisSigPath }
@@ -68,6 +74,10 @@ $platforms = $platforms | ForEach-Object {
     $sig = Read-Sig $_.sig
     if (-not $sig) {
         throw "签名为空，拒绝生成 manifest：$($_.sig)"
+    }
+    # url 必须是绝对地址，否则客户端下载时才炸（见上面 $base 的注释）
+    if ($_.url -notmatch '^https?://') {
+        throw "下载地址不是绝对 URL，拒绝生成：$($_.url)"
     }
     @{ architecture = $_.architecture; url = $_.url; signature = $sig }
 }
