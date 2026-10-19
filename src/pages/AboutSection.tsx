@@ -15,7 +15,7 @@ import {
   type UpdateCheckResult,
 } from "../lib/updater";
 
-const REPO_URL = "https://github.com/Jack-Sai/aura";
+const REPO_URL = "https://github.com/aura-xyz/aura";
 
 type CheckState =
   | { kind: "idle" }

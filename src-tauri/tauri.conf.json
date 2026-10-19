@@ -20,7 +20,7 @@
       "active": true,
       "dialog": false,
       "endpoints": [
-        "https://github.com/Jack-Sai/aura/releases/latest/download/latest.json"
+        "https://github.com/aura-xyz/aura/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCNEI5NzZFMjg5QUMyQjYKUldTMndwb29icGRMNjlVaVVNZnRhM0ZOOFUzRDlUa1FhVHhsT2lJNFF3dXd2SDNsekMyczEreDkK"
     }
