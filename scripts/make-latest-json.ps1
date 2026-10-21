@@ -50,7 +50,7 @@ if ($msi -and -not $msiSigPath) {
 # 安装包统一放到 Release 的 Aura_<version>_win_x64_Setup.exe
 $releaseName = "Aura_${Version}_win_x64_Setup.exe"
 
-# **必须补成绝对 URL**。`-Repo` 允许传 "Jack-Sai/aura" 或完整地址，两种都要归一。
+# **必须补成绝对 URL**。`-Repo` 允许传 "aura-xyz/aura" 或完整地址，两种都要归一。
 # Tauri updater 拿到相对路径的 url 时不会在生成 manifest 时报错，只在客户端
 # 点下载时才失败——静默失败。v0.5.1 发布时是手工改过这个前缀才正确的，
 # 脚本本身一直有洞。
