@@ -134,14 +134,17 @@ describe("Sidebar", () => {
     expect(localStorage.getItem("aura-sidebar-collapsed")).toBe("1");
   });
 
-  /// 折叠后宽度必须有过渡类，否则 DOM 虽然合并了，动画还是不出现
+  /// 折叠后宽度必须有过渡类，否则 DOM 虽然合并了，动画还是不出现。
+  /// min-height 一并过渡：展开态撑满内容区、折叠态收成内容高，
+  /// 高度跳变没有动画会显得生硬。
   it("侧边栏宽度带过渡动画", async () => {
     const { container } = await mount();
     const aside = container.querySelector("aside");
-    expect(aside?.className).toContain("transition-[width]");
+    expect(aside?.className).toContain("transition-[width,min-height]");
     expect(aside?.className).toContain("w-64");
     await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
     expect(aside?.className).toContain("w-14");
+    expect(aside?.className).toContain("min-h-0");
   });
 
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），

@@ -90,9 +90,16 @@ function toggleExpand(w: string) {
   const labelOn = "max-w-40 opacity-100";
 
   return (
+    // 悬浮卡片形态：四周留 8px 间隙 + 圆角 + 细边框与轻阴影，
+    // 取代原先贴边通栏 + border-r 的分割线形态。
+    //
+    // 高度：self-start + min-height 控制。展开态 min-h 撑满内容区（减去
+    // 上下 margin）；折叠态收成内容高，设置按钮下方不再留白。
+    // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡；
+    // max-height 同步限高，圆点很多时列表区内部滚动而不溢出窗口。
     <aside
-      className={`flex shrink-0 flex-col overflow-hidden border-r border-line transition-[width] duration-200 ease-in-out ${
-        collapsed ? "w-14" : "w-64"
+      className={`m-2 flex max-h-[calc(100%-1rem)] shrink-0 flex-col self-start overflow-hidden rounded-card border border-line bg-surface shadow-sm transition-[width,min-height] duration-200 ease-in-out ${
+        collapsed ? "w-14 min-h-0" : "w-64 min-h-[calc(100%-1rem)]"
       }`}
     >
       <header className="flex h-[49px] shrink-0 items-center gap-2 px-3">
@@ -161,8 +168,13 @@ function toggleExpand(w: string) {
       </nav>
 
       {/* 工作区列表。折叠态是圆点指示器、展开态是可折叠分组，
-          两者结构不同构，只能各自渲染；宽度过渡期间被 overflow-hidden 裁切。 */}
-      <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto pb-2">
+          两者结构不同构，只能各自渲染；宽度过渡期间被 overflow-hidden 裁切。
+          折叠态不加 flex-1：圆点紧贴下方设置按钮，避免中段被撑出大片空白。 */}
+      <div
+        className={`scrollbar-hidden min-h-0 overflow-y-auto ${
+          collapsed ? "pb-0" : "flex-1 pb-2"
+        }`}
+      >
         {collapsed ? (
           <div className="px-2 py-1">
             {workspaces.map((w) => (

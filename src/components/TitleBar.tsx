@@ -17,7 +17,7 @@ export default function TitleBar() {
   return (
     <header
       data-tauri-drag-region
-      className="flex h-9 shrink-0 select-none items-center justify-between border-b border-line bg-surface pl-4"
+      className="flex h-9 shrink-0 select-none items-center justify-between bg-surface pl-4"
     >
       <div data-tauri-drag-region className="flex items-baseline gap-2">
         <span className="text-[13px] font-semibold tracking-[-0.02em]">
