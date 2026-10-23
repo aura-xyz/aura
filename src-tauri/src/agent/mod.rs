@@ -4,6 +4,7 @@ pub mod mode;
 pub mod parser;
 pub mod prompt;
 pub mod runner;
+pub mod skill;
 pub mod todo;
 
 pub use mode::Mode;

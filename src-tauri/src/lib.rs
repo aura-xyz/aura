@@ -102,9 +102,33 @@ pub fn run() {
     // relaunch 负责重启应用；perms 授予 updater 默认权限集
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
-    .setup(move |app| {
+        .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+
+            // v0.6.0：登记技能根目录。内置技能随安装包分发（只读）；
+            // 市场/本地技能放应用数据目录，避开安装目录的 UAC 权限问题，
+            // 且应用升级不丢失。工作区技能（.agents/skills/）由 runner
+            // 每轮按会话工作区扫描，不进全局登记。
+            {
+                let mut roots: Vec<agent::skill::SkillRoot> = Vec::new();
+                if let Ok(res) = app.path().resource_dir() {
+                    roots.push(agent::skill::SkillRoot {
+                        dir: res.join("builtin-skills"),
+                        source: agent::skill::SkillSource::Builtin,
+                    });
+                }
+                roots.push(agent::skill::SkillRoot {
+                    dir: dir.join("skills").join("market"),
+                    source: agent::skill::SkillSource::Market,
+                });
+                roots.push(agent::skill::SkillRoot {
+                    dir: dir.join("skills").join("local"),
+                    source: agent::skill::SkillSource::Local,
+                });
+                agent::skill::set_global_roots(roots);
+            }
+
             let db = db::open(&dir.join("aura.db"))?;
 
             // 主窗口在代码中构建（而非 tauri.conf.json），因为 on_navigation

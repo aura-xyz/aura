@@ -76,6 +76,20 @@ pub const TOOLS: &[ToolSpec] = &[
         label: label_search,
         max_consecutive: READ_LIMIT,
     },
+    // v0.6.0：技能系统。加载某个 Skill 的完整指引正文（渐进式披露的 L2）。
+    // 它是 Read 类：只读技能库，不触碰工作区，因此三档模式都放行——
+    // 至于加载后的技能允许用什么工具，由 runner 按 mode ∩ allowed-tools
+    // 的激活闸门决定，不在这里体现。
+    ToolSpec {
+        name: "load_skill",
+        kind: ToolKind::Read,
+        desc: "加载指定技能（Skill）的完整指引。技能清单见系统提示中的「技能」一节；\
+               某个技能的用途与当前任务匹配时必须先加载它，再严格按指引执行。",
+        example: "{\"name\": \"技能名\"}（名称必须与技能索引中完全一致）",
+        run: run_load_skill,
+        label: label_load_skill,
+        max_consecutive: READ_LIMIT,
+    },
     ToolSpec {
         name: "write_file",
         kind: ToolKind::Write,
@@ -235,6 +249,26 @@ fn label_lines(args: &Value) -> String {
     format!("Edit {} L{} - L{}", display_path(path), start, end)
 }
 
+/// `Load skill 'code-explainer'`
+fn label_load_skill(args: &Value) -> String {
+    let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+    format!("Load skill '{}'", name)
+}
+
+/// `load_skill` 的执行体。
+///
+/// 技能库的扫描与正文渲染在 `agent::skill`（那是 agent 层的概念，
+/// prompt 注入与激活态都在那边）；这里只做工具层的适配。
+/// `root` 是工作区根目录，用于发现 `.agents/skills/` 下的工作区技能。
+fn run_load_skill(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let body = crate::agent::skill::load_skill_body(root, name)?;
+    Ok(ToolOutput {
+        label: label_load_skill(args),
+        result: body,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,11 +307,25 @@ mod tests {
                 "list_files",
                 "read_file",
                 "search_workspace",
+                "load_skill",
                 "write_file",
                 "string_replace",
                 "replace_lines",
                 "run_script",
             ]
+        );
+    }
+
+    /// load_skill 必须存在且为只读类：三档模式都放行它，
+    /// 技能激活后的收窄由 runner 的激活闸门负责，不依赖工具分类。
+    #[test]
+    fn load_skill_is_registered_as_read() {
+        assert!(is_known("load_skill"));
+        assert_eq!(find("load_skill").unwrap().kind, ToolKind::Read);
+        assert_eq!(max_consecutive("load_skill"), READ_LIMIT);
+        assert_eq!(
+            label_load_skill(&serde_json::json!({ "name": "code-explainer" })),
+            "Load skill 'code-explainer'"
         );
     }
 

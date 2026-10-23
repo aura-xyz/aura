@@ -15,6 +15,7 @@ use super::parser::{Event, Finish, Parser};
 use super::prompt::{
     build_compact_system_prompt, build_system_prompt, is_small_model, todo_update_brief,
 };
+use super::skill::{self, SkillManifest};
 use super::todo;
 use super::{Todo, TodoStatus};
 
@@ -73,10 +74,20 @@ fn throttle_key(name: &str, args: &Value) -> String {
 
 /// 从调用参数里提取一个短且可读的作用目标，用于节流键与回填标签。
 ///
-/// 只有 `path` 参与节流判定（改动不同文件本就该放行）；
-/// 命令与检索词本身没有可寻址的资源，提取出来只用于展示，
-/// 因此 `throttle_key` 拿到它们时仍应回落到 `*`。
+/// `path` 是主要来源（改动不同文件本就该放行）；没有 path 的工具
+/// 退化到各自的主参数（命令、检索词、技能名）。目标同样参与节流键——
+/// 换一个目标就是换一把钥匙，对同一目标反复死循环仍会被拦。
+///
+/// v0.6.0：load_skill 取 `name`。否则一轮里加载第 6 个技能会被
+/// `load_skill|*` 的通配计数误判成死循环，而换技能本是正常操作。
 fn tool_target(name: &str, args: &Value) -> String {
+    if name.starts_with("load_skill") {
+        return args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|n| n.trim().chars().take(40).collect())
+            .unwrap_or_default();
+    }
     args.get("path")
         .and_then(|v| v.as_str())
         .map(str::trim)
@@ -438,12 +449,16 @@ fn use_compact_prompt(is_small: bool, mode: Mode) -> bool {
     is_small && !mode.is_unrestricted()
 }
 
-/// 工具调用是否放行：已知且当前模式允许。
+/// 工具调用是否放行：已知、当前模式允许、且不被激活中的技能收窄。
 ///
-/// 与提示词是两套独立的闸门。提示词告诉模型「现在该做什么」，
-/// 这里决定「它实际能做什么」——上下文被压缩、小模型幻觉时，
-/// 提示词可能失效，但这道闸门不会。
-fn tool_permitted(mode: Mode, name: &str) -> Result<(), String> {
+/// 三层闸门依次收紧：
+/// 1. 未注册工具直接拒（unknown tool）；
+/// 2. `mode.allows` 模式硬闸门；
+/// 3. 激活技能的 `allowed-tools` 白名单（v0.6.0）。
+///
+/// 第 3 层是**收窄**而非放行：技能永远无法绕过模式闸门。Chat/Plan 下
+/// 即使加载了声明 `write_file` 的技能，写入调用仍死在第 2 层。
+fn tool_permitted(mode: Mode, name: &str, active: &[SkillManifest]) -> Result<(), String> {
     if !is_known_tool(name) {
         return Err(format!(
             "unknown tool '{name}'，可用工具为 {}",
@@ -453,7 +468,10 @@ fn tool_permitted(mode: Mode, name: &str) -> Result<(), String> {
     if !mode.allows(name) {
         return Err(mode.reject_reason(name));
     }
-    Ok(())
+    match skill::gate_active_skill(name, active) {
+        skill::SkillVerdict::Allow => Ok(()),
+        skill::SkillVerdict::Deny(msg) => Err(msg),
+    }
 }
 
 pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(), String> {
@@ -468,6 +486,10 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
     // 改为按 throttle_key 分别累计。
     let mut consecutive: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // v0.6.0：本轮激活中的技能。load_skill 成功后登记，本轮结束即失效
+    // （按轮次激活，避免技能在后续对话里静默收紧权限）。激活期间
+    // 工具调用须过 mode ∩ allowed-tools 的交集闸门。
+    let mut active_skills: Vec<SkillManifest> = Vec::new();
     let mut rounds = 0usize;
 
     loop {
@@ -506,10 +528,16 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         // 但 Build 模式一律走完整 prompt：精简版只注入只读工具，
         // 那会让执行模式拿不到任何写入能力，模式语义直接落空。
         // 清单协议、写入纪律、退出码判读全在完整版里，也是最不能省的。
+        //
+        // v0.6.0：每轮重扫技能库。目录只有寥寥几个小文件，相对一次 LLM
+        // 往返（~2s）开销可忽略；换来的是会话中途新增的技能当轮即可见，
+        // 且 L1 索引始终与磁盘一致。
+        let skills = skill::scan_with_globals(ctx.workspace);
+        let skill_index = skill::render_index(&skills);
         let system = if use_compact_prompt(is_small, ctx.mode) {
-            build_compact_system_prompt(&ws_display, ctx.global_rules)
+            build_compact_system_prompt(&ws_display, ctx.global_rules, &skill_index)
         } else {
-            build_system_prompt(&ws_display, ctx.global_rules, ctx.mode)
+            build_system_prompt(&ws_display, ctx.global_rules, ctx.mode, &skill_index)
         };
         // 清单在每轮重建时注入：模型刚更新完的进度会在下一次工具调用时
         // 立即反映到 prompt，无需额外的同步或缓存
@@ -795,7 +823,7 @@ if tool_jsons.is_empty() {
             let next = match parse_tool_call(raw_json) {
                 Ok((name, args)) => {
                     let norm = normalize_tool_name(&name);
-                    match tool_permitted(ctx.mode, &norm) {
+                    match tool_permitted(ctx.mode, &norm, &active_skills) {
                         Ok(()) => Next::Tool(norm, args),
                         Err(msg) => Next::Reject(msg),
                     }
@@ -897,6 +925,20 @@ if tool_jsons.is_empty() {
                                     true,
                                     detail,
                                 );
+                                // v0.6.0：load_skill 成功后登记激活。用本轮
+                                // 扫描的快照登记而非重新扫——同轮内目录不会
+                                // 变，且快照与 L1 索引同源，保证模型看到的
+                                // 索引与生效的声明一致。
+                                if name == "load_skill" {
+                                    let want = args
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .trim();
+                                    if let Some(m) = skills.iter().find(|s| s.name == want) {
+                                        active_skills.push(m.clone());
+                                    }
+                                }
                                 out.result
                             }
                             Err(fail) => {
@@ -1205,7 +1247,7 @@ mod tests {
         let (name, _) = parse_tool_call(raw).unwrap();
         let norm = normalize_tool_name(&name);
         for mode in [Mode::Chat, Mode::Plan] {
-            let err = tool_permitted(mode, &norm).unwrap_err();
+            let err = tool_permitted(mode, &norm, &[]).unwrap_err();
             assert!(
                 err.contains("write_file") && err.contains("执行模式"),
                 "{} 的拒绝回执应指明工具与出路：{err}",
@@ -1218,7 +1260,7 @@ mod tests {
     fn build_mode_permits_mutating_tools_end_to_end() {
         for name in ["write_file", "string_replace", "run_script"] {
             assert!(
-                tool_permitted(Mode::Build, name).is_ok(),
+                tool_permitted(Mode::Build, name, &[]).is_ok(),
                 "执行模式应放行 {name}"
             );
         }
@@ -1226,9 +1268,9 @@ mod tests {
 
     #[test]
     fn unknown_tool_is_rejected_in_every_mode() {
-        let err = tool_permitted(Mode::Build, "no_such_tool").unwrap_err();
+        let err = tool_permitted(Mode::Build, "no_such_tool", &[]).unwrap_err();
         assert!(err.contains("unknown tool"));
-        let err = tool_permitted(Mode::Chat, "no_such_tool").unwrap_err();
+        let err = tool_permitted(Mode::Chat, "no_such_tool", &[]).unwrap_err();
         assert!(err.contains("unknown tool"));
     }
 
@@ -1241,9 +1283,78 @@ mod tests {
             let norm = normalize_tool_name(&name);
             assert_eq!(norm, "write_file", "{raw} 归一化后应为 write_file");
             assert!(
-                tool_permitted(Mode::Chat, &norm).is_err(),
+                tool_permitted(Mode::Chat, &norm, &[]).is_err(),
                 "变体名不得绕过只读闸门"
             );
+        }
+    }
+
+    // ---- v0.6.0：激活技能与模式闸门的联动 ----
+
+    fn skill(name: &str, tools: &[&str]) -> SkillManifest {
+        SkillManifest {
+            name: name.into(),
+            description: "d".into(),
+            version: "0.1.0".into(),
+            allowed_tools: tools.iter().map(|s| s.to_string()).collect(),
+            body: "b".into(),
+            source: skill::SkillSource::Local,
+            dir: std::path::PathBuf::new(),
+        }
+    }
+
+    /// 计划要求钉死的不变量：Chat 模式下即使加载了声明 write_file 的技能，
+    /// 写入调用依然被拦——技能只能收窄，永远不能绕过模式硬闸门。
+    #[test]
+    fn chat_mode_skill_with_write_tools_still_blocked() {
+        let active = vec![skill("writer", &["write_file", "run_script"])];
+        let err = tool_permitted(Mode::Chat, "write_file", &active).unwrap_err();
+        // 拒绝必须来自模式闸门（指引切到执行模式），而不是技能白名单
+        assert!(
+            err.contains("执行模式"),
+            "拒绝应指引切换模式而非归咎技能：{err}"
+        );
+    }
+
+    /// 执行模式下，只读技能激活期间写工具被技能白名单收窄。
+    #[test]
+    fn active_skill_narrows_build_mode() {
+        let active = vec![skill("reader", &["read_file", "search_workspace"])];
+        assert!(
+            tool_permitted(Mode::Build, "read_file", &active).is_ok(),
+            "声明内的工具应放行"
+        );
+        let err = tool_permitted(Mode::Build, "write_file", &active).unwrap_err();
+        assert!(err.contains("reader"), "回执应点名激活的技能：{err}");
+        assert!(err.contains("write_file"));
+        assert!(err.contains("<answer>"), "应告知如何恢复：{err}");
+    }
+
+    /// 激活期间必须还能加载/切换技能，否则第一个技能会挡住所有后续操作。
+    #[test]
+    fn load_skill_permitted_under_active_skill() {
+        let active = vec![skill("reader", &["read_file"])];
+        for mode in [Mode::Chat, Mode::Plan, Mode::Build] {
+            assert!(
+                tool_permitted(mode, "load_skill", &active).is_ok(),
+                "{} 下激活技能后仍应放行 load_skill",
+                mode.as_str()
+            );
+        }
+    }
+
+    /// 未声明 allowed-tools 的技能不收窄（空 = 继承模式权限）。
+    #[test]
+    fn skill_without_declaration_does_not_narrow() {
+        let active = vec![skill("loose", &[])];
+        assert!(tool_permitted(Mode::Build, "write_file", &active).is_ok());
+    }
+
+    #[test]
+    fn load_skill_is_gated_like_any_read_tool() {
+        // load_skill 是注册在册的只读工具：三档模式都放行
+        for mode in [Mode::Chat, Mode::Plan, Mode::Build] {
+            assert!(tool_permitted(mode, "load_skill", &[]).is_ok());
         }
     }
 
@@ -1286,6 +1397,17 @@ mod tests {
         assert_eq!(
             throttle_key("run_script", &json!({ "command": "cargo build" })),
             throttle_key("run_script", &json!({ "command": "cargo build" }))
+        );
+        // v0.6.0：load_skill 按技能名隔离。一轮里加载多个不同技能是
+        // 正常操作，共用计数会在第 6 个被误判成死循环
+        assert_ne!(
+            throttle_key("load_skill", &json!({ "name": "a" })),
+            throttle_key("load_skill", &json!({ "name": "b" })),
+            "不同技能不该共用节流计数"
+        );
+        assert_eq!(
+            throttle_key("load_skill", &json!({ "name": "a" })),
+            throttle_key("load_skill", &json!({ "name": "a" }))
         );
         // 完全取不到参数时才回落通配
         assert_eq!(throttle_key("list_files", &json!({})), "list_files|*");
