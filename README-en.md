@@ -27,7 +27,9 @@ A local-first desktop AI Agent, built with Tauri 2.0 + React 19 + TypeScript. Co
 - **Streaming output**: SSE incremental rendering with a typewriter effect; generation can be stopped at any time.
 - **Complete toolset**: `list_files` / `read_file` / `search_workspace` for reading and search, `write_file` / `string_replace` / `replace_lines` for editing, `run_script` for running commands — with live action cards, retry on failure, and diagnostic notices.
 - **Context management**: history is compressed automatically as it approaches the context limit so long conversations never break; the task checklist is stored separately and survives compression.
-- **Skills**: reusable instructions written as `SKILL.md` files in the workspace or on this machine. The model loads them on demand, so unloaded skills cost no context, and a skill can only narrow permissions — it can never bypass the mode limits. The Skills page lists every skill with its source (workspace / local / market / built-in) and lets you enable, disable or delete them. Three skills ship built in: `docx` (create/edit Word documents, tracked changes, comments), `pdf` (read/merge/forms/OCR) and `skill-creator` (how to write your own). The skill market installs in one click, but **inspects the package first**: it lists the permissions the skill asks for plus any dangerous commands or prompt-injection lines it contains, and you decide. You can also add any GitHub repository as an extra source.
+- **Path allowlist**: beyond the workspace, you can authorize other directories for the model to read and write (the skill directory, so it can maintain its own skills). System directories and key directories are **always refused**; folders like `Desktop` or `Documents` ask you first.
+- **Operation timeline**: the sidebar's “Trace” view records every step of the current conversation — which tools were called, with what arguments, how long they took, and where something was blocked. Isolated per conversation, searchable, exportable as Markdown.
+- **Skills**: reusable instructions written as `SKILL.md` files in the workspace or on this machine. The model loads them on demand, so unloaded skills cost no context, and a skill can only narrow permissions — it can never bypass the mode limits. The Skills page lists every skill with its source (workspace / local / market / built-in) and lets you enable, disable or delete them. Three skills ship built in: `docx` (create/edit Word documents, tracked changes, comments), `pdf` (read/merge/forms/OCR) and `skill-creator` (how to write your own). The skill market installs in one click, but **inspects the package first**: it lists the permissions the skill asks for plus any dangerous commands or prompt-injection lines it contains, and you decide. You can also add any GitHub repository as an extra source, or plug in a third-party skill library like SkillHub (**filter by source, search within it**).
 - **Settings page**: collapsible sidebar; settings cover appearance, model services, and general options, with light/dark theme switching and global rules.
 - **Local persistence**: session history, task checklists, and settings live in a local SQLite database; API keys are encrypted at rest with Windows DPAPI — nothing depends on the cloud.
 
@@ -60,6 +62,12 @@ The checklist clears automatically once all steps are complete, and is saved wit
 >   - API keys are now encrypted at rest (Windows DPAPI) instead of being stored in plaintext; after switching Windows users or reinstalling the system you will need to re-enter your keys.
 > - Since v0.5.0: Chat mode changed from full access to read-only. After upgrading, switch to "Build" mode if you want Aura to modify files directly.
 > - v0.5.2:
+> - v0.6.2:
+>   - Path allowlist: authorize other directories for the model to read and write; system and key directories are refused outright, privacy-sensitive folders need confirmation
+>   - The skill market now supports multiple sources with per-source filtering, and connects to the third-party SkillHub library
+>   - Installing from the market validates the tool names a skill declares; a skill with a typo can't be installed and you'll be told which name is wrong
+>   - New operation timeline: records every step of a conversation, searchable and exportable as Markdown
+>   - The workspace picker moved next to the model picker
 >   - New sidebar entries for "New Chat", "Skills", and "MCP" — the latter two are reserved for upcoming features.
 >   - Sidebar collapse and expand now use a smooth transition animation.
 >   - The working directory is chosen when creating a new chat; messages cannot be sent until one is selected.

@@ -27,7 +27,9 @@ Agente de IA de escritorio con prioridad local, construido con Tauri 2.0 + React
 - **Salida en streaming**: renderizado incremental por SSE con efecto de máquina de escribir; la generación se puede detener en cualquier momento.
 - **Conjunto completo de herramientas**: `list_files` / `read_file` / `search_workspace` para lectura y búsqueda, `write_file` / `string_replace` / `replace_lines` para editar archivos, `run_script` para ejecutar comandos —con tarjetas de acción en tiempo real, reintentos en caso de fallo y avisos de diagnóstico.
 - **Gestión de contexto**: el historial se comprime automáticamente al acercarse al límite de contexto, de modo que las conversaciones largas no se interrumpen; la lista de tareas se guarda por separado y sobrevive a la compresión.
-- **Skills (habilidades)**: instrucciones reutilizables escritas como `SKILL.md` en el espacio de trabajo o en el equipo. El modelo las carga cuando las necesita, así que las que no se cargan no consumen contexto, y una habilidad solo puede restringir permisos: nunca saltarse los límites del modo. La página Skills lista todas las habilidades con su origen (espacio de trabajo / local / mercado / integradas) y permite activarlas, desactivarlas o eliminarlas. El mercado instala con un clic, pero **antes inspecciona el paquete**: muestra los permisos que pide la habilidad y cualquier comando peligroso o línea de inyección de prompts que contenga, y tú decides. También puedes añadir cualquier repositorio de GitHub como fuente adicional.
+- **Lista blanca de rutas**: además del espacio de trabajo, puedes autorizar otros directorios para que el modelo lea y escriba (el directorio de habilidades, para que maintains tus propias habilidades). Los directorios del sistema y de claves se **rechazan siempre**; carpetas como `Desktop` o `Documents` te preguntan primero.
+- **Cronología de operaciones**: la «Traza» de la barra lateral registra cada paso de esta conversación: qué herramientas se llamaron, con qué argumentos, cuánto tardaron y dónde se bloqueó algo. Aislada por conversación, con búsqueda y exportable a Markdown.
+- **Skills (habilidades)**: instrucciones reutilizables escritas como `SKILL.md` en el espacio de trabajo o en el equipo. El modelo las carga cuando las necesita, así que las que no se cargan no consumen contexto, y una habilidad solo puede restringir permisos: nunca saltarse los límites del modo. La página Skills lista todas las habilidades con su origen (espacio de trabajo / local / mercado / integradas) y permite activarlas, desactivarlas o eliminarlas. El mercado instala con un clic, pero **antes inspecciona el paquete**: muestra los permisos que pide la habilidad y cualquier comando peligroso o línea de inyección de prompts que contenga, y tú decides. También puedes añadir cualquier repositorio de GitHub como fuente adicional, o conectar una biblioteca de habilidades de terceros como SkillHub (**filtrar por fuente y buscar dentro de ella**).
 - **Página de ajustes**: barra lateral plegable; los ajustes cubren apariencia, servicios de modelos y opciones generales, con cambio de tema claro/oscuro y reglas globales.
 - **Persistencia local**: el historial de sesiones, las listas de tareas y los ajustes se guardan en una base de datos SQLite local; las claves API se cifran en reposo con Windows DPAPI —nada depende de la nube.
 
@@ -47,6 +49,12 @@ La lista de tareas se borra automáticamente al completarse todos los pasos, se 
 
 > **Avisos de cambios de comportamiento**
 >
+> - v0.6.2:
+>   - Lista blanca de rutas: autoriza otros directorios para que el modelo lea y escriba. Los directorios del sistema y de claves se rechazan; las carpetas con datos personales requieren confirmación
+>   - El mercado admite varias fuentes con filtrado por fuente, y se conecta a la biblioteca de terceros SkillHub
+>   - La instalación desde el mercado valida los nombres de herramienta declarados: una habilidad con un error no se puede instalar y se te dice cuál falla
+>   - Nueva cronología de operaciones: registra cada paso de una conversación, con búsqueda y exportación a Markdown
+>   - El selector de espacio de trabajo se mueve junto al selector de modelo
 > - v0.6.1:
 >   - La página Skills ya está disponible: muestra el origen, la versión y las herramientas permitidas de cada habilidad, y permite activarlas, desactivarlas o eliminarlas (las integradas y las del espacio de trabajo no se pueden eliminar).
 >   - Nuevo mercado de habilidades: instala habilidades del registro oficial con un clic; cada paquete se verifica obligatoriamente con su sha256.
