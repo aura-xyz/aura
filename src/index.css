@@ -207,11 +207,41 @@
 }
 
 /* ---------------------------------------------------------------
-   Scrollbar (opt-in hidden variant)
+   Scrollbar
    --------------------------------------------------------------- */
 
+@layer base {
+  /* 全局细滚动条：约 4px、透明轨道、悬停加深。
+     此前没有任何全局滚动条样式，WebView2 的默认条宽约 15px 且灰白刺眼，
+     是「用起来像网页」最直接的泄漏点之一。 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--line);
+    border-radius: 9999px;
+  }
+
+  /* 悬停整片可滚动区域时加深，比「必须精确悬停在 4px 条上」好用得多 */
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: var(--subtle);
+  }
+}
+
 @layer components {
-  /* 隐藏滚动条但保留滚轮滚动能力 */
+  /* 隐藏滚动条但保留滚轮滚动能力。
+     放在 base 之后，使本类的 display:none 能压过上面的全局规则。 */
   .scrollbar-hidden {
     scrollbar-width: none;
     -ms-overflow-style: none;
