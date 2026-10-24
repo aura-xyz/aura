@@ -6,6 +6,7 @@ pub fn build_system_prompt(
     global_rules: &str,
     mode: Mode,
     skill_index: &str,
+    extra_paths: &[String],
 ) -> String {
     let mut p = String::new();
     p.push_str(
@@ -15,6 +16,24 @@ pub fn build_system_prompt(
     );
     p.push_str(workspace);
     p.push('\n');
+
+    // v0.6.2：用户授权的额外目录。
+    //
+    // **没有这一段模型就不会用白名单**——它只看到工作区根，
+    // 根本不知道还有别的地方可去。路径必须写成模型能直接用的形式
+    // （绝对路径 + 正斜杠）。
+    if !extra_paths.is_empty() {
+        p.push_str("\n# 可访问路径\n\
+                    除工作区根目录外，你还可以访问以下用户已授权的目录：\n");
+        for path in extra_paths {
+            p.push_str("- ");
+            p.push_str(path);
+            p.push('\n');
+        }
+        p.push_str(
+            "访问这些目录时用上面的**绝对路径**（正斜杠）。\n",
+        );
+    }
 
     // 模式纪律段前置：让模型先知道「现在是规划还是执行」，再读工具清单
     let discipline = mode_section(mode);
@@ -151,6 +170,7 @@ pub fn build_compact_system_prompt(
     workspace: &str,
     global_rules: &str,
     skill_index: &str,
+    extra_paths: &[String],
 ) -> String {
     let read_tools = registry::names_by_kind(ToolKind::Read).join("、");
     let mut p = String::new();
@@ -169,6 +189,14 @@ pub fn build_compact_system_prompt(
          最终回答用 <answer>...</answer> 包裹。\n\
          路径用 /，以 / 开头表示工作区根目录，禁 ..。\n",
     );
+
+    // v0.6.2：授权目录同样要在精简 prompt 里出现。
+    // 精简版给小模型用，但白名单是**权限边界**——模型不知道就等于没授权。
+    if !extra_paths.is_empty() {
+        p.push_str("额外可访问目录：");
+        p.push_str(&extra_paths.join("、"));
+        p.push_str("（用绝对路径访问）\n");
+    }
 
     if !skill_index.is_empty() {
         p.push_str(skill_index);
@@ -204,7 +232,7 @@ mod tests {
 
     #[test]
     fn build_prompt_includes_write_tools_and_discipline() {
-        let p = build_system_prompt("/ws", "", Mode::Build, "");
+        let p = build_system_prompt("/ws", "", Mode::Build, "", &[]);
         // 写工具已注入
         assert!(p.contains("write_file"));
         assert!(p.contains("string_replace"));
@@ -230,7 +258,7 @@ mod tests {
     #[test]
     fn read_only_prompts_contain_no_mutating_tool_names() {
         for mode in [Mode::Chat, Mode::Plan] {
-            let p = build_system_prompt("/ws", "", mode, "");
+            let p = build_system_prompt("/ws", "", mode, "", &[]);
             for t in registry::names_by_kind(ToolKind::Write)
                 .into_iter()
                 .chain(registry::names_by_kind(ToolKind::Exec))
@@ -248,7 +276,7 @@ mod tests {
 
     #[test]
     fn plan_prompt_explains_readonly_and_plan_protocol() {
-        let p = build_system_prompt("/ws", "", Mode::Plan, "");
+        let p = build_system_prompt("/ws", "", Mode::Plan, "", &[]);
         assert!(p.contains("# 当前模式：规划"));
         assert!(p.contains("只读"));
         assert!(p.contains("<todo_plan>"));
@@ -258,7 +286,7 @@ mod tests {
 
     #[test]
     fn build_prompt_explains_todo_update_protocol() {
-        let p = build_system_prompt("/ws", "", Mode::Build, "");
+        let p = build_system_prompt("/ws", "", Mode::Build, "", &[]);
         assert!(p.contains("# 当前模式：执行"));
         assert!(p.contains("<todo_update>"));
         assert!(p.contains("in_progress"));
@@ -268,7 +296,7 @@ mod tests {
     #[test]
     fn chat_prompt_has_no_mode_section() {
         // Chat 必须与 v0.3.x 完全一致，不引入任何新约束
-        let p = build_system_prompt("/ws", "", Mode::Chat, "");
+        let p = build_system_prompt("/ws", "", Mode::Chat, "", &[]);
         assert!(!p.contains("# 当前模式"));
         assert!(!p.contains("<todo_plan>"));
         assert!(!p.contains("<todo_update>"));
@@ -276,7 +304,7 @@ mod tests {
 
     #[test]
     fn compact_prompt_excludes_write_tools() {
-        let p = build_compact_system_prompt("/ws", "", "");
+        let p = build_compact_system_prompt("/ws", "", "", &[]);
         // 小模型只给只读工具，避免多轮写入导致解析重试耗尽
         assert!(!p.contains("write_file"));
         assert!(!p.contains("string_replace"));
@@ -288,7 +316,7 @@ mod tests {
     #[test]
     fn global_rules_are_appended_in_every_mode() {
         for mode in [Mode::Chat, Mode::Plan, Mode::Build] {
-            let p = build_system_prompt("/ws", "始终使用中文注释", mode, "");
+            let p = build_system_prompt("/ws", "始终使用中文注释", mode, "", &[]);
             assert!(p.contains("# 全局规则"), "{} 模式应带上全局规则", mode.as_str());
             assert!(p.contains("始终使用中文注释"));
         }
@@ -318,8 +346,8 @@ mod tests {
     #[test]
     fn compact_prompt_shorter() {
         // 与最大的一份（Build）比，精简版才有意义
-        let full = build_system_prompt("/ws", "", Mode::Build, "");
-        let compact = build_compact_system_prompt("/ws", "", "");
+        let full = build_system_prompt("/ws", "", Mode::Build, "", &[]);
+        let compact = build_compact_system_prompt("/ws", "", "", &[]);
         assert!(compact.len() < full.len() / 2);
     }
 
@@ -328,7 +356,7 @@ mod tests {
     /// 它的只读性由 Rust 闸门与工具清单保证，无需 prompt 再啰嗦一遍。
     #[test]
     fn chat_has_no_mode_section() {
-        let p = build_system_prompt("/ws", "", Mode::Chat, "");
+        let p = build_system_prompt("/ws", "", Mode::Chat, "", &[]);
         assert!(!p.contains("# 当前模式"));
         assert!(!p.contains("<todo_plan>"));
         assert!(!p.contains("<todo_update>"));
@@ -337,8 +365,8 @@ mod tests {
     /// Plan 相对 Chat 的唯一差别就是产出清单。
     #[test]
     fn plan_differs_from_chat_only_by_the_plan_protocol() {
-        let chat = build_system_prompt("/ws", "", Mode::Chat, "");
-        let plan = build_system_prompt("/ws", "", Mode::Plan, "");
+        let chat = build_system_prompt("/ws", "", Mode::Chat, "", &[]);
+        let plan = build_system_prompt("/ws", "", Mode::Plan, "", &[]);
         assert!(plan.contains("<todo_plan>"));
         assert!(!chat.contains("<todo_plan>"));
         // 工具清单必须完全一致：两档权限相同，prompt 也不该有出入
@@ -352,7 +380,7 @@ mod tests {
     /// Plan 模式不得声称会自行切到执行模式——模式由用户决定。
     #[test]
     fn plan_does_not_promise_automatic_mode_switch() {
-        let p = build_system_prompt("/ws", "", Mode::Plan, "");
+        let p = build_system_prompt("/ws", "", Mode::Plan, "", &[]);
         assert!(
             !p.contains("用户确认计划后会切换到执行模式"),
             "不存在自动切换，向模型传达该预期会让它在用户催促时越权"
@@ -365,7 +393,7 @@ mod tests {
     fn build_prompt_points_at_the_injected_todo_section() {
         // 清单是以「当前任务清单」段落注入的，措辞必须指向它，
         // 而不是指向已废弃的「上下文中已有计划（todo_plan）」
-        let p = build_system_prompt("/ws", "", Mode::Build, "");
+        let p = build_system_prompt("/ws", "", Mode::Build, "", &[]);
         assert!(p.contains("当前任务清单"));
         assert!(!p.contains("已有计划（todo_plan）"));
     }
@@ -374,7 +402,7 @@ mod tests {
     fn compact_prompt_alone_lacks_todo_protocol() {
         // 精简 prompt 的设计前提就是不带协议；这条断言把该前提固定下来，
         // 防止后续有人「顺手」往里加内容
-        let p = build_compact_system_prompt("/ws", "", "");
+        let p = build_compact_system_prompt("/ws", "", "", &[]);
         assert!(!p.contains("<todo_update>"));
     }
 
@@ -383,7 +411,7 @@ mod tests {
     #[test]
     fn skill_index_is_injected_after_tool_list() {
         let idx = "\n# 技能（Skills）\n- demo：演示技能\n";
-        let p = build_system_prompt("/ws", "", Mode::Build, idx);
+        let p = build_system_prompt("/ws", "", Mode::Build, idx, &[]);
         assert!(p.contains("# 技能"));
         assert!(p.contains("- demo：演示技能"));
         // 必须出现在工具清单之后、输出规则之前：技能是可调用的能力，
@@ -394,7 +422,7 @@ mod tests {
         assert!(tools_at < skills_at && skills_at < rules_at);
         // load_skill 随只读工具清单进入全部三档的 prompt
         for mode in [Mode::Chat, Mode::Plan, Mode::Build] {
-            let p = build_system_prompt("/ws", "", mode, idx);
+            let p = build_system_prompt("/ws", "", mode, idx, &[]);
             assert!(p.contains("load_skill"), "{} 应列出 load_skill", mode.as_str());
         }
     }
@@ -403,10 +431,10 @@ mod tests {
     #[test]
     fn empty_skill_index_adds_nothing() {
         for mode in [Mode::Chat, Mode::Plan, Mode::Build] {
-            let p = build_system_prompt("/ws", "", mode, "");
+            let p = build_system_prompt("/ws", "", mode, "", &[]);
             assert!(!p.contains("# 技能"), "{} 不应出现技能段", mode.as_str());
         }
-        let p = build_compact_system_prompt("/ws", "", "");
+        let p = build_compact_system_prompt("/ws", "", "", &[]);
         assert!(!p.contains("# 技能"));
     }
 
@@ -414,7 +442,7 @@ mod tests {
     #[test]
     fn compact_prompt_includes_skill_index() {
         let idx = "\n# 技能（Skills）\n- demo：演示技能\n";
-        let p = build_compact_system_prompt("/ws", "", idx);
+        let p = build_compact_system_prompt("/ws", "", idx, &[]);
         assert!(p.contains("# 技能"));
         assert!(p.contains("- demo：演示技能"));
         // 注入在全局规则之前，保持「规则永远在最后」的既有结构
@@ -433,4 +461,43 @@ mod tests {
         // 必须够短，短到不破坏精简 prompt 的初衷
         assert!(b.len() < 220, "brief 过长会拖垮小模型的上下文预算");
     }
+    /// v0.6.2：白名单路径必须出现在 system prompt 里。
+    ///
+    /// 没有这一段模型根本不知道有授权目录——白名单等于白开。
+    /// 这条要有测试：将来有人精简 prompt 时很容易把它一起删掉。
+    #[test]
+    fn allowlisted_paths_appear_in_prompt() {
+        let paths = vec![
+            "C:/Users/x/AppData/Roaming/aura/skills/local".to_string(),
+            "D:/data".to_string(),
+        ];
+        let p = build_system_prompt("/ws", "", Mode::Build, "", &paths);
+        assert!(p.contains("可访问路径"), "prompt 必须有可访问路径一节");
+        assert!(p.contains("C:/Users/x/AppData/Roaming/aura/skills/local"));
+        assert!(p.contains("D:/data"));
+        // 完整版用列表形式，一行一个
+        assert!(p.contains("- C:/Users/x/AppData/Roaming/aura/skills/local"));
+    }
+
+    /// 精简 prompt（小模型用）同样要带授权路径。
+    ///
+    /// 精简版是给能力弱的模型用的，但白名单是**权限边界**——
+    /// 模型不知道就等于没授权。
+    #[test]
+    fn allowlisted_paths_appear_in_compact_prompt() {
+        let paths = vec!["D:/data".to_string()];
+        let p = build_compact_system_prompt("/ws", "", "", &paths);
+        assert!(p.contains("D:/data"), "精简 prompt 也必须带授权路径");
+        assert!(p.contains("额外可访问目录"));
+    }
+
+    /// 没有白名单时不该出现空段落。
+    #[test]
+    fn no_allowlist_section_when_empty() {
+        let p = build_system_prompt("/ws", "", Mode::Build, "", &[]);
+        assert!(!p.contains("可访问路径"));
+        let c = build_compact_system_prompt("/ws", "", "", &[]);
+        assert!(!c.contains("额外可访问目录"));
+    }
+
 }

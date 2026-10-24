@@ -205,6 +205,11 @@ pub struct TurnContext<'a> {
     /// runner 不持有数据库连接，由 `commands.rs` 注入闭包，
     /// 这样存储细节不会渗进 agent 层，也便于测试时替换。
     pub persist_todos: Option<&'a (dyn Fn(Vec<Todo>) + Send + Sync)>,
+    /// 用户授权的额外目录（路径白名单，v0.6.2）。
+    ///
+    /// 展示用的绝对路径（正斜杠），会写进 system prompt 的「可访问路径」一节。
+    /// 没有它模型不知道这些目录存在，白名单等于没开。
+    pub extra_paths: &'a [String],
     /// 被用户禁用的技能名（v0.6.1）。
     ///
     /// 与 `persist_todos` 同一思路：库里查好传进来，agent 层不碰数据库。
@@ -560,9 +565,20 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         );
         let skill_index = skill::render_index(&skills);
         let system = if use_compact_prompt(is_small, ctx.mode) {
-            build_compact_system_prompt(&ws_display, ctx.global_rules, &skill_index)
+            build_compact_system_prompt(
+                &ws_display,
+                ctx.global_rules,
+                &skill_index,
+                ctx.extra_paths,
+            )
         } else {
-            build_system_prompt(&ws_display, ctx.global_rules, ctx.mode, &skill_index)
+            build_system_prompt(
+                &ws_display,
+                ctx.global_rules,
+                ctx.mode,
+                &skill_index,
+                ctx.extra_paths,
+            )
         };
         // 清单在每轮重建时注入：模型刚更新完的进度会在下一次工具调用时
         // 立即反映到 prompt，无需额外的同步或缓存

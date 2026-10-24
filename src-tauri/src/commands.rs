@@ -173,9 +173,21 @@ pub async fn send_message(
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
 
     // 工具访问域：工作区 + 用户授权的额外目录（路径白名单）。
-    // v0.6.2 的 T0 阶段白名单表还没建，extra 先为空——行为与 v0.6.1 完全一致。
-    let scope = crate::tools::AccessScope::workspace_only(workspace.clone())
+    // 白名单每轮读一次：用户在设置里改了授权，下一轮发送即生效。
+    let allowlist = {
+        let db = state.db.lock().map_err(lock_err)?;
+        allowlist_paths(&db)
+    };
+    let scope = crate::tools::AccessScope::new(workspace.clone(), allowlist)
         .map_err(|e| format!("{e}"))?;
+
+    // 展示给模型的授权路径（正斜杠绝对路径）。
+    let extra_paths: Vec<String> = scope
+        .roots()
+        .iter()
+        .skip(1) // 第 0 项是工作区，prompt 里已经单独说了
+        .map(|p| crate::paths::display(p))
+        .collect();
 
     let mut sessions = state.sessions.lock().await;
     let session_id_for_load = session_id.clone();
@@ -215,6 +227,7 @@ pub async fn send_message(
             router: &state.router,
             workspace: &workspace,
             scope: &scope,
+            extra_paths: &extra_paths,
             global_rules: &global_rules,
             history: &mut session.history,
             model_idx: &mut session.model_idx,
@@ -826,6 +839,185 @@ pub struct SkillSourceView {
     pub repo: String,
 }
 
+// ── 路径白名单（v0.6.2）─────────────────────────────────────────
+
+/// 白名单条目（前端投影）。
+#[derive(serde::Serialize)]
+pub struct AllowlistPathView {
+    /// 归一化后的绝对路径（正斜杠）
+    pub path: String,
+    /// 展示名
+    pub label: String,
+    /// 内置默认项，不可删
+    pub builtin: bool,
+    /// 是否存在（目录被删了要能看出来）
+    pub exists: bool,
+}
+
+/// 路径判定结果（前端据此决定是否弹确认框）。
+#[derive(serde::Serialize)]
+pub struct AllowlistCheck {
+    /// "allow" | "confirm" | "reject"
+    pub level: String,
+    /// 面向用户的说明
+    pub reason: String,
+    /// 归一化后的绝对路径
+    pub path: String,
+}
+
+/// 内置默认项：技能目录（skills/local）。
+///
+/// 让模型能管理自己的技能——写 SKILL.md、删技能、整理目录。
+/// 用户删不掉它（builtin=1），但可以在设置里看到它授权了什么。
+fn builtin_allowlist() -> Option<(std::path::PathBuf, &'static str)> {
+    let dir = crate::agent::skill::local_root()?;
+    Some((dir, "技能目录（可让模型管理技能）"))
+}
+
+/// 确保内置默认项在库里。
+///
+/// 每次启动时补一次：老库升级过来时表是空的，得把它加上。
+/// 已存在则不动（用户可能改过展示名）。
+pub fn ensure_builtin_allowlist(db: &Connection) {
+    let Some((dir, label)) = builtin_allowlist() else {
+        return;
+    };
+    let path = crate::paths::display(&dir);
+    let _ = db::add_allowlist(db, &path, label, true);
+}
+
+/// 列出全部白名单条目（内置 + 用户添加）。
+#[tauri::command]
+pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    let rows = db::load_allowlist(&db).map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let exists = std::path::PathBuf::from(&r.path).is_dir();
+            AllowlistPathView {
+                path: r.path,
+                label: r.label,
+                builtin: r.builtin,
+                exists,
+            }
+        })
+        .collect())
+}
+
+/// 判定一个路径能否加入白名单。**只判定不落库。**
+///
+/// 前端拿它决定「直接添加」还是「弹确认框」还是「禁用按钮」。
+#[tauri::command]
+pub fn check_allowlist_path(path: String) -> Result<AllowlistCheck, String> {
+    let normalized = crate::paths::normalize(&path)?;
+    let verdict = crate::paths::classify(&normalized);
+    Ok(AllowlistCheck {
+        level: verdict.level().to_string(),
+        reason: verdict.reason(),
+        path: crate::paths::display(&normalized),
+    })
+}
+
+/// 添加前的判定结果：归一化路径 + 展示名。
+#[derive(Debug)]
+struct AllowlistAddition {
+    path: String,
+    label: String,
+}
+
+/// **写入前的最终判定**。
+///
+/// 这是白名单安全边界的最后一道闸门：**后端重新判定**，
+/// 不信任前端传来的判定结果与 `acknowledged`。
+///
+/// `acknowledged` 的语义只有一条：「用户看到了警告并点了确认」。
+/// 它**不能**用来绕过硬拒档——否则绕过前端直接调命令就能把
+/// `C:/Windows/System32` 加进白名单。
+fn verify_allowlist_add(
+    path: &str,
+    label: Option<&str>,
+    acknowledged: bool,
+) -> Result<AllowlistAddition, String> {
+    let normalized = crate::paths::normalize(path)?;
+    let verdict = crate::paths::classify(&normalized);
+    match &verdict {
+        crate::paths::Verdict::Reject { reason } => {
+            return Err(format!("不能添加：{reason}"));
+        }
+        crate::paths::Verdict::Confirm { reason } => {
+            if !acknowledged {
+                return Err(format!("需要确认：{reason}"));
+            }
+        }
+        crate::paths::Verdict::Allow => {}
+    }
+    let label = label
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| default_allowlist_label(&normalized));
+    Ok(AllowlistAddition {
+        path: crate::paths::display(&normalized),
+        label,
+    })
+}
+
+/// 添加白名单路径。
+#[tauri::command]
+pub fn add_allowlist_path(
+    state: State<'_, AppState>,
+    path: String,
+    label: Option<String>,
+    acknowledged: bool,
+) -> Result<Vec<AllowlistPathView>, String> {
+    let addition = verify_allowlist_add(&path, label.as_deref(), acknowledged)?;
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::add_allowlist(&db, &addition.path, &addition.label, false)
+            .map_err(|e| e.to_string())?;
+    }
+    list_allowlist_paths(state)
+}
+
+/// 移除白名单路径。内置默认项不可删。
+#[tauri::command]
+pub fn remove_allowlist_path(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<AllowlistPathView>, String> {
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        let removed = db::remove_allowlist(&db, &path).map_err(|e| e.to_string())?;
+        if !removed {
+            return Err("内置默认项不可删除".into());
+        }
+    }
+    list_allowlist_paths(state)
+}
+
+/// 白名单路径的默认展示名：取目录名。
+fn default_allowlist_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "授权目录".to_string())
+}
+
+/// 运行时使用的白名单路径列表（canonical 后的绝对路径）。
+///
+/// 供 `send_message` 构造 [`crate::tools::AccessScope`]。
+/// 不存在的目录直接跳过——它授权了也没用，模型访问不到。
+pub fn allowlist_paths(db: &Connection) -> Vec<std::path::PathBuf> {
+    let Ok(rows) = db::load_allowlist(db) else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter_map(|r| {
+            let p = std::path::PathBuf::from(&r.path);
+            p.is_dir().then_some(p)
+        })
+        .collect()
+}
+
 /// 官方源 + 用户添加的源。顺序即合并优先级（官方永远第一）。
 fn collect_sources(db: &Connection) -> Result<Vec<crate::market::RegistrySource>, String> {
     let official = crate::market::official_source();
@@ -1132,4 +1324,52 @@ mod tests {
             "E:/dev/aura"
         );
     }
+    /// v0.6.2：白名单的安全边界在**后端**。
+    ///
+    /// 前端可以传 `acknowledged: true`，但那只能表示「用户看到了警告」。
+    /// 硬拒档（系统目录、密钥目录、盘符根）无论前端传什么都必须拒绝——
+    /// 否则绕过界面直接调命令就能授权 `C:/Windows/System32`。
+    #[test]
+    fn allowlist_add_rejects_dangerous_paths_regardless_of_acknowledgement() {
+        for path in [
+            "C:/Windows/System32",
+            "C:/Users/Someone/.ssh",
+            "C:/",
+            "C:/Users/Someone/id_rsa",
+            "C:/Program Files",
+        ] {
+            for ack in [false, true] {
+                let err = verify_allowlist_add(path, None, ack)
+                    .expect_err("危险目录必须被拒");
+                assert!(
+                    err.contains("不能添加"),
+                    "path={path} ack={ack} err={err}"
+                );
+            }
+        }
+    }
+
+    /// 隐私目录需要确认：没确认不给加，确认了才加。
+    #[test]
+    fn allowlist_add_requires_confirmation_for_privacy_dirs() {
+        let path = "C:/Users/Someone/Desktop";
+        let err = verify_allowlist_add(path, None, false).expect_err("未确认必须被拒");
+        assert!(err.contains("需要确认"), "err={err}");
+        // 确认后放行
+        let ok = verify_allowlist_add(path, None, true).expect("确认后应放行");
+        assert!(ok.path.ends_with("Desktop"));
+    }
+
+    /// 普通目录直接放行，acknowledged 无关。
+    #[test]
+    fn allowlist_add_allows_ordinary_dirs() {
+        let ok = verify_allowlist_add("D:/projects/data", None, false).expect("应放行");
+        assert!(ok.path.ends_with("data"));
+        // 默认展示名取目录名
+        assert_eq!(ok.label, "data");
+        // 显式给了名字就用给的
+        let ok = verify_allowlist_add("D:/projects/data", Some("我的数据"), false).unwrap();
+        assert_eq!(ok.label, "我的数据");
+    }
+
 }

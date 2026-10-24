@@ -59,6 +59,15 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
          CREATE TABLE IF NOT EXISTS skill_sources (
              url TEXT PRIMARY KEY,
              name TEXT NOT NULL
+         );
+         -- v0.6.2：路径白名单。授权给模型访问的额外目录。
+         -- path 是归一化后的绝对路径（正斜杠），builtin=1 是内置默认项
+         -- （skills/local，不可删）。判定逻辑在 paths.rs，不在库里。
+         CREATE TABLE IF NOT EXISTS path_allowlist (
+             path TEXT PRIMARY KEY,
+             label TEXT NOT NULL,
+             builtin INTEGER NOT NULL DEFAULT 0,
+             added_at INTEGER NOT NULL DEFAULT 0
          );",
     )?;
     migrate(&conn)?;
@@ -196,6 +205,56 @@ pub fn add_skill_source(conn: &Connection, url: &str, name: &str) -> Result<(), 
 pub fn remove_skill_source(conn: &Connection, url: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM skill_sources WHERE url = ?1", params![url])?;
     Ok(())
+}
+
+/// 一条路径白名单。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowlistRow {
+    /// 归一化后的绝对路径（正斜杠）
+    pub path: String,
+    /// 展示名
+    pub label: String,
+    /// 内置默认项（不可删）
+    pub builtin: bool,
+}
+
+pub fn load_allowlist(conn: &Connection) -> Result<Vec<AllowlistRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT path, label, builtin FROM path_allowlist ORDER BY builtin DESC, added_at, path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(AllowlistRow {
+            path: r.get(0)?,
+            label: r.get(1)?,
+            builtin: r.get::<_, i64>(2)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 添加白名单项。同路径重复添加只更新展示名。
+pub fn add_allowlist(
+    conn: &Connection,
+    path: &str,
+    label: &str,
+    builtin: bool,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO path_allowlist (path, label, builtin, added_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(path) DO UPDATE SET label = excluded.label",
+        params![path, label, builtin as i64, now()],
+    )?;
+    Ok(())
+}
+
+/// 删除白名单项。内置项不可删——返回 false 表示没删。
+pub fn remove_allowlist(conn: &Connection, path: &str) -> Result<bool, rusqlite::Error> {
+    let n = conn.execute(
+        "DELETE FROM path_allowlist WHERE path = ?1 AND builtin = 0",
+        params![path],
+    )?;
+    Ok(n > 0)
 }
 
 pub fn save_session(
@@ -718,6 +777,46 @@ mod tests {
         let conn = open(&dir.join("t.db")).unwrap();
         save_todos(&conn, "ghost", &[crate::agent::Todo::new("s1", "任务")]).unwrap();
         assert!(load_sessions(&conn).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v0.6.2：路径白名单的读写往返。
+    ///
+    /// 内置项（builtin=1）必须删不掉——它是「技能目录」这个默认授权，
+    /// 用户可以在设置里看到它，但不该能移除掉整个能力。
+    #[test]
+    fn allowlist_round_trip() {
+        let dir = std::env::temp_dir().join(format!("aura-db-test-{}-allowlist", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("allowlist.db")).unwrap();
+
+        assert!(load_allowlist(&conn).unwrap().is_empty());
+
+        add_allowlist(&conn, "C:/data", "数据目录", false).unwrap();
+        add_allowlist(&conn, "C:/app/skills/local", "技能目录", true).unwrap();
+
+        let rows = load_allowlist(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        // 内置项排在前面（ORDER BY builtin DESC）
+        assert!(rows[0].builtin);
+        assert_eq!(rows[0].label, "技能目录");
+        assert!(!rows[1].builtin);
+        assert_eq!(rows[1].path, "C:/data");
+
+        // 同路径重复添加只更新名字，不新增行
+        add_allowlist(&conn, "C:/data", "新名字", false).unwrap();
+        let rows = load_allowlist(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].label, "新名字");
+
+        // 内置项删不掉
+        assert!(!remove_allowlist(&conn, "C:/app/skills/local").unwrap());
+        assert_eq!(load_allowlist(&conn).unwrap().len(), 2);
+
+        // 用户项能删
+        assert!(remove_allowlist(&conn, "C:/data").unwrap());
+        assert_eq!(load_allowlist(&conn).unwrap().len(), 1);
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

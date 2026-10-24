@@ -318,6 +318,61 @@ export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
   return invoke("remove_skill_source", { url });
 }
 
+// ── 路径白名单（v0.6.2）─────────────────────────────────────────
+
+/** 一个白名单条目。 */
+export interface AllowlistPathView {
+  /** 归一化后的绝对路径（正斜杠） */
+  path: string;
+  /** 展示名 */
+  label: string;
+  /** 内置默认项（技能目录），不可删除 */
+  builtin: boolean;
+  /** 目录是否还存在 */
+  exists: boolean;
+}
+
+/** 路径判定结果。level 决定前端要不要弹确认框。 */
+export interface AllowlistCheck {
+  /** "allow" | "confirm" | "reject" */
+  level: "allow" | "confirm" | "reject";
+  /** 面向用户的说明 */
+  reason: string;
+  /** 归一化后的绝对路径 */
+  path: string;
+}
+
+export function listAllowlistPaths(): Promise<AllowlistPathView[]> {
+  return invoke("list_allowlist_paths");
+}
+
+/**
+ * 判定路径能否加入白名单。只判定不落库。
+ *
+ * 后端在真正写入时会**重新判定**——这里的结论只是给界面用的。
+ */
+export function checkAllowlistPath(path: string): Promise<AllowlistCheck> {
+  return invoke("check_allowlist_path", { path });
+}
+
+/**
+ * 添加白名单路径。
+ *
+ * `acknowledged` 只表示「用户看到了警告并点了确认」，
+ * 不能用来绕过硬拒档——后端会重新判定并拒绝危险路径。
+ */
+export function addAllowlistPath(
+  path: string,
+  label: string | undefined,
+  acknowledged: boolean,
+): Promise<AllowlistPathView[]> {
+  return invoke("add_allowlist_path", { path, label, acknowledged });
+}
+
+export function removeAllowlistPath(path: string): Promise<AllowlistPathView[]> {
+  return invoke("remove_allowlist_path", { path });
+}
+
 /**
  * 下载并审查一个市场技能，返回权限与风险清单。不写入任何东西——
  * 用户看过报告后才会真正安装。

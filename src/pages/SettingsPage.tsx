@@ -25,6 +25,7 @@ import {
 } from "../lib/providers";
 import { useStore } from "../store";
 import AboutSection from "./AboutSection";
+import AllowlistSection from "../components/AllowlistSection";
 import Switch from "../components/Switch";
 import Select from "../components/Select";
 
@@ -1249,9 +1250,14 @@ export default function SettingsPage({ onClose, theme, setTheme }: Props) {
             {section === "general" && (
               <section className="rounded-card border border-line p-6">
                 <h2 className="eyebrow">通用</h2>
+
+                <div className="mt-4 border-b border-line pb-5">
+                  <AllowlistSection />
+                </div>
+
                 <label
                   htmlFor="global-rules"
-                  className="mt-4 block text-sm font-medium"
+                  className="mt-5 block text-sm font-medium"
                 >
                   全局规则
                 </label>

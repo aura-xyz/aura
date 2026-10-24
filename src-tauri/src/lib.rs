@@ -4,17 +4,19 @@ pub mod audit;
 pub mod commands;
 pub mod db;
 pub mod market;
+pub mod paths;
 pub mod secure;
 pub mod tools;
 
 use commands::{
-    add_skill_source, delete_skill, fetch_remote_models, get_api_config, get_global_rules,
-    get_models, get_provider_statuses, get_providers, get_selected_model, get_workspace,
-    inspect_market_skill, install_market_skill, list_market_skills, list_skill_sources,
-    list_skills, load_sessions, pull_ollama_model, refresh_provider_models, remove_session,
-    remove_skill_source, remove_workspace, save_session, save_todos, send_message,
-    set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    set_skill_enabled, set_workspace, stop_message, AppState,
+    add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
+    fetch_remote_models, get_api_config, get_global_rules, get_models, get_provider_statuses,
+    get_providers, get_selected_model, get_workspace, inspect_market_skill,
+    install_market_skill, list_allowlist_paths, list_market_skills, list_skill_sources,
+    list_skills, load_sessions, pull_ollama_model, refresh_provider_models,
+    remove_allowlist_path, remove_session, remove_skill_source, remove_workspace, save_session,
+    save_todos, send_message, set_api_config, set_global_rules, set_pinned_models,
+    set_providers, set_selected_model, set_skill_enabled, set_workspace, stop_message, AppState,
 };
 use tauri::Manager;
 
@@ -136,6 +138,10 @@ pub fn run() {
 
             let db = db::open(&dir.join("aura.db"))?;
 
+            // v0.6.2：把内置默认项（技能目录）补进路径白名单。
+            // 老库升级过来时这张表是空的，得在这里补上。
+            commands::ensure_builtin_allowlist(&db);
+
             // 主窗口在代码中构建（而非 tauri.conf.json），因为 on_navigation
             // 只能在 Builder 阶段注册——Tauri 2 没有运行时 setter。
             //
@@ -216,7 +222,11 @@ pub fn run() {
             install_market_skill,
             list_skill_sources,
             add_skill_source,
-            remove_skill_source
+            remove_skill_source,
+            list_allowlist_paths,
+            check_allowlist_path,
+            add_allowlist_path,
+            remove_allowlist_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
