@@ -40,6 +40,9 @@ tauri-plugin-process = "2"
 zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 # 技能包完整性校验（清单里带 sha256）
 sha2 = "0.10.9"
+# 顺着 GitHub Contents API 取清单时，文件内容被 base64 包在 JSON 里。
+# 0.22.1 已在 Tauri 的依赖树中，声明为直接依赖不会新增编译。
+base64 = "0.22"
 
 [features]
 # 生产构建启用；tauri dev 由 CLI 以 --no-default-features 关闭以使用 devUrl

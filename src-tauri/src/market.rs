@@ -121,7 +121,24 @@ pub fn repo_label(input: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// 某来源的清单候选地址（按序尝试）。
+/// raw 基址 → GitHub Contents API 地址。
+///
+/// 这是给「raw 与 CDN 都不通」准备的第三条路：`api.github.com` 是另一台主机，
+/// 国内加速规则（hosts / Watt Toolkit 之类）基本都覆盖它，而 raw 与 jsDelivr
+/// 未必。代价是它有 60 次/小时的无鉴权限额，所以**只当兜底**，排最后。
+fn api_contents_url(raw_base: &str) -> Option<String> {
+    let rest = raw_base.strip_prefix("https://raw.githubusercontent.com/")?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    Some(format!(
+        "https://api.github.com/repos/{owner}/{repo}/contents/{REGISTRY_JSON}"
+    ))
+}
+
+/// 某来源的**快线**候选地址：并发抢答，全是常规 CDN / 静态托管。
+///
+/// Contents API 不在其中——它有 60 次/小时的无鉴权限额，不能每次开市场都打一遍。
 fn registry_urls(src: &RegistrySource) -> Vec<String> {
     let mut urls = vec![format!("{}{}", src.url, REGISTRY_JSON)];
     if src.url.ends_with("/HEAD/") {
@@ -136,6 +153,26 @@ fn registry_urls(src: &RegistrySource) -> Vec<String> {
         urls.push(m);
     }
     urls
+}
+
+/// Contents API 把文件内容 base64 塞在 JSON 里，这里还原成原始字节。
+fn decode_contents_api(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    #[derive(serde::Deserialize)]
+    struct Contents {
+        content: String,
+        #[serde(default)]
+        encoding: String,
+    }
+    let parsed: Contents =
+        serde_json::from_slice(bytes).map_err(|e| format!("清单响应不是文件内容：{e}"))?;
+    if !parsed.encoding.is_empty() && parsed.encoding != "base64" {
+        return Err(format!("不支持的内容编码：{}", parsed.encoding));
+    }
+    let raw: String = parsed.content.chars().filter(|c| !c.is_whitespace()).collect();
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(raw.as_bytes())
+        .map_err(|e| format!("清单内容解码失败：{e}"))
 }
 
 // ── 清单 ──────────────────────────────────────────────────────
@@ -183,11 +220,56 @@ pub struct RegistryFetch {
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
+        // 6 秒连不上基本可以判定这条线路不通（国内访问 raw 常被阻断）。
+        // 界面里这是「点开市场就转圈」的那一段，宁可早失败早换线路。
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(20))
         .user_agent("aura-skill-market")
         .build()
         .map_err(|e| format!("初始化网络客户端失败：{e}"))
+}
+
+/// 把 reqwest 的错误压成短句。带完整 URL 的原始错误对用户没有信息量，
+/// 只会把界面撑成一堵墙——排障细节留在文档里。
+fn describe_err(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "连接超时".into()
+    } else if e.is_connect() {
+        "无法连接".into()
+    } else if e.is_decode() {
+        "响应无法解析".into()
+    } else {
+        "网络请求失败".into()
+    }
+}
+
+/// 拉一个地址，连 URL 一起返回（失败时便于汇总原因）。
+async fn fetch_one(client: reqwest::Client, url: String) -> (String, Result<Vec<u8>, String>) {
+    let result = async {
+        let resp = client.get(&url).send().await.map_err(|e| describe_err(&e))?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status().as_u16()));
+        }
+        let body = resp.bytes().await.map_err(|e| describe_err(&e))?.to_vec();
+        // Contents API 的响应是「JSON 包着 base64」，其它地址就是原始字节
+        if url.starts_with("https://api.github.com/") {
+            decode_contents_api(&body)
+        } else {
+            Ok(body)
+        }
+    }
+    .await;
+    (url, result)
+}
+
+fn dedupe_join(mut reasons: Vec<String>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for r in reasons.drain(..) {
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    }
+    out.join(" / ")
 }
 
 /// 本仓库 raw 地址 → jsDelivr 镜像；其它地址返回 None（不改写第三方源）。
@@ -196,26 +278,40 @@ fn mirror(url: &str) -> Option<String> {
         .map(|rest| format!("{REPO_CDN}{rest}"))
 }
 
-/// 依次尝试多个地址，返回第一份成功的内容；全失败时把最后一个错误带出去。
+/// 依次尝试多个地址（给技能包下载用；包较大，不值得重复拉两份）。
 async fn fetch_first(urls: &[String]) -> Result<Vec<u8>, String> {
     let client = client()?;
-    let mut last = String::from("没有可用的下载地址");
+    let mut reasons: Vec<String> = Vec::new();
     for url in urls {
-        match client.get(url).send().await {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    last = format!("{url} 返回 HTTP {}", resp.status().as_u16());
-                    continue;
-                }
-                match resp.bytes().await {
-                    Ok(bytes) => return Ok(bytes.to_vec()),
-                    Err(e) => last = format!("{url} 读取响应失败：{e}"),
-                }
-            }
-            Err(e) => last = format!("{url} 请求失败：{e}"),
+        match fetch_one(client.clone(), url.clone()).await {
+            (_, Ok(bytes)) => return Ok(bytes),
+            (_, Err(e)) => reasons.push(e),
         }
     }
-    Err(last)
+    Err(dedupe_join(reasons))
+}
+
+/// 并发拉多个地址，谁先成功用谁（给清单用：只有几 KB，多拉一份不心疼）。
+///
+/// 串行的话「raw 被阻断 → 等 6 秒 → 镜像再试」会让市场页空转十几秒；
+/// 并发之后最坏也只等一个超时。
+async fn fetch_race(urls: &[String]) -> Result<Vec<u8>, String> {
+    use futures_util::stream::{FuturesUnordered, StreamExt};
+
+    let client = client()?;
+    let mut tasks = FuturesUnordered::new();
+    for url in urls {
+        tasks.push(fetch_one(client.clone(), url.clone()));
+    }
+
+    let mut reasons: Vec<String> = Vec::new();
+    while let Some((_, result)) = tasks.next().await {
+        match result {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => reasons.push(e),
+        }
+    }
+    Err(dedupe_join(reasons))
 }
 
 fn parse_registry(bytes: &[u8]) -> Result<Vec<MarketSkill>, String> {
@@ -225,7 +321,20 @@ fn parse_registry(bytes: &[u8]) -> Result<Vec<MarketSkill>, String> {
 }
 
 async fn fetch_registry_from(src: &RegistrySource) -> Result<Vec<MarketSkill>, String> {
-    let bytes = fetch_first(&registry_urls(src)).await?;
+    let urls = registry_urls(src);
+    // 清单只有几 KB，直接并发抢答；失败原因汇总成「连接超时 / HTTP 404」这种短句
+    let bytes = match fetch_race(&urls).await {
+        Ok(b) => b,
+        // 快线全挂才动 Contents API：它是另一台主机（国内加速多覆盖），
+        // 但有限额，不能当常规通道用
+        Err(first) => match api_contents_url(&src.url) {
+            Some(api) => match fetch_first(&[api]).await {
+                Ok(b) => b,
+                Err(second) => return Err(format!("{first} / {second}")),
+            },
+            None => return Err(first),
+        },
+    };
     parse_registry(&bytes)
 }
 
@@ -876,6 +985,8 @@ mod tests {
         // 官方源本来就在 main 上，不该再补一条 raw 的 main 兜底
         assert_eq!(ours.len(), 2, "官方源只有 raw + jsDelivr 两条：{ours:?}");
         assert_eq!(ours.last().unwrap(), &format!("{REPO_CDN}{REGISTRY_JSON}"));
+        // Contents API 是「快线全挂」之后的兜底，不进并发组（有限额）
+        assert!(!ours.iter().any(|u| u.contains("api.github.com")));
 
         let custom = RegistrySource {
             name: "团队".into(),
@@ -889,6 +1000,34 @@ mod tests {
         );
         // 第三方源不做 CDN 镜像
         assert!(!urls.iter().any(|u| u.contains("jsdelivr")));
+    }
+
+    #[test]
+    fn api_contents_url_derives_from_raw_base() {
+        assert_eq!(
+            api_contents_url(REPO_RAW).unwrap(),
+            "https://api.github.com/repos/aura-xyz/aura-skill-registry/contents/recommended.json"
+        );
+        let custom = normalize_repo("https://github.com/team/skills").unwrap();
+        assert_eq!(
+            api_contents_url(&custom).unwrap(),
+            "https://api.github.com/repos/team/skills/contents/recommended.json"
+        );
+        // 非 GitHub raw 基址没有这条兜底
+        assert!(api_contents_url("https://example.com/raw/").is_none());
+    }
+
+    #[test]
+    fn decode_contents_api_unwraps_base64() {
+        // 真实响应形状：content 是 base64，并带换行
+        let json = r#"{"name":"recommended.json","encoding":"base64","content":"eyJza2lsbHMiOltdfQ=="}"#;
+        assert_eq!(decode_contents_api(json.as_bytes()).unwrap(), b"{\"skills\":[]}");
+        // 带换行的 base64 也要能解
+        let wrapped = r#"{"encoding":"base64","content":"eyJza2ls\nbHMiOltdfQ=="}"#;
+        assert_eq!(decode_contents_api(wrapped.as_bytes()).unwrap(), b"{\"skills\":[]}");
+        // 不是文件内容（比如错误 JSON）要报错而不是解出垃圾
+        assert!(decode_contents_api(br#"{"message":"Not Found"}"#).is_err());
+        assert!(decode_contents_api(b"not json").is_err());
     }
 
     #[test]
