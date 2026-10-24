@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::ToolOutput;
+use super::{scope::AccessScope, ToolOutput};
 
 /// 合并输出的字符上限，超出后头尾截断，防止撑爆模型上下文。
 const MAX_OUTPUT: usize = 5000;
@@ -202,7 +202,7 @@ fn read_args<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
 }
 
 /// `run_script`：在工作区根目录执行命令。
-pub fn run_script(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let command = read_args(args, "command")?.trim();
     if command.is_empty() {
         return Err("`command` 不能为空".into());
@@ -221,7 +221,7 @@ pub fn run_script(root: &Path, args: &Value) -> Result<ToolOutput, String> {
         .map(|v| v.clamp(1_000, MAX_TIMEOUT_MS))
         .unwrap_or(DEFAULT_TIMEOUT_MS);
 
-    let mut cmd = build_command(root, command);
+    let mut cmd = build_command(&scope.workspace, command);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -410,6 +410,7 @@ fn read_capped<R: std::io::Read>(mut r: R) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::scope::testutil::scope as test_scope;
 
     #[test]
     fn blocks_dangerous_commands() {
@@ -495,7 +496,7 @@ mod tests {
             "command": big_output_command(),
             "timeout_ms": 20_000,
         });
-        let out = run_script(std::path::Path::new("."), &args).expect("命令应正常完成");
+        let out = run_script(&test_scope(std::path::PathBuf::from(".")), &args).expect("命令应正常完成");
 
         assert!(
             out.result.contains("退出码 0"),
@@ -523,7 +524,7 @@ mod tests {
             "command": "ping -n 30 127.0.0.1",
             "timeout_ms": 2_500,
         });
-        let out = run_script(std::path::Path::new("."), &args).expect("超时应作为正常结果返回");
+        let out = run_script(&test_scope(std::path::PathBuf::from(".")), &args).expect("超时应作为正常结果返回");
 
         assert!(
             out.result.contains("超时"),
@@ -549,7 +550,7 @@ mod tests {
     #[test]
     fn only_first_line_of_multiline_command_runs() {
         let args = serde_json::json!({ "command": "echo FIRST_LINE\necho SECOND_LINE" });
-        let out = run_script(std::path::Path::new("."), &args).unwrap();
+        let out = run_script(&test_scope(std::path::PathBuf::from(".")), &args).unwrap();
 
         assert!(
             out.result.contains("FIRST_LINE"),
@@ -739,7 +740,7 @@ mod tests {
 
         // 引号内容需原样保留
         let out = run_script(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "command": "echo \"Add MST code\" done" }),
         )
         .unwrap();
@@ -751,7 +752,7 @@ mod tests {
 
         // 管道等复合命令需可用
         let out = run_script(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "command": "echo hello | findstr h" }),
         )
         .unwrap();
@@ -766,7 +767,7 @@ mod tests {
         // build_command 前置 chcp 65001 后中文必须原样回填给模型。
         let ws = std::env::temp_dir().join("aura_exec_cn");
         let _ = std::fs::create_dir_all(&ws);
-        let out = run_script(&ws, &serde_json::json!({ "command": "echo 测试中文 abc" })).unwrap();
+        let out = run_script(&test_scope(ws.clone()), &serde_json::json!({ "command": "echo 测试中文 abc" })).unwrap();
         assert!(
             out.result.contains("测试中文"),
             "中文未正确传递/解码: {:?}",
@@ -779,7 +780,7 @@ mod tests {
     fn runs_simple_command_in_workspace() {
         let ws = std::env::temp_dir().join("aura_exec_test");
         let _ = std::fs::create_dir_all(&ws);
-        let out = run_script(&ws, &serde_json::json!({ "command": "echo hello" })).unwrap();
+        let out = run_script(&test_scope(ws.clone()), &serde_json::json!({ "command": "echo hello" })).unwrap();
         assert_eq!(out.label, "Exec 'echo hello'");
         assert!(out.result.contains("hello"));
         let _ = std::fs::remove_dir_all(&ws);
@@ -789,7 +790,7 @@ mod tests {
     fn rejects_dangerous_at_runtime() {
         let ws = std::env::temp_dir().join("aura_exec_reject");
         let _ = std::fs::create_dir_all(&ws);
-        let err = run_script(&ws, &serde_json::json!({ "command": "rm -rf /" })).unwrap_err();
+        let err = run_script(&test_scope(ws.clone()), &serde_json::json!({ "command": "rm -rf /" })).unwrap_err();
         assert!(err.contains("拦截"), "err: {}", err);
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -798,9 +799,9 @@ mod tests {
     fn requires_command_param() {
         let ws = std::env::temp_dir().join("aura_exec_param");
         let _ = std::fs::create_dir_all(&ws);
-        let err = run_script(&ws, &serde_json::json!({})).unwrap_err();
+        let err = run_script(&test_scope(ws.clone()), &serde_json::json!({})).unwrap_err();
         assert!(err.contains("command"), "err: {}", err);
-        let err = run_script(&ws, &serde_json::json!({ "command": "   " })).unwrap_err();
+        let err = run_script(&test_scope(ws.clone()), &serde_json::json!({ "command": "   " })).unwrap_err();
         assert!(err.contains("不能为空"), "err: {}", err);
         let _ = std::fs::remove_dir_all(&ws);
     }

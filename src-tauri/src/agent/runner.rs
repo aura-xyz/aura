@@ -183,6 +183,11 @@ pub struct TurnContext<'a> {
     pub app: &'a AppHandle,
     pub router: &'a Router,
     pub workspace: &'a Path,
+    /// 工具访问域（v0.6.2）。
+    ///
+    /// 比 `workspace` 多一层：用户授权的额外目录（路径白名单）也在内。
+    /// 路径判定统一走 [`crate::tools::AccessScope::allows`]。
+    pub scope: &'a crate::tools::AccessScope,
     pub global_rules: &'a str,
     pub history: &'a mut Vec<Value>,
     pub model_idx: &'a mut usize,
@@ -925,7 +930,7 @@ if tool_jsons.is_empty() {
                             .to_string()
                     } else {
                         match tools::execute(
-                            ctx.workspace.to_path_buf(),
+                            ctx.scope.clone(),
                             name.clone(),
                             args.clone(),
                         )

@@ -172,6 +172,11 @@ pub async fn send_message(
     }
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
 
+    // 工具访问域：工作区 + 用户授权的额外目录（路径白名单）。
+    // v0.6.2 的 T0 阶段白名单表还没建，extra 先为空——行为与 v0.6.1 完全一致。
+    let scope = crate::tools::AccessScope::workspace_only(workspace.clone())
+        .map_err(|e| format!("{e}"))?;
+
     let mut sessions = state.sessions.lock().await;
     let session_id_for_load = session_id.clone();
     let default_model = state.router.selected_index();
@@ -209,6 +214,7 @@ pub async fn send_message(
             app: &app,
             router: &state.router,
             workspace: &workspace,
+            scope: &scope,
             global_rules: &global_rules,
             history: &mut session.history,
             model_idx: &mut session.model_idx,

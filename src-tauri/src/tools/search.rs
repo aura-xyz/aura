@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::ToolOutput;
+use super::{scope::AccessScope, ToolOutput};
 
 const SKIP_DIRS: &[&str] = &[
     ".git",
@@ -40,7 +40,7 @@ struct Segment {
     body: String,
 }
 
-pub fn search_workspace(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn search_workspace(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -49,7 +49,8 @@ pub fn search_workspace(root: &Path, args: &Value) -> Result<ToolOutput, String>
     if query.is_empty() {
         return Err("缺少参数 `query`".into());
     }
-    let root_c = root
+    let root_c = scope
+        .workspace
         .canonicalize()
         .map_err(|e| format!("工作区不可用: {}", e))?;
     let terms: Vec<String> = query
@@ -189,6 +190,7 @@ fn collect_hits(root_c: &Path, terms: &[String]) -> Vec<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::scope::testutil::scope as test_scope;
     use serde_json::json;
 
     #[test]
@@ -200,15 +202,15 @@ mod tests {
         fs::write(root.join("src").join("db.rs"), "fn init_db() {}\nlet conn = open();\n").unwrap();
         fs::write(root.join("node_modules").join("pkg").join("index.js"), "init_db\n").unwrap();
 
-        let out = search_workspace(&root, &json!({ "query": "init_db" })).unwrap();
+        let out = search_workspace(&test_scope(root.clone()), &json!({ "query": "init_db" })).unwrap();
         assert_eq!(out.label, "Search 'init_db'");
         assert!(out.result.contains("src/db.rs:1-2"), "result: {}", out.result);
         assert!(!out.result.contains("node_modules"), "应跳过 node_modules: {}", out.result);
 
-        let empty = search_workspace(&root, &json!({ "query": "不存在的词xyz" })).unwrap();
+        let empty = search_workspace(&test_scope(root.clone()), &json!({ "query": "不存在的词xyz" })).unwrap();
         assert!(empty.result.contains("未找到匹配内容"));
 
-        assert!(search_workspace(&root, &json!({})).is_err());
+        assert!(search_workspace(&test_scope(root.clone()), &json!({})).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -227,7 +229,7 @@ mod tests {
         match symlink_file(outside.join("secret.txt"), root.join("link.txt")) {
             Ok(()) => {
                 let out =
-                    search_workspace(&root, &json!({ "query": "secret_needle" })).unwrap();
+                    search_workspace(&test_scope(root.clone()), &json!({ "query": "secret_needle" })).unwrap();
                 assert!(
                     !out.result.contains("secret_needle"),
                     "符号链接指向沙盒外的内容必须被跳过: {}",
@@ -239,7 +241,7 @@ mod tests {
             }
         }
 
-        let out = search_workspace(&root, &json!({ "query": "needle_real" })).unwrap();
+        let out = search_workspace(&test_scope(root.clone()), &json!({ "query": "needle_real" })).unwrap();
         assert!(out.result.contains("real.txt"), "正常文件必须可搜: {}", out.result);
 
         let _ = fs::remove_dir_all(&base);

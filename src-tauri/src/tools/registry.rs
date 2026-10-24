@@ -8,11 +8,9 @@
 //! 现在收敛为单一数据源：[`TOOLS`]。`execute`/`tool_label`/`is_known_tool`/
 //! prompt 文案/错误提示全部由它派生，以后加工具只需追加一个元素。
 
-use std::path::Path;
-
 use serde_json::Value;
 
-use super::{display_path, exec, fs_ops, search, write_ops, ToolOutput};
+use super::{display_path, exec, fs_ops, scope::AccessScope, search, write_ops, ToolOutput};
 
 /// 工具能力分类。决定该工具是否注入 prompt，以及未来的模式隔离
 /// （v0.4.x 的 Plan 模式只暴露 `Read`）。
@@ -36,7 +34,11 @@ pub struct ToolSpec {
     /// System Prompt 中的参数示例
     pub example: &'static str,
     /// 执行体。返回的 `result` 会被回填进 `<tool_result>`
-    pub run: fn(&Path, &Value) -> Result<ToolOutput, String>,
+    ///
+    /// 第一个参数是**访问域**而非单纯的工作区：v0.6.2 起模型还能访问
+    /// 用户授权的额外目录（路径白名单），路径判定统一走
+    /// [`AccessScope::allows`]。
+    pub run: fn(&AccessScope, &Value) -> Result<ToolOutput, String>,
     /// 从参数生成 UI 动作文案（如 `Read src/main.rs`）
     pub label: fn(&Value) -> String,
     /// 同一目标连续调用超过该次数后拦截，防止死循环
@@ -270,7 +272,7 @@ fn label_load_skill(args: &Value) -> String {
 ///
 /// 带 `file` 时读的是技能目录内的附属文件（参考文档 / 模板 / 脚本源码）——
 /// 那条路径在应用数据目录，`read_file` 到不了，只能从这个口子进。
-fn run_load_skill(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+fn run_load_skill(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let file = args
         .get("file")
@@ -279,14 +281,14 @@ fn run_load_skill(root: &Path, args: &Value) -> Result<ToolOutput, String> {
         .unwrap_or("");
 
     if file.is_empty() {
-        let body = crate::agent::skill::load_skill_body(root, name)?;
+        let body = crate::agent::skill::load_skill_body(&scope.workspace, name)?;
         return Ok(ToolOutput {
             label: label_load_skill(args),
             result: body,
         });
     }
 
-    let content = crate::agent::skill::read_skill_file(root, name, file)?;
+    let content = crate::agent::skill::read_skill_file(&scope.workspace, name, file)?;
     Ok(ToolOutput {
         label: label_load_skill(args),
         result: format!(
