@@ -2,14 +2,14 @@
     "platforms":  {
                       "windows-x86_64":  {
                                              "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.1/Aura_0.6.1_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNnhiNzBwTUVkTk43RHNZbXh4bkpIbGZEUFdOclhic1FPcmVHUXFWVGZXTjhCMjBoNUNxQXdDYUNET2YxRUJzVkhmb0VPTlB2V0YzcmtWRXhsTndRbkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODMxMjAzCWZpbGU6YXVyYV8wLjYuMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC42LjEKN0w5R2pTeURGcEp4SFVoaElieHh3NHUrYWVIN1I2ZEpRdmlrVitXeG1XZXJONWJDallROXVKUDl1aXE2U3pMdmtXeTgwZzVFYVhEVFovM04zdzdGQmc9PQo="
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjJobmJMRC9qN3NXV2wvVnlwckQ0TFdkQlJpVml5K2xURFFGTnIzVDJKeHd4YTYwQ3NhbVhraEVBalFSTkh1c3pPUnAyZ0Y1TzNZU0ZaL0p1UzA4amdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODMzNDYwCWZpbGU6YXVyYV8wLjYuMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC42LjEKZ1NUOUxDRHROVk1ETXh3c1IxRVU1c1pQMlp3Z0FYcWxENk9DLzlHM0czTlhZZ2pKdXlKS2NvTWw5RFM1RlNqRjg4TmNvaVlCU3RuMVROdXk3OGNTQUE9PQo="
                                          },
                       "windows-x86_64-msi":  {
                                                  "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.1/Aura_0.6.1_win_x64.msi",
-                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjFKWTc3aWdWbjJkL1NpU3hJL2pGU1EvelNJMmhzNnhFNUJNSFlRTHhxVS9wbWRyUmduNHliR01BS01kS3A4SjRXcTRrVkIzemtSNy9NY09KTyt6bFFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODMxMjAzCWZpbGU6YXVyYV8wLjYuMV94NjRfZW4tVVMubXNpCXZlcnNpb246MC42LjEKamlBVHl4UDFsSHlYRElObDZqenF1dHRMQTZha2cvS3pSNXRtaGxJNW1ONGZvckpETkQyeVZEbDlwcEhJc2YrVWNoK1JzMlV2MjhETWxjbmNVMDB1REE9PQo="
+                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNnprMXdjRTZKMk01T1lyZU9MT3dSc1c3cVovV1dWSEl5NU15UHV2YzdTZFA3aGpvWVpHWGxKM3JvZU5IYm9seXNkSkhHbTZETGJYNjZNcERyRHlFUEE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODMzNDYwCWZpbGU6YXVyYV8wLjYuMV94NjRfZW4tVVMubXNpCXZlcnNpb246MC42LjEKY0xNYW9hcU1kVmUxTy96eWtJVGRzNTRlTTJNL3lQTFpmL3JqY3Z0RHBsNWdkazBEdU9QZHQ3eUZGcjBPTmNUWndDOHEyTCt6QzlEdkQzeC9kdWl5Q0E9PQo="
                                              }
                   },
-    "pub_date":  "2026-10-24T08:43:36Z",
+    "pub_date":  "2026-10-24T09:18:05Z",
     "version":  "0.6.1",
     "notes":  "技能页可用；新增内置 Word/PDF/技能创作技能与技能市场，安装前先审查；修复检查更新一直失败。"
 }
