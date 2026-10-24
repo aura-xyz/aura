@@ -18,6 +18,8 @@ interface Props {
   /** 当前对话已绑定的工作区；空串表示尚未选定 */
   workspace: string;
   onWorkspaceChange: (path: string) => Promise<void>;
+  /** 首条消息已发出：工作区锁定，隐藏选择按钮（一个对话唯一对应一个工作区） */
+  workspaceLocked?: boolean;
 }
 
 export default function InputArea({
@@ -31,6 +33,7 @@ export default function InputArea({
   onModeChange,
   workspace,
   onWorkspaceChange,
+  workspaceLocked = false,
 }: Props) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -106,10 +109,14 @@ disabled={!value.trim() || !workspace}
       <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ModeTabs mode={mode} onChange={onModeChange} />
-          <WorkspaceSelect
-   workspace={workspace}
-            onChange={onWorkspaceChange}
-          />
+          {/* 首条消息发出后工作区即锁定：按钮整体隐藏而非置灰——
+              一个对话唯一对应一个工作区，没有「改」这个操作了。 */}
+          {!workspaceLocked && (
+            <WorkspaceSelect
+              workspace={workspace}
+              onChange={onWorkspaceChange}
+            />
+          )}
     <span className="h-3 w-px bg-line" />
       <ModelSelect
          models={models}

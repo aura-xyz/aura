@@ -694,18 +694,23 @@ let sessions = restored;
    *
    * 选中即调用 `setWorkspace`，让全局值与 `last_workspace` 跟着走——后端对
    * 尚未落库的会话要走全局回落分支取执行目录，两者必须一致。
+   *
+   * v0.6.0：首条消息发出后工作区**锁定**——一个对话唯一对应一个工作区。
+   * UI 已隐藏选择器，这里挡程序化调用（快捷键/直接调 store）绕过。
    */
   const setSessionWorkspace = useCallback(async (path: string) => {
+    const active = stateRef.current.sessions.find(
+      (x) => x.id === stateRef.current.activeId,
+    );
+    if (!active || active.messages.length > 0) return;
     const canonical = await setWorkspace(path);
     setState((s) => {
-      const active = s.sessions.find((x) => x.id === s.activeId);
-      if (!active) return s;
       const sessions = s.sessions.map((x) =>
         x.id === active.id ? { ...x, workspace: canonical } : x,
-    );
-   return {
+      );
+      return {
         ...s,
-     workspace: canonical,
+        workspace: canonical,
         sessions,
         // 选完工作区后该会话就归类显示了（即便还没发消息），
         // 与「发第一条消息才出现」略有出入，但能避免用户不知道自己选到哪了

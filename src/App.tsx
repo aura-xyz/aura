@@ -156,8 +156,9 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
        onModelChange={setModel}
   mode={mode}
      onModeChange={changeMode}
-   workspace={activeSession?.workspace ?? ""}
+              workspace={activeSession?.workspace ?? ""}
       onWorkspaceChange={setSessionWorkspace}
+      workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
     />
             </>
           )}
