@@ -43,6 +43,13 @@ export default function SkillDetailDialog({
   const risky = counts.high > 0;
   const findings = groupFindings(inspection.audit.findings);
   const updating = inspection.already_installed;
+  /**
+   * 声明了 Aura 不认识的工具名 → 这个技能装不了。
+   *
+   * 这不是「高危」那种「提示但仍可装」的情况：装了必然不能用。
+   * 所以按钮直接禁用，并把原因摆在最显眼处。
+   */
+  const broken = inspection.unknown_tools.length > 0;
 
   return (
     <div
@@ -84,6 +91,21 @@ export default function SkillDetailDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {broken && (
+            <div className="mb-3 rounded-card border border-danger px-3 py-2">
+              <p className="flex items-center gap-2 text-xs font-medium text-danger">
+                <ShieldAlert size={13} className="shrink-0" />
+                这个技能无法安装
+              </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-subtle">
+                它声明了 Aura 不认识的工具名：
+                <span className="font-mono">{inspection.unknown_tools.join("、")}</span>
+                。装进去后，该技能激活期间所有工具都会被挡掉，模型将无事可做。
+                请让技能作者更正工具名。
+              </p>
+            </div>
+          )}
+
           {updating && inspection.installed_version && (
             <p className="mb-3 rounded-card border border-line px-3 py-2 text-xs text-subtle">
               已安装 v{inspection.installed_version}，将更新到 v{inspection.version}。
@@ -163,13 +185,21 @@ export default function SkillDetailDialog({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || broken}
             onClick={onConfirm}
             className={`rounded-full px-4 py-1.5 text-sm text-white transition-colors hover:opacity-90 disabled:opacity-40 dark:text-surface ${
               risky ? "bg-danger" : "bg-brand"
             }`}
           >
-            {busy ? "处理中…" : risky ? "仍然安装" : updating ? "更新" : "安装"}
+            {busy
+              ? "处理中…"
+              : broken
+                ? "无法安装"
+                : risky
+                  ? "仍然安装"
+                  : updating
+                    ? "更新"
+                    : "安装"}
           </button>
         </div>
       </div>

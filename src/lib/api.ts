@@ -281,6 +281,8 @@ export interface SkillInspection {
   skill_name: string;
   /** 技能申请的工具范围；空 = 不收窄 */
   tools: string[];
+  /** 声明里 Aura 不认识的工具名。非空 = 这个技能装不了 */
+  unknown_tools: string[];
   package_files: string[];
   bytes: number;
   audit: SkillAudit;

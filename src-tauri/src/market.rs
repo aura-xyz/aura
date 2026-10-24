@@ -656,6 +656,62 @@ pub fn ensure_acceptable(audit_result: &Audit, accept_risky: bool) -> Result<(),
     ))
 }
 
+// ── allowed-tools 校验 ─────────────────────────────────────────
+
+/// 技能声明的工具名检查结果。
+///
+/// 空列表是**合法**的：它的语义是「不收窄，继承当前模式的权限」，
+/// 与「声明了一堆但都拼错了」是完全不同的两件事。
+#[derive(Debug, Default, Clone)]
+pub struct ToolCheck {
+    /// 声明里已知有效的工具名
+    pub known: Vec<String>,
+    /// 声明里 Aura 不认识的工具名
+    pub unknown: Vec<String>,
+}
+
+impl ToolCheck {
+    /// 是否完全不可用（声明了工具但一个都不认识）。
+    pub fn all_unknown(&self) -> bool {
+        !self.unknown.is_empty() && self.known.is_empty()
+    }
+}
+
+/// 校验技能声明的 `allowed-tools`。
+///
+/// 工具名以 Aura 的注册表为准（`tools::registry::is_known`）——
+/// 与内置技能的看门狗测试同一套判据，不会两处不一致。
+pub fn check_allowed_tools(declared: &[String]) -> ToolCheck {
+    let mut known = Vec::new();
+    let mut unknown = Vec::new();
+    for name in declared {
+        let t = name.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if crate::tools::registry::is_known(t) {
+            known.push(t.to_string());
+        } else {
+            unknown.push(t.to_string());
+        }
+    }
+    ToolCheck { known, unknown }
+}
+
+/// 未知工具名的报错文案。
+///
+/// 要指出**具体是哪个名字**，并列出 Aura 实际可用的工具——
+/// 只说「工具名无效」的话，作者和用户都不知道该改成什么。
+pub fn unknown_tools_error(skill: &str, unknown: &[String]) -> String {
+    let available = crate::tools::registry::names().join("、");
+    format!(
+        "技能 {skill} 声明了 Aura 不认识的工具名：{}\n\
+         Aura 当前可用：{available}\n\
+         请让技能作者更正工具名。装进来会导致该技能激活期间所有工具都被挡掉，         模型将无事可做。",
+        unknown.join("、")
+    )
+}
+
 // ── 审查与安装 ────────────────────────────────────────────────
 
 /// 安装前的审查报告，直接序列化给前端弹窗。
@@ -675,6 +731,9 @@ pub struct Inspection {
     pub skill_name: String,
     /// 技能申请的工具范围；空 = 不收窄
     pub tools: Vec<String>,
+    /// 声明里 Aura 不认识的工具名。**非空说明这个技能装不了**，
+    /// 界面要在安装前就把它指出来。
+    pub unknown_tools: Vec<String>,
     /// 包内文件相对路径
     pub package_files: Vec<String>,
     /// zip 字节数
@@ -767,6 +826,7 @@ pub async fn inspect(entry: &MarketSkill, market_root: &Path) -> Result<Inspecti
             installed_version: installed_version_of(&target),
             skill_name: manifest.name.clone(),
             tools: manifest.allowed_tools.clone(),
+            unknown_tools: check_allowed_tools(&manifest.allowed_tools).unknown,
             package_files: rel_files(&root),
             bytes: bytes.len() as u64,
             audit: audit_result,
@@ -807,6 +867,17 @@ pub async fn install(
 
     let result = (|| -> Result<InstallSummary, String> {
         let (root, manifest) = prepare(&bytes, &tmp)?;
+
+        // v0.6.2：校验声明的工具名。
+        //
+        // 拒绝而不是「过滤后放行」：过滤会让 allowed_tools 变空，
+        // 而空列表的语义是「不收窄、继承全部权限」——那等于**放大**权限，
+        // 与技能作者的本意完全相反。拼错一个名字的技能必须报错让人知道。
+        let tool_check = check_allowed_tools(&manifest.allowed_tools);
+        if !tool_check.unknown.is_empty() {
+            return Err(unknown_tools_error(&manifest.name, &tool_check.unknown));
+        }
+
         let audit_result = audit::scan(&root);
         ensure_acceptable(&audit_result, accept_risky)?;
 
@@ -880,6 +951,50 @@ mod tests {
             registry: registry.to_string(),
             registry_url: REPO_RAW.to_string(),
         }
+    }
+
+    /// v0.6.2：allowed-tools 校验。
+    ///
+    /// 技能若声明了拼错的工具名，`gate_active_skill` 会因 declared 非空
+    /// 而把真实工具全挡掉——模型在激活期间无事可做且无从察觉。
+    #[test]
+    fn allowed_tools_check_separates_known_and_unknown() {
+        let c = check_allowed_tools(&[
+            "read_file".into(),
+            "write_files".into(), // 拼错
+            "run_script".into(),
+        ]);
+        assert_eq!(c.known, vec!["read_file", "run_script"]);
+        assert_eq!(c.unknown, vec!["write_files"]);
+        assert!(!c.all_unknown());
+    }
+
+    /// 空声明是**合法**的：语义是「不收窄，继承模式权限」。
+    #[test]
+    fn empty_allowed_tools_is_valid() {
+        let c = check_allowed_tools(&[]);
+        assert!(c.known.is_empty());
+        assert!(c.unknown.is_empty());
+        assert!(!c.all_unknown());
+        // 空白项不算声明
+        let c = check_allowed_tools(&["  ".into(), "".into()]);
+        assert!(c.unknown.is_empty());
+    }
+
+    /// 全都不认识 = 技能完全不可用。
+    #[test]
+    fn all_unknown_detected() {
+        let c = check_allowed_tools(&["Bash".into(), "Read".into()]);
+        assert!(c.known.is_empty());
+        assert!(c.all_unknown());
+    }
+
+    /// 报错文案必须指出具体名字并列出可用工具。
+    #[test]
+    fn unknown_tools_error_names_the_offender() {
+        let msg = unknown_tools_error("demo", &["write_files".into()]);
+        assert!(msg.contains("write_files"), "{msg}");
+        assert!(msg.contains("read_file"), "应列出可用工具: {msg}");
     }
 
     #[test]

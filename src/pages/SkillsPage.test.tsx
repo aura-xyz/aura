@@ -96,6 +96,7 @@ function inspection(partial: Partial<SkillInspection> = {}): SkillInspection {
     installed_version: "",
     skill_name: "mcp-builder",
     tools: ["read_file"],
+    unknown_tools: [],
     package_files: ["SKILL.md"],
     bytes: 2048,
     audit: {
@@ -367,6 +368,40 @@ describe("SkillsPage", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "仍然安装" }));
     expect(installMarketMock).toHaveBeenCalledWith("danger", true, false);
+  });
+
+  /// v0.6.2：技能声明了 Aura 不认识的工具名 → 装不了。
+  ///
+  /// 这与「高危」不同：高危是提示但仍可装（用户自己判断），
+  /// 而工具名拼错时装进去必然不能用，所以按钮直接禁用。
+  it("工具名无效的技能无法安装，按钮禁用", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "broken", name: "工具名写错的技能" })],
+      errors: [],
+    });
+    inspectMarketMock.mockResolvedValue(
+      inspection({
+        id: "broken",
+        name: "工具名写错的技能",
+        tools: ["read_file", "write_files"],
+        unknown_tools: ["write_files"],
+      }),
+    );
+    installMarketMock.mockResolvedValue(SUMMARY);
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    await userEvent.click(await screen.findByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("这个技能无法安装")).toBeInTheDocument();
+    expect(within(dialog).getByText("write_files")).toBeInTheDocument();
+
+    // 按钮禁用，点不动
+    const btn = within(dialog).getByRole("button", { name: "无法安装" });
+    expect(btn).toBeDisabled();
+    await userEvent.click(btn);
+    expect(installMarketMock).not.toHaveBeenCalled();
   });
 
   it("审查失败只提示原因，不弹窗也不安装", async () => {
