@@ -208,3 +208,44 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod manifest_tests {
+    /// 更新清单结构必须与 tauri-plugin-updater 的预期完全一致。
+    ///
+    /// 直接用插件自己的反序列化类型校验仓库里的 `release/latest.json`：
+    /// v0.6.0 及更早的清单写成 `platforms: [{architecture, url, signature}]`
+    /// （数组），而插件要求 `platforms` 是 `HashMap<String, {url, signature}>`
+    /// 且键为 `windows-x86_64` / `windows-x86_64-msi`。数组在反序列化时
+    /// 直接失败 → 客户端「检查更新」永远报错，直到 v0.6.1 才发现
+    /// （更新闭环此前从未被验证过）。这条测试会当场抓住那次错误。
+    #[test]
+    fn release_manifest_matches_updater_schema() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../release/latest.json"
+        ))
+        .expect("release/latest.json 必须存在：兜底端点靠它");
+
+        let inner: tauri_plugin_updater::RemoteReleaseInner =
+            serde_json::from_str(&raw).expect("清单结构必须能被 updater 插件反序列化");
+
+        match inner {
+            tauri_plugin_updater::RemoteReleaseInner::Static { platforms } => {
+                for target in ["windows-x86_64", "windows-x86_64-msi"] {
+                    let p = platforms
+                        .get(target)
+                        .unwrap_or_else(|| panic!("缺少平台键 {target}"));
+                    assert!(
+                        p.url.as_str().starts_with("https://"),
+                        "{target} 的 url 必须是绝对地址"
+                    );
+                    assert!(!p.signature.is_empty(), "{target} 的 signature 不能为空");
+                }
+            }
+            tauri_plugin_updater::RemoteReleaseInner::Dynamic(_) => {
+                panic!("应为 Static 格式（platforms 映射），不是单平台 Dynamic 格式")
+            }
+        }
+    }
+}

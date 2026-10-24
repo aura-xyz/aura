@@ -21,8 +21,8 @@
       "dialog": false,
       "endpoints": [
         "https://github.com/aura-xyz/aura/releases/latest/download/latest.json",
-        "https://raw.githubusercontent.com/aura-xyz/aura/main/release/latest.json",
-        "https://cdn.jsdelivr.net/gh/aura-xyz/aura@main/release/latest.json"
+        "https://cdn.jsdelivr.net/gh/aura-xyz/aura@main/release/latest.json",
+        "https://raw.githubusercontent.com/aura-xyz/aura/main/release/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCNEI5NzZFMjg5QUMyQjYKUldTMndwb29icGRMNjlVaVVNZnRhM0ZOOFUzRDlUa1FhVHhsT2lJNFF3dXd2SDNsekMyczEreDkK"
     }

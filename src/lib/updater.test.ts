@@ -123,4 +123,21 @@ describe("checkForUpdate", () => {
       reason: "error sending request for url",
     });
   });
+
+  /// 插件没有单请求超时：某个端点长时间无响应时，不能永远转圈。
+  /// 超时归入 failed（带可读原因），UI 据此给出浏览器出口。
+  it("超过总时限给出可读的超时原因，而不是无限等待", async () => {
+    vi.useFakeTimers();
+    try {
+      mockCheck.mockReturnValue(new Promise(() => {}));
+      const pending = checkForUpdate("0.5.1");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await pending).toEqual({
+        kind: "failed",
+        reason: expect.stringContaining("超时"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

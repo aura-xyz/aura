@@ -57,11 +57,19 @@ $releaseName = "Aura_${Version}_win_x64_Setup.exe"
 if ($Repo -notmatch '^https?://') { $Repo = "https://github.com/$Repo" }
 $base = "$($Repo.TrimEnd('/'))/releases/download/v$Version"
 
-$platforms = @(
-    @{ architecture = 'x86_64';  url = "$base/$releaseName"; sig = $nsisSigPath }
+# **platforms 必须是「对象」，键必须是 `<os>-<arch>[-<installer>]`**。
+#
+# 这是 v0.6.1 修的第二个致命格式错误：此前写成数组
+# `[{architecture:"x86_64",url,signature}]`，而 tauri-plugin-updater 的
+# RemoteReleaseInner::Static 要求 `platforms` 是 HashMap<String, {url,signature}>，
+# 且键由 updater_os()+arch 拼成 `windows-x86_64` / `windows-x86_64-msi`。
+# 数组在反序列化时直接失败 → check() 抛错 → 客户端永远「检查失败」，
+# 与网络无关。四个版本都没发现，因为更新闭环从未被验证过。
+$targets = @(
+    @{ target = 'windows-x86_64';     url = "$base/$releaseName"; sig = $nsisSigPath }
 )
 if ($msi) {
-    $platforms += @{ architecture = 'x86_64-msi'; url = "$base/Aura_${Version}_win_x64.msi"; sig = $msiSigPath }
+    $targets += @{ target = 'windows-x86_64-msi'; url = "$base/Aura_${Version}_win_x64.msi"; sig = $msiSigPath }
 }
 
 # Tauri 要求签名字段去掉换行
@@ -70,34 +78,28 @@ function Read-Sig($path) {
     ((Get-Content -Raw -Encoding UTF8 $path) -replace "`r?`n", '')
 }
 
-$platforms = $platforms | ForEach-Object {
-    $sig = Read-Sig $_.sig
+$platforms = [ordered]@{}
+foreach ($t in $targets) {
+    $sig = Read-Sig $t.sig
     if (-not $sig) {
-        throw "签名为空，拒绝生成 manifest：$($_.sig)"
+        throw "签名为空，拒绝生成 manifest：$($t.sig)"
     }
     # url 必须是绝对地址，否则客户端下载时才炸（见上面 $base 的注释）
-    if ($_.url -notmatch '^https?://') {
-        throw "下载地址不是绝对 URL，拒绝生成：$($_.url)"
+    if ($t.url -notmatch '^https?://') {
+        throw "下载地址不是绝对 URL，拒绝生成：$($t.url)"
     }
-    @{ architecture = $_.architecture; url = $_.url; signature = $sig }
-}
-
-# 自检：manifest 里的签名必须与**本次实际选中**的安装包配套。
-# minisign 每次构建都不同（签名含随机数），因此签名与文件的绑定关系
-# 只有在这里能确认。历史上出现过「URL 指向 0.5.1、签名取自 0.5.0」的
-# 事故——发布后一切正常，直到用户在客户端点更新才失败。
-foreach ($p in $platforms) {
-    $local = $p.url.Split('/')[-1]
-    $src = if ($p.architecture -eq 'x86_64') { $nsis } else { $msi }
-    if (-not $src) { continue }
-    $expected = if ($p.architecture -eq 'x86_64') {
-        ((Get-Content -Raw -Encoding UTF8 $nsisSigPath) -replace "`r?`n", '')
-    } else {
-        ((Get-Content -Raw -Encoding UTF8 $msiSigPath) -replace "`r?`n", '')
+    # 自检：解码签名 blob，trusted comment 里的 version 必须与本次版本一致。
+    # 比对同级目录里「同名 .sig」是废话（本来就是从它读的）；历史上出过
+    # 「URL 指向新版本、签名取自旧版本」的事故，解码校验才抓得住。
+    try {
+        $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sig))
+    } catch {
+        throw "签名不是合法的 minisign blob：$($t.sig)"
     }
-    if ($p.signature -ne $expected) {
-        throw "签名与安装包不匹配：$local（$($src.Name)）"
+    if (-not $decoded.Contains("version:$Version")) {
+        throw "签名版本与本次发布不一致（期望 version:$Version）：$($t.sig)"
     }
+    $platforms[$t.target] = @{ url = $t.url; signature = $sig }
 }
 
 $manifest = @{

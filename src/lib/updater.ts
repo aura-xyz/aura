@@ -40,6 +40,35 @@ export function categorizeCheckError(error: unknown): "unavailable" | "failed" {
 }
 
 /**
+ * 检查总超时。
+ *
+ * 端点配了多个（主 + 兜底），插件按序尝试且**没有单请求超时**：网络受限时
+ * 某个端点可能长时间无响应，用户会一直看到「检查中…」转圈。
+ * 这里只限制「等多久就放弃」——底层请求无法取消，但拿到答复比无限等待有用：
+ * 超时归入 `failed`，UI 会显示原因并给出浏览器下载出口。
+ */
+const CHECK_TIMEOUT_MS = 60_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`检查超时（超过 ${Math.round(ms / 1000)} 秒无响应）`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
  * 检查是否有新版本。
  *
  * 返回判别联合而非 `UpdateInfo | null`：`null` 无法表达「为什么失败」，
@@ -50,7 +79,7 @@ export async function checkForUpdate(
   currentVersion: string,
 ): Promise<UpdateCheckResult> {
   try {
-    const update = await check();
+    const update = await withTimeout(check(), CHECK_TIMEOUT_MS);
     if (!update) {
       return { kind: "up-to-date" };
     }
