@@ -5,6 +5,7 @@ pub mod commands;
 pub mod db;
 pub mod market;
 pub mod paths;
+pub mod providers;
 pub mod secure;
 pub mod tools;
 
@@ -12,7 +13,8 @@ use commands::{
     add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
     fetch_remote_models, get_api_config, get_global_rules, get_models, get_provider_statuses,
     get_providers, get_selected_model, get_workspace, inspect_market_skill,
-    install_market_skill, list_allowlist_paths, list_market_skills, list_skill_sources,
+    install_market_skill, list_allowlist_paths, list_market_providers, list_market_skills,
+    list_skill_sources,
     list_skills, load_sessions, pull_ollama_model, refresh_provider_models,
     remove_allowlist_path, remove_session, remove_skill_source, remove_workspace, save_session,
     save_todos, send_message, set_api_config, set_global_rules, set_pinned_models,
@@ -218,6 +220,7 @@ pub fn run() {
             set_skill_enabled,
             delete_skill,
             list_market_skills,
+            list_market_providers,
             inspect_market_skill,
             install_market_skill,
             list_skill_sources,

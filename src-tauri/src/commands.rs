@@ -15,6 +15,11 @@ use crate::agent::Todo;
 use crate::api::config::{load_config, normalize, save_config};
 use crate::api::{ProviderConfig, Router};
 use crate::db;
+use crate::providers::github::{
+    normalize_repo, official_source, repo_label, RegistrySource, OFFICIAL_NAME,
+};
+use crate::providers::registry::ProviderRegistry;
+use crate::providers::ListQuery;
 
 pub struct Session {
     pub history: Vec<Value>,
@@ -806,15 +811,22 @@ pub fn delete_skill(state: State<'_, AppState>, name: String) -> Result<(), Stri
 /// 市场里的一个技能（界面投影）。
 #[derive(serde::Serialize)]
 pub struct MarketSkillView {
+    /// 远端 id（provider 内唯一，用于回查安装）
     pub id: String,
+    /// 本地安装目录名
+    pub slug: String,
     /// 展示名（注册表里的中文名），与技能自身 name 无关
     pub name: String,
     pub description: String,
     pub version: String,
     pub tags: Vec<String>,
     pub author: String,
-    /// 这条来自哪个源（官方 / 自定义源名）
+    /// 这条来自哪个源（官方 / 自定义源名 / SkillHub）
     pub registry: String,
+    /// 源标识（用于「只看某个源」的筛选）
+    pub provider_id: String,
+    /// 上游是否提供完整性校验。**没提供时界面必须明确告知**
+    pub integrity_verified: bool,
     /// 市场根目录下是否已有同名目录
     pub installed: bool,
     /// 已安装版本（读不出时为空串）；与 `version` 不同即可提示更新
@@ -826,6 +838,47 @@ pub struct MarketSkillView {
 pub struct MarketList {
     pub skills: Vec<MarketSkillView>,
     pub errors: Vec<String>,
+    /// 总条数（源支持分页时有效，否则为 0）
+    pub total: usize,
+    /// 总页数（源支持分页时有效，否则为 0）
+    pub total_pages: usize,
+    /// 该源是否分页
+    pub paged: bool,
+}
+
+/// 一个 Provider 的界面投影。
+#[derive(serde::Serialize)]
+pub struct MarketProviderView {
+    /// 源标识（用于筛选）
+    pub id: String,
+    /// 展示名
+    pub label: String,
+    /// 类别：官方 / GitHub / 第三方
+    pub kind: String,
+    /// 是否可删除
+    pub removable: bool,
+}
+
+/// 列出全部可用的技能源。
+///
+/// 前端用它渲染「来源」筛选条。
+#[tauri::command]
+pub fn list_market_providers(
+    state: State<'_, AppState>,
+) -> Result<Vec<MarketProviderView>, String> {
+    let registry = {
+        let db = state.db.lock().map_err(lock_err)?;
+        build_registry(&db)?
+    };
+    Ok(crate::providers::registry::provider_infos(&registry)
+        .into_iter()
+        .map(|i| MarketProviderView {
+            id: i.id,
+            label: i.label,
+            kind: i.kind.label().to_string(),
+            removable: i.removable,
+        })
+        .collect())
 }
 
 /// 一个市场来源（界面投影）。
@@ -1019,14 +1072,14 @@ pub fn allowlist_paths(db: &Connection) -> Vec<std::path::PathBuf> {
 }
 
 /// 官方源 + 用户添加的源。顺序即合并优先级（官方永远第一）。
-fn collect_sources(db: &Connection) -> Result<Vec<crate::market::RegistrySource>, String> {
-    let official = crate::market::official_source();
+fn collect_sources(db: &Connection) -> Result<Vec<RegistrySource>, String> {
+    let official = official_source();
     let mut out = vec![official.clone()];
     for row in db::load_skill_sources(db).map_err(|e| e.to_string())? {
         if row.url == official.url {
             continue; // 用户把官方仓库又加了一遍：忽略，避免重复请求
         }
-        out.push(crate::market::RegistrySource {
+        out.push(RegistrySource {
             name: row.name,
             url: row.url,
         });
@@ -1034,11 +1087,19 @@ fn collect_sources(db: &Connection) -> Result<Vec<crate::market::RegistrySource>
     Ok(out)
 }
 
-fn source_view(src: &crate::market::RegistrySource) -> SkillSourceView {
+/// 构造当前的 Provider 注册表。
+///
+/// **官方源必须排第一**——合并规则（官方优先、同 slug 先到先得）依赖这个顺序。
+fn build_registry(db: &Connection) -> Result<ProviderRegistry, String> {
+    let sources = collect_sources(db)?;
+    Ok(ProviderRegistry::new(sources, true))
+}
+
+fn source_view(src: &RegistrySource) -> SkillSourceView {
     SkillSourceView {
         name: src.name.clone(),
         url: src.url.clone(),
-        removable: src.name != crate::market::OFFICIAL_NAME,
+        removable: src.name != OFFICIAL_NAME,
         repo: src.url.clone(),
     }
 }
@@ -1056,9 +1117,9 @@ pub fn add_skill_source(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<Vec<SkillSourceView>, String> {
-    let normalized = crate::market::normalize_repo(&url)?;
-    let name = crate::market::repo_label(&url)?;
-    let official = crate::market::official_source();
+    let normalized = normalize_repo(&url)?;
+    let name = repo_label(&url)?;
+    let official = official_source();
     if normalized == official.url {
         return Err("这就是官方源，无需重复添加".into());
     }
@@ -1075,7 +1136,7 @@ pub fn remove_skill_source(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<Vec<SkillSourceView>, String> {
-    let official = crate::market::official_source();
+    let official = official_source();
     if url == official.url {
         return Err("官方源不可删除".into());
     }
@@ -1087,19 +1148,39 @@ pub fn remove_skill_source(
 
 /// 拉取全部源的清单。单个源失败体现在 `errors` 里，不影响其它源。
 #[tauri::command]
-pub async fn list_market_skills(state: State<'_, AppState>) -> Result<MarketList, String> {
-    let sources = {
+pub async fn list_market_skills(
+    state: State<'_, AppState>,
+    provider_id: Option<String>,
+    query: Option<String>,
+    page: Option<usize>,
+) -> Result<MarketList, String> {
+    let registry = {
         let db = state.db.lock().map_err(lock_err)?;
-        collect_sources(&db)?
+        build_registry(&db)?
     };
-    let fetched = crate::market::fetch_all(&sources).await;
     let root = crate::agent::skill::market_root();
+    let q = ListQuery {
+        query: query.unwrap_or_default(),
+        page: page.unwrap_or(1),
+        limit: 30,
+    };
 
-    let skills = fetched
-        .skills
+    // 指定了源就只拉那个源；不指定则聚合全部源。
+    let (skills, errors, total, total_pages, paged) = match provider_id.as_deref() {
+        Some(pid) if !pid.is_empty() => match registry.list_one(pid, &q).await {
+            Ok(page) => (page.skills, Vec::new(), page.total, page.total_pages, page.paged),
+            Err(e) => (Vec::new(), vec![e], 0, 0, false),
+        },
+        _ => {
+            let agg = registry.list_all(&q).await;
+            (agg.skills, agg.errors, 0, 0, false)
+        }
+    };
+
+    let skills = skills
         .into_iter()
         .map(|s| {
-            let dir = root.as_ref().map(|r| r.join(&s.id));
+            let dir = root.as_ref().map(|r| r.join(&s.slug));
             let installed = dir.as_ref().map(|d| d.is_dir()).unwrap_or(false);
             let installed_version = match (&dir, installed) {
                 (Some(d), true) => crate::market::installed_version_of(d),
@@ -1107,12 +1188,15 @@ pub async fn list_market_skills(state: State<'_, AppState>) -> Result<MarketList
             };
             MarketSkillView {
                 id: s.id,
+                slug: s.slug,
                 name: s.name,
                 description: s.description,
                 version: s.version,
                 tags: s.tags,
                 author: s.author,
-                registry: s.registry,
+                registry: s.provider_label,
+                provider_id: s.provider_id,
+                integrity_verified: s.integrity.is_verified(),
                 installed,
                 installed_version,
             }
@@ -1121,7 +1205,10 @@ pub async fn list_market_skills(state: State<'_, AppState>) -> Result<MarketList
 
     Ok(MarketList {
         skills,
-        errors: fetched.errors,
+        errors,
+        total,
+        total_pages,
+        paged,
     })
 }
 
@@ -1133,12 +1220,12 @@ pub async fn inspect_market_skill(
 ) -> Result<crate::market::Inspection, String> {
     let root = crate::agent::skill::market_root()
         .ok_or_else(|| "技能目录未初始化，请重启应用".to_string())?;
-    let sources = {
+    let registry = {
         let db = state.db.lock().map_err(lock_err)?;
-        collect_sources(&db)?
+        build_registry(&db)?
     };
-    let entry = crate::market::find_entry(&sources, &id).await?;
-    crate::market::inspect(&entry, &root).await
+    let entry = registry.resolve(&id).await?;
+    crate::market::inspect(&registry, &entry, &root).await
 }
 
 /// 安装/更新市场技能。
@@ -1154,12 +1241,12 @@ pub async fn install_market_skill(
 ) -> Result<crate::market::InstallSummary, String> {
     let root = crate::agent::skill::market_root()
         .ok_or_else(|| "技能目录未初始化，请重启应用".to_string())?;
-    let sources = {
+    let registry = {
         let db = state.db.lock().map_err(lock_err)?;
-        collect_sources(&db)?
+        build_registry(&db)?
     };
-    let entry = crate::market::find_entry(&sources, &id).await?;
-    crate::market::install(&entry, &root, accept_risky, update).await
+    let entry = registry.resolve(&id).await?;
+    crate::market::install(&registry, &entry, &root, accept_risky, update).await
 }
 
 #[tauri::command]
