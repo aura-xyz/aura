@@ -4,8 +4,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   ArrowDownToLine,
+  Bug,
   Check,
   ExternalLink,
+  Globe,
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
@@ -18,6 +20,8 @@ import {
 } from "../lib/updater";
 
 const REPO_URL = "https://github.com/aura-xyz/aura";
+const SITE_URL = "https://aura-xyz.github.io/";
+const ISSUES_URL = `${REPO_URL}/issues`;
 
 type CheckState =
   | { kind: "idle" }
@@ -32,6 +36,31 @@ function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 关于页里的一行链接：左图标、中间标题、右侧地址（可省略）。 */
+function LinkRow({
+  icon,
+  label,
+  value,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2.5 text-left text-sm transition-colors hover:bg-bubble"
+    >
+      <span className="shrink-0 text-subtle">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {value && <span className="shrink-0 text-xs text-subtle">{value}</span>}
+    </button>
+  );
 }
 
 /**
@@ -122,23 +151,29 @@ export default function AboutSection() {
       <section>
         <h3 className="mb-3 text-sm font-medium">项目</h3>
         <div className="flex flex-col gap-1">
-          <button
-            type="button"
+          <LinkRow
+            icon={<Globe size={14} />}
+            label="官方网站"
+            value="aura-xyz.github.io"
+            onClick={() => openUrl(SITE_URL)}
+          />
+          <LinkRow
+            icon={<Bug size={14} />}
+            label="问题反馈"
+            value="GitHub Issues"
+            onClick={() => openUrl(ISSUES_URL)}
+          />
+          <LinkRow
+            icon={<ExternalLink size={14} />}
+            label="源代码仓库"
+            value={REPO_URL}
             onClick={() => openUrl(REPO_URL)}
-            className="flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2.5 text-left text-sm transition-colors hover:bg-bubble"
-          >
-            <ExternalLink size={14} className="shrink-0 text-subtle" />
-            <span className="min-w-0 flex-1 truncate">源代码仓库</span>
-            <span className="shrink-0 text-xs text-subtle">{REPO_URL}</span>
-          </button>
-          <button
-            type="button"
+          />
+          <LinkRow
+            icon={<ArrowDownToLine size={14} />}
+            label="历史版本下载"
             onClick={() => openUrl(`${REPO_URL}/releases`)}
-            className="flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2.5 text-left text-sm transition-colors hover:bg-bubble"
-          >
-            <ArrowDownToLine size={14} className="shrink-0 text-subtle" />
-            <span className="min-w-0 flex-1 truncate">历史版本下载</span>
-          </button>
+          />
         </div>
       </section>
 
