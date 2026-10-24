@@ -6,7 +6,6 @@ import {
   FolderOpen,
   Plus,
   Search,
-  Sparkles,
   TriangleAlert,
   Trash2,
   X,
@@ -31,7 +30,6 @@ import {
   canDelete,
   canUpdate,
   deleteBlockedReason,
-  enabledCount,
   filterMarket,
   groupSkills,
   SOURCE_LABEL,
@@ -42,6 +40,8 @@ import SkillDetailDialog from "../components/SkillDetailDialog";
 interface Props {
   onClose: () => void;
 }
+
+type Tab = "builtin" | "installed" | "market";
 
 type LoadState =
   | { kind: "loading" }
@@ -90,21 +90,56 @@ function Switch({
   );
 }
 
-function Section({
-  title,
-  hint,
-  children,
+function Tabs({
+  tab,
+  counts,
+  onChange,
 }: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
+  tab: Tab;
+  counts: Record<Tab, number | null>;
+  onChange: (t: Tab) => void;
 }) {
+  const items: { id: Tab; label: string }[] = [
+    { id: "builtin", label: "内置" },
+    { id: "installed", label: "已安装" },
+    { id: "market", label: "市场" },
+  ];
   return (
-    <section className="mt-8">
-      <h2 className="text-sm font-medium">{title}</h2>
-      {hint && <p className="mt-1 text-xs leading-relaxed text-subtle">{hint}</p>}
-      <div className="mt-3 flex flex-col gap-2">{children}</div>
-    </section>
+    <div
+      role="tablist"
+      aria-label="技能分区"
+      className="mt-5 flex items-center gap-1 border-b border-line"
+    >
+      {items.map((it) => {
+        const active = tab === it.id;
+        const n = counts[it.id];
+        return (
+          <button
+            key={it.id}
+            role="tab"
+            type="button"
+            aria-selected={active}
+            onClick={() => onChange(it.id)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
+              active
+                ? "border-brand text-foreground"
+                : "border-transparent text-subtle hover:text-foreground"
+            }`}
+          >
+            {it.label}
+            {n !== null && <span className="ml-1 text-[11px] text-subtle">{n}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function EmptyState({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs leading-relaxed text-subtle">
+      {children}
+    </p>
   );
 }
 
@@ -139,16 +174,10 @@ function SkillCard({
               {SOURCE_LABEL[skill.source]}
             </span>
             <span className="font-mono text-[11px] text-subtle">v{skill.version}</span>
-            {!skill.enabled && (
-              <span className="text-[11px] text-subtle">已禁用</span>
-            )}
+            {!skill.enabled && <span className="text-[11px] text-subtle">已禁用</span>}
           </div>
-          <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-            {skill.description}
-          </p>
-          <p className="mt-1.5 text-[11px] text-subtle">
-            工具：{toolsLabel(skill)}
-          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-subtle">{skill.description}</p>
+          <p className="mt-1.5 text-[11px] text-subtle">工具：{toolsLabel(skill)}</p>
           <p className="mt-0.5 truncate text-[11px] text-subtle" title={skill.dir}>
             {skill.dir}
           </p>
@@ -210,6 +239,7 @@ export default function SkillsPage({ onClose }: Props) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [market, setMarket] = useState<MarketState>({ kind: "loading" });
   const [sources, setSources] = useState<SkillSourceView[]>([]);
+  const [tab, setTab] = useState<Tab>("installed");
   const [query, setQuery] = useState("");
   const [busyName, setBusyName] = useState<string | null>(null);
   /** 正在下载审查的条目 id */
@@ -391,6 +421,20 @@ export default function SkillsPage({ onClose }: Props) {
   }
 
   const groups = state.kind === "ready" ? groupSkills(state.skills) : null;
+  const marketItems = market.kind === "ready" ? market.items : null;
+  const marketErrors = market.kind === "ready" ? market.errors : [];
+  /** 市场里既没有条目又有报错：整块失败，给重试入口 */
+  const marketDown = marketItems !== null && marketItems.length === 0 && marketErrors.length > 0;
+
+  const cardProps = (s: SkillView) => ({
+    skill: s,
+    busy: busyName === s.name,
+    confirming: confirming === s.name,
+    onToggle: () => toggle(s),
+    onAskDelete: () => setConfirming(s.name),
+    onCancelDelete: () => setConfirming(null),
+    onConfirmDelete: () => remove(s),
+  });
 
   return (
     <div className="min-h-full bg-surface">
@@ -404,20 +448,20 @@ export default function SkillsPage({ onClose }: Props) {
           返回对话
         </button>
 
-        <h1 className="mt-5 text-2xl font-semibold leading-tight tracking-[-0.03em]">
-          Skills
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-subtle">
-          技能是一份写好的工作指引：模型判断场景匹配时会先加载它，再按里面
-          的步骤做事。启用中的技能名与用途会随每轮对话提供给模型，禁用后
-          模型就看不到它。
+        <h1 className="mt-5 text-2xl font-semibold leading-tight tracking-[-0.03em]">Skills</h1>
+        <p className="mt-2 text-sm text-subtle">
+          技能是给模型的工作指引，模型判断场景匹配时按需加载；禁用后模型看不到它。
         </p>
 
-        {state.kind === "ready" && (
-          <p className="mt-2 text-xs text-subtle">
-            共 {state.skills.length} 个技能，{enabledCount(state.skills)} 个已启用
-          </p>
-        )}
+        <Tabs
+          tab={tab}
+          counts={{
+            builtin: groups ? groups.builtin.length : null,
+            installed: groups ? groups.installed.length : null,
+            market: marketItems ? marketItems.length : null,
+          }}
+          onChange={setTab}
+        />
 
         {notice && (
           <p
@@ -430,321 +474,263 @@ export default function SkillsPage({ onClose }: Props) {
           </p>
         )}
 
-        {state.kind === "loading" && (
-          <p className="mt-6 text-sm text-subtle">正在读取技能…</p>
-        )}
+        {/* ---- 本地列表（内置 / 已安装） ---- */}
+        {tab !== "market" && (
+          <div className="mt-4 flex flex-col gap-2">
+            {state.kind === "loading" && <p className="text-sm text-subtle">正在读取技能…</p>}
 
-        {state.kind === "error" && (
-          <div className="mt-6 flex flex-col gap-2">
-            <p className="flex items-start gap-2 text-sm text-danger">
-              <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-              <span className="min-w-0 break-words">
-                读取技能失败：{state.message}
-              </span>
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setState({ kind: "loading" });
-                void refresh();
-              }}
-              className="self-start text-xs text-brand hover:underline"
-            >
-              重试
-            </button>
+            {state.kind === "error" && (
+              <div className="flex flex-col gap-2">
+                <p className="flex items-start gap-2 text-sm text-danger">
+                  <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0 break-words">读取失败：{state.message}</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setState({ kind: "loading" });
+                    void refresh();
+                  }}
+                  className="self-start text-xs text-brand hover:underline"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+
+            {groups &&
+              (tab === "builtin" ? (
+                groups.builtin.length === 0 ? (
+                  <EmptyState>没有内置技能。</EmptyState>
+                ) : (
+                  groups.builtin.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                )
+              ) : groups.installed.length === 0 ? (
+                <EmptyState>
+                  <span className="flex items-center gap-1.5">
+                    <FolderOpen size={12} className="shrink-0" />
+                    还没有安装任何技能。
+                  </span>
+                  <span className="mt-1 block">
+                    把含 <span className="font-mono">SKILL.md</span> 的目录放进项目的{" "}
+                    <span className="font-mono">.agents/skills/</span>、应用数据的{" "}
+                    <span className="font-mono">skills/local/</span>，或从「市场」安装。
+                  </span>
+                </EmptyState>
+              ) : (
+                groups.installed.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+              ))}
           </div>
         )}
 
-        {groups && (
-          <>
-            <Section
-              title={`内置技能（${groups.builtin.length}）`}
-              hint="随应用发布，不可删除；不需要时可以禁用。"
-            >
-              {groups.builtin.length === 0 ? (
-                <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
-                  未找到内置技能。
-                </p>
-              ) : (
-                groups.builtin.map((s) => (
-                  <SkillCard
-                    key={s.name}
-                    skill={s}
-                    busy={busyName === s.name}
-                    confirming={confirming === s.name}
-                    onToggle={() => toggle(s)}
-                    onAskDelete={() => setConfirming(s.name)}
-                    onCancelDelete={() => setConfirming(null)}
-                    onConfirmDelete={() => remove(s)}
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section
-              title={`已安装（${groups.installed.length}）`}
-              hint="来自市场、本地技能目录，以及当前工作区的 .agents/skills/。"
-            >
-              {groups.installed.length === 0 ? (
-                <div className="rounded-card border border-dashed border-line px-4 py-3">
-                  <p className="flex items-center gap-2 text-xs text-subtle">
-                    <FolderOpen size={13} className="shrink-0" />
-                    还没有安装任何技能。
-                  </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-                    把技能目录（含 <span className="font-mono">SKILL.md</span>）放进
-                    项目的 <span className="font-mono">.agents/skills/</span>
-                    ，或应用数据目录的 <span className="font-mono">skills/local/</span>
-                    ，再回到这一页刷新即可看到。
-                  </p>
-                </div>
-              ) : (
-                groups.installed.map((s) => (
-                  <SkillCard
-                    key={s.name}
-                    skill={s}
-                    busy={busyName === s.name}
-                    confirming={confirming === s.name}
-                    onToggle={() => toggle(s)}
-                    onAskDelete={() => setConfirming(s.name)}
-                    onCancelDelete={() => setConfirming(null)}
-                    onConfirmDelete={() => remove(s)}
-                  />
-                ))
-              )}
-            </Section>
-          </>
-        )}
-
-        {/* 市场是独立数据源（网络），不跟着本地列表的成败走——
-            本地读失败时，市场照样能浏览安装。 */}
-        <Section
-          title={
-            market.kind === "ready"
-              ? `市场（${market.items.length}）`
-              : "市场"
-          }
-          hint="来自技能注册表（官方与自建源）。点安装会先下载并静态检查这个包，把申请的权限与危险写法列出来，你确认后才落盘。"
-        >
-          {market.kind === "loading" && (
-            <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
-              正在获取市场清单…
-            </p>
-          )}
-
-          {market.kind === "error" && (
-            <div className="rounded-card border border-line px-4 py-3">
-              <p className="flex items-start gap-2 text-xs text-danger">
-                <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-                <span className="min-w-0 break-words">
-                  获取市场清单失败：{market.message}
-                </span>
-              </p>
-              <button
-                type="button"
-                onClick={() => void loadMarket()}
-                className="mt-2 text-xs text-brand hover:underline"
-              >
-                重试
-              </button>
-            </div>
-          )}
-
-          {market.kind === "ready" && (
-            <>
-              {/* 源管理：官方源固定置顶，其余可删。 */}
-              <div className="rounded-card border border-line px-3 py-2">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-subtle">来源</span>
-                  {sources.map((s) => (
-                    <span
-                      key={s.url}
-                      className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px]"
-                      title={s.url}
-                    >
-                      {s.name}
-                      {s.removable && (
-                        <button
-                          type="button"
-                          aria-label={`移除来源 ${s.name}`}
-                          disabled={sourceBusy}
-                          onClick={() => void dropSource(s.url)}
-                          className="text-subtle transition-colors hover:text-danger disabled:opacity-40"
-                        >
-                          <X size={11} />
-                        </button>
-                      )}
-                    </span>
-                  ))}
-
-                  {addingSource ? (
-                    <form onSubmit={submitSource} className="flex items-center gap-1.5">
-                      <input
-                        value={sourceUrl}
-                        onChange={(e) => setSourceUrl(e.target.value)}
-                        placeholder="github.com/owner/repo"
-                        aria-label="仓库地址"
-                        autoFocus
-                        className="w-52 rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] outline-none transition-colors focus:border-brand"
-                      />
-                      <button
-                        type="submit"
-                        disabled={sourceBusy || !sourceUrl.trim()}
-                        className="rounded-md border border-line px-2 py-0.5 text-[11px] transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                      >
-                        添加
-                      </button>
+        {/* ---- 市场（独立数据源，不跟着本地列表的成败走） ---- */}
+        {tab === "market" && (
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="rounded-card border border-line px-3 py-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-subtle">来源</span>
+                {sources.map((s) => (
+                  <span
+                    key={s.url}
+                    className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px]"
+                    title={s.url}
+                  >
+                    {s.name}
+                    {s.removable && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setAddingSource(false);
-                          setSourceUrl("");
-                          setSourceError(null);
-                        }}
-                        className="text-[11px] text-subtle hover:text-foreground"
+                        aria-label={`移除来源 ${s.name}`}
+                        disabled={sourceBusy}
+                        onClick={() => void dropSource(s.url)}
+                        className="text-subtle transition-colors hover:text-danger disabled:opacity-40"
                       >
-                        取消
+                        <X size={11} />
                       </button>
-                    </form>
-                  ) : (
+                    )}
+                  </span>
+                ))}
+
+                {addingSource ? (
+                  <form onSubmit={submitSource} className="flex items-center gap-1.5">
+                    <input
+                      value={sourceUrl}
+                      onChange={(e) => setSourceUrl(e.target.value)}
+                      placeholder="github.com/owner/repo"
+                      aria-label="仓库地址"
+                      autoFocus
+                      className="w-52 rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] outline-none transition-colors focus:border-brand"
+                    />
+                    <button
+                      type="submit"
+                      disabled={sourceBusy || !sourceUrl.trim()}
+                      className="rounded-md border border-line px-2 py-0.5 text-[11px] transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                    >
+                      添加
+                    </button>
                     <button
                       type="button"
-                      onClick={() => setAddingSource(true)}
-                      className="flex items-center gap-0.5 text-[11px] text-brand hover:underline"
+                      onClick={() => {
+                        setAddingSource(false);
+                        setSourceUrl("");
+                        setSourceError(null);
+                      }}
+                      className="text-[11px] text-subtle hover:text-foreground"
                     >
-                      <Plus size={11} />
-                      添加源
+                      取消
                     </button>
-                  )}
-                </div>
-                {sourceError && (
-                  <p className="mt-1.5 break-words text-[11px] text-danger">{sourceError}</p>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAddingSource(true)}
+                    className="flex items-center gap-0.5 text-[11px] text-brand hover:underline"
+                  >
+                    <Plus size={11} />
+                    添加源
+                  </button>
                 )}
               </div>
-
-              {/* 单个源失败不阻塞其它源，但要如实说出来是哪个源 */}
-              {market.errors.length > 0 && (
-                <div className="rounded-card border border-line px-3 py-2">
-                  <p className="flex items-start gap-2 text-[11px] text-danger">
-                    <TriangleAlert size={12} className="mt-0.5 shrink-0" />
-                    <span className="min-w-0 break-words">
-                      部分来源拉取失败：{market.errors.join("；")}
-                    </span>
-                  </p>
-                </div>
+              {sourceError && (
+                <p className="mt-1.5 break-words text-[11px] text-danger">{sourceError}</p>
               )}
+            </div>
 
-              {market.items.length === 0 ? (
-                <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
-                  注册表里暂时没有技能。
+            {market.kind === "loading" && (
+              <EmptyState>正在获取市场清单…</EmptyState>
+            )}
+
+            {market.kind === "error" && (
+              <div className="rounded-card border border-line px-4 py-3">
+                <p className="flex items-start gap-2 text-xs text-danger">
+                  <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0 break-words">获取失败：{market.message}</span>
                 </p>
-              ) : (
-                <>
-                  <div className="relative">
-                    <Search
-                      size={13}
-                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
-                    />
-                    <input
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="搜索名称、说明或标签"
-                      aria-label="搜索市场技能"
-                      className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
-                    />
-                  </div>
-                  {filterMarket(market.items, query).length === 0 ? (
-                    <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
-                      没有匹配的技能。
-                    </p>
-                  ) : (
-                    filterMarket(market.items, query).map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-card border border-line bg-surface p-4"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium">
-                                {item.name || item.id}
-                              </span>
+                <button
+                  type="button"
+                  onClick={() => void loadMarket()}
+                  className="mt-2 text-xs text-brand hover:underline"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+
+            {market.kind === "ready" && marketDown && (
+              <div className="rounded-card border border-line px-4 py-3">
+                <p className="flex items-start gap-2 text-xs text-danger">
+                  <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0 break-words">
+                    市场暂时拉不到清单（{marketErrors.join("；")}）
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void loadMarket()}
+                  className="mt-2 text-xs text-brand hover:underline"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+
+            {/* 有条目、但某个源失败：不打断浏览，只在下面提一句 */}
+            {market.kind === "ready" && !marketDown && marketErrors.length > 0 && (
+              <p className="px-1 text-[11px] text-subtle">
+                部分来源未拉取到：{marketErrors.join("；")}
+              </p>
+            )}
+
+            {marketItems !== null && marketItems.length > 0 && (
+              <>
+                <div className="relative">
+                  <Search
+                    size={13}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
+                  />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="搜索名称、说明或标签"
+                    aria-label="搜索市场技能"
+                    className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
+                  />
+                </div>
+                {filterMarket(marketItems, query).length === 0 ? (
+                  <EmptyState>没有匹配的技能。</EmptyState>
+                ) : (
+                  filterMarket(marketItems, query).map((item) => (
+                    <div key={item.id} className="rounded-card border border-line bg-surface p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium">{item.name || item.id}</span>
+                            <span className="font-mono text-[11px] text-subtle">{item.id}</span>
+                            {item.version && (
                               <span className="font-mono text-[11px] text-subtle">
-                                {item.id}
+                                v{item.version}
                               </span>
-                              {item.version && (
-                                <span className="font-mono text-[11px] text-subtle">
-                                  v{item.version}
-                                </span>
-                              )}
-                              <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-                                {item.registry || "官方"}
-                              </span>
-                            </div>
-                            <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-                              {item.description}
-                            </p>
-                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                              {item.tags.map((t) => (
-                                <span
-                                  key={t}
-                                  className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
-                                >
-                                  {t}
-                                </span>
-                              ))}
-                              {item.author && (
-                                <span className="text-[11px] text-subtle">
-                                  {item.author}
-                                </span>
-                              )}
-                            </div>
+                            )}
+                            <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
+                              {item.registry || "官方"}
+                            </span>
                           </div>
-                          <div className="shrink-0 pt-0.5">
-                            {canUpdate(item) ? (
-                              <button
-                                type="button"
-                                onClick={() => void openDetail(item)}
-                                disabled={inspecting !== null || installing}
-                                className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                          <p className="mt-1.5 text-xs leading-relaxed text-subtle">
+                            {item.description}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {item.tags.map((t) => (
+                              <span
+                                key={t}
+                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
                               >
-                                <Download size={12} />
-                                {inspecting === item.id
-                                  ? "检查中…"
-                                  : `更新到 v${item.version}`}
-                              </button>
-                            ) : item.installed ? (
-                              <span className="flex items-center gap-1 text-xs text-subtle">
-                                <Check size={12} className="text-brand" />
-                                已安装
+                                {t}
                               </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => void openDetail(item)}
-                                disabled={inspecting !== null || installing}
-                                className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                              >
-                                <Download size={12} />
-                                {inspecting === item.id ? "检查中…" : "安装"}
-                              </button>
+                            ))}
+                            {item.author && (
+                              <span className="text-[11px] text-subtle">{item.author}</span>
                             )}
                           </div>
                         </div>
+                        <div className="shrink-0 pt-0.5">
+                          {canUpdate(item) ? (
+                            <button
+                              type="button"
+                              onClick={() => void openDetail(item)}
+                              disabled={inspecting !== null || installing}
+                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                            >
+                              <Download size={12} />
+                              {inspecting === item.id ? "检查中…" : `更新到 v${item.version}`}
+                            </button>
+                          ) : item.installed ? (
+                            <span className="flex items-center gap-1 text-xs text-subtle">
+                              <Check size={12} className="text-brand" />
+                              已安装
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void openDetail(item)}
+                              disabled={inspecting !== null || installing}
+                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                            >
+                              <Download size={12} />
+                              {inspecting === item.id ? "检查中…" : "安装"}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    ))
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </Section>
+                    </div>
+                  ))
+                )}
+              </>
+            )}
 
-        <p className="mt-10 flex items-center gap-1.5 text-[11px] text-subtle">
-          <Sparkles size={12} className="shrink-0" />
-          技能默认只读：不会自动改文件或执行命令，具体能做什么由技能声明的工具
-          范围与会话模式共同决定。
-        </p>
+            {marketItems !== null && marketItems.length === 0 && !marketDown && (
+              <EmptyState>注册表里暂时没有技能。</EmptyState>
+            )}
+          </div>
+        )}
       </div>
 
       {detail && (

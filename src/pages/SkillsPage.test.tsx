@@ -119,6 +119,11 @@ const SUMMARY = {
   file_count: 1,
 };
 
+/** 市场在新标签页里：先切过去，否则整块内容根本没渲染。 */
+async function openMarket() {
+  await userEvent.click(await screen.findByRole("tab", { name: /市场/ }));
+}
+
 beforeEach(() => {
   listSkillsMock.mockReset();
   setEnabledMock.mockReset();
@@ -135,21 +140,28 @@ beforeEach(() => {
 });
 
 describe("SkillsPage", () => {
-  it("按内置/已安装分组，并展示市场占位", async () => {
+  it("三个分区是标签页，标签上带数量，默认停在已安装", async () => {
     listSkillsMock.mockResolvedValue([BUILTIN, LOCAL, WORKSPACE]);
     render(<SkillsPage onClose={vi.fn()} />);
 
-    expect(await screen.findByText("code-explainer")).toBeInTheDocument();
-    expect(screen.getByText("my-helper")).toBeInTheDocument();
+    expect(await screen.findByText("my-helper")).toBeInTheDocument();
     expect(screen.getByText("ws-skill")).toBeInTheDocument();
+    // 内置技能不在「已安装」标签里
+    expect(screen.queryByText("code-explainer")).toBeNull();
 
-    // 分组标题带数量
-    expect(screen.getByText("内置技能（1）")).toBeInTheDocument();
-    expect(screen.getByText("已安装（2）")).toBeInTheDocument();
-    // 市场区块独立存在（清单为空时给出提示）
-    expect(await screen.findByText("注册表里暂时没有技能。")).toBeInTheDocument();
-    // 概览：共 3 个，2 个启用
-    expect(screen.getByText(/共 3 个技能，2 个已启用/)).toBeInTheDocument();
+    // 标签上的数量按分组算
+    expect(screen.getByRole("tab", { name: /内置\s*1/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /已安装\s*2/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /市场\s*0/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /已安装/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    // 切到内置：只剩内置技能
+    await userEvent.click(screen.getByRole("tab", { name: /内置/ }));
+    expect(screen.getByText("code-explainer")).toBeInTheDocument();
+    expect(screen.queryByText("my-helper")).toBeNull();
   });
 
   it("开关切换调用命令并就地更新状态", async () => {
@@ -192,10 +204,14 @@ describe("SkillsPage", () => {
 
     await screen.findByText("my-helper");
     expect(screen.getByRole("button", { name: "删除 my-helper" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "删除 code-explainer" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除 ws-skill" })).toBeNull();
-    // 两个不可删的来源各有一处提示
-    expect(screen.getAllByText("不可删除")).toHaveLength(2);
+    // 工作区技能在「已安装」里显示不可删除
+    expect(screen.getAllByText("不可删除")).toHaveLength(1);
+
+    // 内置技能同样不可删除
+    await userEvent.click(screen.getByRole("tab", { name: /内置/ }));
+    expect(screen.queryByRole("button", { name: "删除 code-explainer" })).toBeNull();
+    expect(screen.getAllByText("不可删除")).toHaveLength(1);
   });
 
   it("删除需二次确认，确认后调用命令并刷新列表", async () => {
@@ -228,17 +244,18 @@ describe("SkillsPage", () => {
     listSkillsMock.mockResolvedValue([]);
     render(<SkillsPage onClose={vi.fn()} />);
 
-    expect(await screen.findByText("还没有安装任何技能。")).toBeInTheDocument();
-    // 目录引导：分组说明与空态提示各提到一次
+    expect(await screen.findByText(/还没有安装任何技能/)).toBeInTheDocument();
+    // 目录引导
     expect(screen.getAllByText(/\.agents\/skills\//).length).toBeGreaterThan(0);
-    expect(screen.getByText("未找到内置技能。")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /内置/ }));
+    expect(screen.getByText("没有内置技能。")).toBeInTheDocument();
   });
 
   it("读取失败给出原因与重试", async () => {
     listSkillsMock.mockRejectedValueOnce("数据库被占用").mockResolvedValueOnce([LOCAL]);
     render(<SkillsPage onClose={vi.fn()} />);
 
-    expect(await screen.findByText(/读取技能失败：数据库被占用/)).toBeInTheDocument();
+    expect(await screen.findByText(/读取失败：数据库被占用/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
   });
@@ -261,11 +278,12 @@ describe("SkillsPage", () => {
       errors: [],
     });
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     expect(await screen.findByText("MCP 服务器构建")).toBeInTheDocument();
     expect(screen.getByText("代码审查")).toBeInTheDocument();
     // 已安装同版本：只给角标，不再给按钮
-    expect(screen.getByText("已安装")).toBeInTheDocument();
+    expect(screen.getByText("已安装", { selector: "span" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "安装" })).toHaveLength(1);
 
     // 按标签命中
@@ -288,6 +306,7 @@ describe("SkillsPage", () => {
     inspectMarketMock.mockResolvedValue(inspection());
     installMarketMock.mockResolvedValue(SUMMARY);
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
     expect(inspectMarketMock).toHaveBeenCalledWith("mcp-builder");
@@ -337,6 +356,7 @@ describe("SkillsPage", () => {
     );
     installMarketMock.mockResolvedValue(SUMMARY);
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
     const dialog = await screen.findByRole("dialog");
@@ -357,6 +377,7 @@ describe("SkillsPage", () => {
     });
     inspectMarketMock.mockRejectedValue("技能包校验失败（sha256 不匹配）");
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
     expect(await screen.findByText(/sha256 不匹配/)).toBeInTheDocument();
@@ -373,6 +394,7 @@ describe("SkillsPage", () => {
     inspectMarketMock.mockResolvedValue(inspection({ id: "x", name: "X 技能" }));
     installMarketMock.mockRejectedValue("检测到 1 条高危内容，确认后才会安装");
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
     const dialog = await screen.findByRole("dialog");
@@ -401,6 +423,7 @@ describe("SkillsPage", () => {
     );
     installMarketMock.mockResolvedValue({ ...SUMMARY, version: "2.0.0" });
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await userEvent.click(
       await screen.findByRole("button", { name: "更新到 v2.0.0" }),
@@ -421,11 +444,28 @@ describe("SkillsPage", () => {
       .mockResolvedValueOnce({ skills: [], errors: [] });
     render(<SkillsPage onClose={vi.fn()} />);
 
-    // 本地列表照常可用
+    // 本地列表照常可用（默认标签）
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
-    expect(await screen.findByText(/获取市场清单失败：连接超时/)).toBeInTheDocument();
+
+    await openMarket();
+    expect(await screen.findByText(/获取失败：连接超时/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("注册表里暂时没有技能。")).toBeInTheDocument();
+  });
+
+  it("所有源都拉不到时给出整块失败与重试，而不是一句「部分来源」", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [],
+      errors: ["官方：连接超时 / HTTP 404"],
+    });
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    expect(await screen.findByText(/市场暂时拉不到清单（官方：连接超时/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    // 不该同时出现「没有技能」这种会误导人的空态
+    expect(screen.queryByText("注册表里暂时没有技能。")).toBeNull();
   });
 
   it("单个源失败时仍展示其它源的条目，并说明是哪个源", async () => {
@@ -435,9 +475,10 @@ describe("SkillsPage", () => {
       errors: ["团队：https://… 返回 HTTP 404"],
     });
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     expect(await screen.findByText("可用条目")).toBeInTheDocument();
-    expect(screen.getByText(/部分来源拉取失败：团队/)).toBeInTheDocument();
+    expect(screen.getByText(/部分来源未拉取到：团队/)).toBeInTheDocument();
   });
 
   it("来源区块展示官方源（不可删），可添加与移除自定义源", async () => {
@@ -451,6 +492,7 @@ describe("SkillsPage", () => {
     addSourceMock.mockResolvedValue([OFFICIAL_SOURCE, custom]);
     removeSourceMock.mockResolvedValue([OFFICIAL_SOURCE]);
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     expect(await screen.findByText("官方")).toBeInTheDocument();
     // 官方源没有移除按钮
@@ -477,6 +519,7 @@ describe("SkillsPage", () => {
     listSkillsMock.mockResolvedValue([]);
     addSourceMock.mockRejectedValue("目前只支持 GitHub 仓库，请填 github.com/owner/repo");
     render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
 
     await screen.findByText("官方");
     await userEvent.click(screen.getByRole("button", { name: /添加源/ }));
