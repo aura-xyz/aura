@@ -36,6 +36,7 @@ import {
   toolsLabel,
 } from "../lib/skill";
 import SkillDetailDialog from "../components/SkillDetailDialog";
+import Switch from "../components/Switch";
 
 interface Props {
   onClose: () => void;
@@ -56,39 +57,6 @@ type MarketState =
 
 /** 顶部提示。成功与失败用同一处展示，但要能区分颜色——装成功却飘一条红字很怪。 */
 type Notice = { kind: "ok" | "error"; text: string };
-
-/** 启用开关。role=switch 而非 checkbox：语义是「生效/不生效」，不是选中。 */
-function Switch({
-  checked,
-  disabled,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  onChange: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onChange}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
-        checked ? "bg-brand" : "bg-line"
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-          checked ? "translate-x-[18px]" : "translate-x-0.5"
-        }`}
-      />
-    </button>
-  );
-}
 
 function Tabs({
   tab,

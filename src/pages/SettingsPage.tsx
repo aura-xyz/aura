@@ -25,6 +25,7 @@ import {
 } from "../lib/providers";
 import { useStore } from "../store";
 import AboutSection from "./AboutSection";
+import Switch from "../components/Switch";
 import Select from "../components/Select";
 
 interface Props {
@@ -668,24 +669,13 @@ export default function SettingsPage({ onClose, theme, setTheme }: Props) {
                             aria-label="供应商名称"
                             className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-sm outline-none transition-colors focus:border-brand"
                           />
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={p.enabled}
-                            aria-label={p.enabled ? "禁用供应商" : "启用供应商"}
-                            onClick={() =>
+                          <Switch
+                            checked={p.enabled}
+                            label={p.enabled ? "禁用供应商" : "启用供应商"}
+                            onChange={() =>
                               updateProvider(i, { enabled: !p.enabled })
                             }
-                            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-                              p.enabled ? "bg-brand" : "bg-line"
-                            }`}
-                          >
-                            <span
-                              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
-                                p.enabled ? "left-4" : "left-0.5"
-                              }`}
-                            />
-                          </button>
+                          />
                           <button
                             type="button"
                             onClick={() => testConnection(p.id)}
