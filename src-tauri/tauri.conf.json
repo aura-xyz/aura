@@ -40,6 +40,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "assets/installer/header.bmp",
+        "uninstallerHeaderImage": "assets/installer/header.bmp",
+        "sidebarImage": "assets/installer/sidebar.bmp"
+      }
+    }
   }
 }
