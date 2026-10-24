@@ -171,16 +171,36 @@ fn migrate_model_labels(cfg: &mut RouterConfig) -> bool {
 }
 
 pub fn load_config(conn: &Connection) -> RouterConfig {
+    // v0.6.0：遗留的 openrouter_api_key 行只可能来自 v0.1.x。无论本次
+    // 是否走迁移分支，只要是明文就就地加密——那行里躺着的是真密钥，
+    // 不能因为「新代码不再读它」就留着明文。写失败不阻断启动。
+    let legacy_key = match crate::db::get_setting(conn, "openrouter_api_key")
+        .ok()
+        .flatten()
+    {
+        Some(raw) => Some(match crate::secure::unprotect(&raw) {
+            Ok(k) => k,
+            Err(_) => {
+                let _ = crate::db::set_setting(
+                    conn,
+                    "openrouter_api_key",
+                    &crate::secure::protect(&raw).unwrap_or(raw.clone()),
+                );
+                raw
+            }
+        }),
+        None => None,
+    };
+
     let mut cfg = match crate::db::get_setting(conn, CONFIG_KEY)
         .ok()
         .flatten()
-        .and_then(|json| serde_json::from_str::<RouterConfig>(&json).ok())
+        .as_deref()
+        .and_then(parse_config_blob)
     {
         Some(cfg) => normalize(cfg),
         None => legacy_config(
-            crate::db::get_setting(conn, "openrouter_api_key")
-                .ok()
-                .flatten(),
+            legacy_key,
             crate::db::get_setting(conn, "model_id").ok().flatten(),
         ),
     };
@@ -191,9 +211,24 @@ pub fn load_config(conn: &Connection) -> RouterConfig {
     cfg
 }
 
+/// 解析配置 blob：密文优先，明文兜底。
+///
+/// 明文分支服务于 v0.6.0 之前的库（以及测试里直接写的 JSON）；
+/// 解密失败一律按「不是密文」处理，不区分是旧明文还是损坏数据——
+/// 两者都该走 legacy/默认分支，行为与加密上线前一致。
+fn parse_config_blob(raw: &str) -> Option<RouterConfig> {
+    if let Ok(json) = crate::secure::unprotect(raw) {
+        return serde_json::from_str(&json).ok();
+    }
+    serde_json::from_str(raw).ok()
+}
+
 pub fn save_config(conn: &Connection, cfg: &RouterConfig) -> Result<(), String> {
     let json = serde_json::to_string(cfg).map_err(|e| e.to_string())?;
-    crate::db::set_setting(conn, CONFIG_KEY, &json).map_err(|e| e.to_string())
+    // v0.6.0：整块加密后落盘。DPAPI 绑定当前 Windows 用户，同用户同机
+    // 透明解密；加密失败让保存报错，绝不静默写成明文。
+    let blob = crate::secure::protect(&json)?;
+    crate::db::set_setting(conn, CONFIG_KEY, &blob).map_err(|e| e.to_string())
 }
 
 /// 合并供应商远端模型列表：已存在的（同 provider+id）不重复追加，
@@ -660,5 +695,66 @@ mod tests {
         let cfg = load_config(&conn);
         assert_eq!(cfg.providers[0].api_key, "sk-x");
         assert_eq!(cfg.models.len(), MODELS.len());
+    }
+
+    // ---- v0.6.0：密钥加密落盘 ----
+
+    /// 落盘的配置必须是密文：库里看不到密钥明文，且能原样读回。
+    ///
+    /// 这条是「最严重」欠账的闭环断言——只测加解密往返的话，
+    /// 忘记在 save_config 里接上加密也能全绿。
+    #[test]
+    fn saved_config_is_encrypted_at_rest() {
+        let conn = temp_db();
+        let mut cfg = default_config();
+        cfg.providers[0].api_key = "sk-or-v1-super-secret".into();
+        save_config(&conn, &cfg).unwrap();
+
+        let raw = crate::db::get_setting(&conn, CONFIG_KEY)
+            .unwrap()
+            .expect("配置应已落盘");
+        assert!(
+            !raw.contains("sk-or-v1-super-secret"),
+            "数据库里不得出现密钥明文: {raw}"
+        );
+        assert!(
+            raw.chars().all(|c| c.is_ascii_hexdigit()),
+            "落盘值应为 hex 密文: {raw}"
+        );
+        // 密文可解回含密钥的 JSON
+        let json = crate::secure::unprotect(&raw).unwrap();
+        assert!(json.contains("sk-or-v1-super-secret"));
+        // 读取链路透明：调用方拿到的就是明文配置
+        assert_eq!(load_config(&conn).providers[0].api_key, "sk-or-v1-super-secret");
+    }
+
+    /// v0.6.0 之前的库里躺着明文 JSON，加载必须兼容（懒迁移：
+    /// 下次保存即转为密文）。
+    #[test]
+    fn load_config_reads_legacy_plaintext_blob() {
+        let conn = temp_db();
+        let mut cfg = default_config();
+        cfg.providers[0].api_key = "sk-old-plain".into();
+        let plain = serde_json::to_string(&cfg).unwrap();
+        crate::db::set_setting(&conn, CONFIG_KEY, &plain).unwrap();
+        assert_eq!(load_config(&conn).providers[0].api_key, "sk-old-plain");
+    }
+
+    /// 遗留的 openrouter_api_key 行（v0.1.x）哪怕是明文，加载时也要
+    /// 就地加密——不能因为新代码不再优先读它就留着明文密钥。
+    #[test]
+    fn legacy_api_key_row_gets_encrypted_in_place() {
+        let conn = temp_db();
+        crate::db::set_setting(&conn, "openrouter_api_key", "sk-legacy-plain").unwrap();
+        let cfg = load_config(&conn);
+        assert_eq!(cfg.providers[0].api_key, "sk-legacy-plain");
+
+        let row = crate::db::get_setting(&conn, "openrouter_api_key")
+            .unwrap()
+            .unwrap();
+        assert_ne!(row, "sk-legacy-plain", "明文行应被就地加密");
+        assert_eq!(crate::secure::unprotect(&row).unwrap(), "sk-legacy-plain");
+        // 再次加载走加密后的行，密钥不丢
+        assert_eq!(load_config(&conn).providers[0].api_key, "sk-legacy-plain");
     }
 }

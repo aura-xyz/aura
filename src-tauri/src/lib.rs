@@ -2,6 +2,7 @@ pub mod agent;
 pub mod api;
 pub mod commands;
 pub mod db;
+pub mod secure;
 pub mod tools;
 
 use commands::{
