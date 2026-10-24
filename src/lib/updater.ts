@@ -1,4 +1,4 @@
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 export interface UpdateInfo {
@@ -17,7 +17,13 @@ export interface UpdateInfo {
  */
 export type UpdateCheckResult =
   | { kind: "up-to-date" }
-  | { kind: "available"; info: UpdateInfo }
+  /**
+   * 带上插件返回的 `Update` 句柄：**安装必须复用它**。
+   * 已经查到的更新如果丢了、安装时再 `check()` 一次，就多了一次网络请求，
+   * 也把自己多暴露在一个失败点上前提——v0.6.1 就栽在这里：第一次检查成功、
+   * 点「下载并安装」后第二次 check 超时，用户看到的是「安装失败」。
+   */
+  | { kind: "available"; info: UpdateInfo; update: Update }
   | { kind: "unavailable" }
   | { kind: "failed"; reason: string };
 
@@ -91,6 +97,7 @@ export async function checkForUpdate(
         notes: update.body ?? undefined,
         date: update.date ?? undefined,
       },
+      update,
     };
   } catch (error) {
     return categorizeCheckError(error) === "unavailable"
@@ -102,20 +109,20 @@ export async function checkForUpdate(
 /**
  * 下载并安装更新。
  *
+ * 必须传入**检查阶段拿到的那个 `Update` 句柄**，不要在这里重新 `check()`：
+ * 重新检查等于再请求一次清单端点，既不必要，也把安装成功率绑在了第二次
+ * 网络上（`latest.json` 与安装包是两个不同的地址，前者失败时用户会看到
+ * 「安装失败：error sending request for ... latest.json」，指向的还是清单）。
+ *
  * Tauri 的安装分两步：先 `downloadAndInstall` 把包下载并解压到
- * 暂存区，再 `relaunch` 重启应用让新版本生效。缺少第二步的话
- * 包会一直躺在暂存区，用户看不到任何变化。
+ * 暂存区，再 `relaunch` 重启应用让新版本生效。
  *
  * 调用方需自行展示下载进度——大文件下载可能持续数十秒。
  */
 export async function downloadAndInstall(
+  update: Update,
   onProgress?: (downloaded: number, total: number | null) => void,
 ): Promise<void> {
-  // check() 返回 null 表示服务端没有提供比当前版本更新的包，
-  // 类型上必须收窄后再用，否则下面 .downloadAndInstall 会崩
-  const update = await check();
-  if (!update) throw new Error("没有可安装的更新");
-
   let downloaded = 0;
   let total: number | null = null;
   await update.downloadAndInstall((event) => {
@@ -133,6 +140,24 @@ export async function downloadAndInstall(
         break;
     }
   });
+}
+
+/**
+ * 把安装阶段的错误翻成人话。
+ *
+ * 插件抛的是 reqwest 的原始错误（`error sending request for url (...)`），
+ * 对用户没有信息量；而「下载失败」和「签名校验失败」的处置完全不同——
+ * 前者重试或走浏览器入口，后者只能重新下载。
+ */
+export function describeInstallError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/signature|签名/i.test(raw)) {
+    return "安装包签名校验未通过，已中止。请从发布页重新下载安装包。";
+  }
+  if (/error sending request|dns|connect|timed out|timeout|network/i.test(raw)) {
+    return "下载安装包时网络中断。可以重试，或用下面的浏览器入口手动安装。";
+  }
+  return raw;
 }
 
 /** 安装完成后重启应用。 */

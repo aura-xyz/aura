@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/plugin-updater", () => ({
 }));
 
 import { check } from "@tauri-apps/plugin-updater";
-import { categorizeCheckError, checkForUpdate } from "./updater";
+import { categorizeCheckError, checkForUpdate, describeInstallError } from "./updater";
 
 const mockCheck = vi.mocked(check);
 
@@ -88,20 +88,25 @@ describe("checkForUpdate", () => {
     mockCheck.mockReset();
   });
 
-  it("有新版本时带上版本号与更新说明", async () => {
-    mockCheck.mockResolvedValue(
-      fakeUpdate({ version: "0.6.0", body: "修了一堆", date: "2026-10-17" }),
-    );
-
-    expect(await checkForUpdate("0.5.1")).toEqual({
-      kind: "available",
-      info: {
-        version: "0.6.0",
-        currentVersion: "0.5.1",
-        notes: "修了一堆",
-        date: "2026-10-17",
-      },
+  it("有新版本时带上版本号、更新说明与安装句柄", async () => {
+    const handle = fakeUpdate({
+      version: "0.6.0",
+      body: "修了一堆",
+      date: "2026-10-17",
     });
+    mockCheck.mockResolvedValue(handle);
+
+    const result = await checkForUpdate("0.5.1");
+    expect(result.kind).toBe("available");
+    if (result.kind !== "available") return;
+    expect(result.info).toEqual({
+      version: "0.6.0",
+      currentVersion: "0.5.1",
+      notes: "修了一堆",
+      date: "2026-10-17",
+    });
+    // 必须原样带回插件给的句柄：安装时复用它，不再二次 check
+    expect(result.update).toBe(handle);
   });
 
   it("无可用更新与检查失败必须区分", async () => {
@@ -139,5 +144,32 @@ describe("checkForUpdate", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("describeInstallError", () => {
+  it("网络中断翻成人话（不再把整条 URL 甩给用户）", () => {
+    const msg = describeInstallError(
+      new Error(
+        "error sending request for url (https://github.com/aura-xyz/aura/releases/latest/download/latest.json)",
+      ),
+    );
+    expect(msg).toContain("网络中断");
+    expect(msg).not.toContain("http");
+  });
+
+  it("超时同样归为网络问题", () => {
+    expect(describeInstallError(new Error("operation timed out"))).toContain("网络中断");
+  });
+
+  it("签名校验失败要明确说清楚该怎么处置", () => {
+    expect(
+      describeInstallError(new Error("Signature verification failed")),
+    ).toContain("重新下载");
+  });
+
+  it("认不出的错误原样返回，别把诊断信息吞掉", () => {
+    expect(describeInstallError(new Error("磁盘已满"))).toBe("磁盘已满");
+    expect(describeInstallError("纯字符串")).toBe("纯字符串");
   });
 });

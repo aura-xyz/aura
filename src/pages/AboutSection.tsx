@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   checkForUpdate,
+  describeInstallError,
   downloadAndInstall,
   restartApp,
   type UpdateCheckResult,
@@ -70,16 +72,20 @@ export default function AboutSection() {
     setState({ kind: "checked", result });
   }
 
-  async function handleInstall() {
+  /**
+   * 安装。传入的必须是检查阶段拿到的那个 `Update` 句柄——不要再 check 一次，
+   * 那会多请求一遍清单端点，也就多一个让「安装」平白失败的理由。
+   */
+  async function handleInstall(update: Update) {
     setState({ kind: "downloading", downloaded: 0, total: null });
     try {
-      await downloadAndInstall((downloaded, total) => {
+      await downloadAndInstall(update, (downloaded, total) => {
         setState({ kind: "downloading", downloaded, total });
       });
       setState({ kind: "installed" });
       await restartApp();
     } catch (e) {
-      setState({ kind: "error", message: String(e) });
+      setState({ kind: "error", message: describeInstallError(e) });
     }
   }
 
@@ -87,6 +93,16 @@ export default function AboutSection() {
     state.kind === "checking" ||
     state.kind === "downloading" ||
     state.kind === "installed";
+
+  /**
+   * 提前收窄：安装按钮的 onClick 是个闭包，在 JSX 里判断 `state.result.kind`
+   * 无法把类型带进闭包（TS 会认为 `update` 可能不存在）。先取出来，
+   * 既能安全调用，也保证「安装的就是检查到的那一个」。
+   */
+  const available =
+    state.kind === "checked" && state.result.kind === "available"
+      ? state.result
+      : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -136,22 +152,22 @@ export default function AboutSection() {
             </p>
           )}
 
-          {state.kind === "checked" && state.result.kind === "available" && (
+          {available && (
             <>
               <p className="text-sm">
-                发现新版本 {state.result.info.version}
+                发现新版本 {available.info.version}
                 <span className="ml-2 text-xs text-subtle">
-                  当前 {state.result.info.currentVersion}
+                  当前 {available.info.currentVersion}
                 </span>
               </p>
-              {state.result.info.notes && (
+              {available.info.notes && (
                 <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-subtle">
-                  {state.result.info.notes}
+                  {available.info.notes}
                 </p>
               )}
               <button
                 type="button"
-                onClick={handleInstall}
+                onClick={() => handleInstall(available.update)}
                 disabled={busy}
                 className="mt-1 flex items-center justify-center gap-1.5 rounded-md border border-line bg-bubble py-2 text-sm transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
               >
