@@ -189,3 +189,31 @@ export function fetchRemoteModels(
 export function pullOllamaModel(provider: string, model: string): Promise<number> {
   return invoke("pull_ollama_model", { provider, model });
 }
+
+export interface SkillView {
+  name: string;
+  description: string;
+  version: string;
+  source: "builtin" | "market" | "local" | "workspace";
+  /** 激活期间可用工具白名单；空 = 不收窄（继承模式权限） */
+  allowed_tools: string[];
+  enabled: boolean;
+  /** 技能目录与 SKILL.md 绝对路径 */
+  dir: string;
+  path: string;
+}
+
+/** 列出全部技能（磁盘扫描 + 库里的启用覆盖）。 */
+export function listSkills(): Promise<SkillView[]> {
+  return invoke("list_skills");
+}
+
+/** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
+export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+  return invoke("set_skill_enabled", { name, enabled });
+}
+
+/** 删除技能（连目录一起删）。内置与工作区技能会被后端拒绝。 */
+export function deleteSkill(name: string): Promise<void> {
+  return invoke("delete_skill", { name });
+}

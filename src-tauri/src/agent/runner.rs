@@ -188,6 +188,11 @@ pub struct TurnContext<'a> {
     /// runner 不持有数据库连接，由 `commands.rs` 注入闭包，
     /// 这样存储细节不会渗进 agent 层，也便于测试时替换。
     pub persist_todos: Option<&'a (dyn Fn(Vec<Todo>) + Send + Sync)>,
+    /// 被用户禁用的技能名（v0.6.1）。
+    ///
+    /// 与 `persist_todos` 同一思路：库里查好传进来，agent 层不碰数据库。
+    /// 命中者既不进 L1 索引，也不会被登记为激活技能。
+    pub disabled_skills: &'a [String],
 }
 
 enum Next {
@@ -532,7 +537,10 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         // v0.6.0：每轮重扫技能库。目录只有寥寥几个小文件，相对一次 LLM
         // 往返（~2s）开销可忽略；换来的是会话中途新增的技能当轮即可见，
         // 且 L1 索引始终与磁盘一致。
-        let skills = skill::scan_with_globals(ctx.workspace);
+        let skills = skill::without_disabled(
+            skill::scan_with_globals(ctx.workspace),
+            ctx.disabled_skills,
+        );
         let skill_index = skill::render_index(&skills);
         let system = if use_compact_prompt(is_small, ctx.mode) {
             build_compact_system_prompt(&ws_display, ctx.global_rules, &skill_index)

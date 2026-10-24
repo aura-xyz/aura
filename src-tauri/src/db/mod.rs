@@ -45,6 +45,14 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
              seq INTEGER NOT NULL,
              payload TEXT NOT NULL,
              PRIMARY KEY (session_id, seq)
+         );
+         -- v0.6.1：技能的启用状态覆盖。技能实体永远在磁盘（SKILL.md），
+         -- 库里只记「用户改过什么」，所以没有行的技能 = 默认启用。
+         CREATE TABLE IF NOT EXISTS skills (
+             name TEXT PRIMARY KEY,
+             path TEXT NOT NULL,
+             source TEXT NOT NULL,
+             enabled INTEGER NOT NULL DEFAULT 1
          );",
     )?;
     migrate(&conn)?;
@@ -94,6 +102,61 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), rusq
         params![key, value],
     )?;
     Ok(())
+}
+
+/// 技能的持久化状态。`path` / `source` 是快照（便于排障与审计），
+/// 运行时一律以磁盘扫描结果为准——技能被用户手动挪走后，行里的路径就是旧值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRow {
+    pub name: String,
+    pub path: String,
+    pub source: String,
+    pub enabled: bool,
+}
+
+pub fn load_skill_rows(conn: &Connection) -> Result<Vec<SkillRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached("SELECT name, path, source, enabled FROM skills")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(SkillRow {
+            name: r.get(0)?,
+            path: r.get(1)?,
+            source: r.get(2)?,
+            // SQLite 没有 bool：0 = 禁用，其余（含历史脏值）= 启用
+            enabled: r.get::<_, i64>(3)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 写入启用状态。按 name 覆盖（同一技能名四个来源共用一份状态）。
+pub fn set_skill_enabled(
+    conn: &Connection,
+    name: &str,
+    path: &str,
+    source: &str,
+    enabled: bool,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO skills (name, path, source, enabled) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(name) DO UPDATE SET
+             path = excluded.path,
+             source = excluded.source,
+             enabled = excluded.enabled",
+        params![name, path, source, enabled as i64],
+    )?;
+    Ok(())
+}
+
+pub fn remove_skill_row(conn: &Connection, name: &str) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM skills WHERE name = ?1", params![name])?;
+    Ok(())
+}
+
+/// 被禁用的技能名。runner 每轮开头读一次，用于把技能挡在 L1 索引之外。
+pub fn disabled_skill_names(conn: &Connection) -> Result<Vec<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached("SELECT name FROM skills WHERE enabled = 0")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    rows.collect()
 }
 
 pub fn save_session(
@@ -616,6 +679,40 @@ mod tests {
         let conn = open(&dir.join("t.db")).unwrap();
         save_todos(&conn, "ghost", &[crate::agent::Todo::new("s1", "任务")]).unwrap();
         assert!(load_sessions(&conn).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v0.6.1 技能状态表：按 name 覆盖、禁用名单只由 enabled=0 产生、
+    /// 删除行后回到「默认启用」的语义。
+    #[test]
+    fn skill_states_round_trip() {
+        let dir = std::env::temp_dir().join(format!("aura-db-test-{}-skills", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("skills.db")).unwrap();
+
+        // 空表：没有记录（调用方按「默认启用」处理），禁用名单为空
+        assert!(load_skill_rows(&conn).unwrap().is_empty());
+        assert!(disabled_skill_names(&conn).unwrap().is_empty());
+
+        set_skill_enabled(&conn, "demo", "E:/skills/local/demo", "local", false).unwrap();
+        let rows = load_skill_rows(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "demo");
+        assert!(!rows[0].enabled);
+        assert_eq!(rows[0].source, "local");
+        assert_eq!(disabled_skill_names(&conn).unwrap(), vec!["demo".to_string()]);
+
+        // 再启用：同名覆盖，不新增行
+        set_skill_enabled(&conn, "demo", "E:/skills/local/demo", "local", true).unwrap();
+        let rows = load_skill_rows(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].enabled);
+        assert!(disabled_skill_names(&conn).unwrap().is_empty());
+
+        // 删除行后回到「无记录」状态，而不是留下一条 enabled=1 的残行
+        remove_skill_row(&conn, "demo").unwrap();
+        assert!(load_skill_rows(&conn).unwrap().is_empty());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

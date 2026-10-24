@@ -128,6 +128,33 @@ pub fn scan_with_globals(workspace: &Path) -> Vec<SkillManifest> {
     scan(roots, Some(workspace))
 }
 
+/// 去掉被禁用的技能（v0.6.1）。
+///
+/// 禁用状态存在库里，由调用方读好传进来；这里只做纯过滤，保持本模块
+/// 不依赖数据库。命中后既不进 L1 索引、也不会被登记为激活技能——
+/// 模型看不见的技能不该被调用。
+pub fn without_disabled(skills: Vec<SkillManifest>, disabled: &[String]) -> Vec<SkillManifest> {
+    if disabled.is_empty() {
+        return skills;
+    }
+    skills
+        .into_iter()
+        .filter(|s| !disabled.iter().any(|d| d == &s.name))
+        .collect()
+}
+
+/// 删除策略：只有市场与本地技能允许整目录删除。
+///
+/// 内置技能随应用发布（删了下次更新就回来），工作区技能属于用户的
+/// Git 仓库（删了等于替他删项目文件）——两者只提供「禁用」或让用户自己清理。
+pub fn deletable(source: SkillSource) -> Result<(), &'static str> {
+    match source {
+        SkillSource::Builtin => Err("内置技能随应用发布，不能删除；如不需要可以禁用"),
+        SkillSource::Workspace => Err("工作区技能随项目共享，请在项目的 .agents/skills/ 里删除"),
+        SkillSource::Local | SkillSource::Market => Ok(()),
+    }
+}
+
 /// 扫描给定根目录与（可选的）工作区根，按优先级去重。
 ///
 /// 优先级：Workspace > Local > Market > Builtin。解析失败、目录不存在、
@@ -782,5 +809,39 @@ mod tests {
         assert!(err.contains("demo"), "应列出可用技能帮助模型纠正：{err}");
         assert!(load_skill_body(&ws, "").is_err());
         assert!(load_skill_body(&ws, "  ").is_err());
+    }
+
+    // ---- v0.6.1：禁用过滤与删除策略 ----
+
+    #[test]
+    fn without_disabled_filters_by_exact_name() {
+        let all = vec![
+            manifest("alpha", &[]),
+            manifest("beta", &[]),
+            manifest("beta-extra", &[]),
+        ];
+        // 空名单 = 原样返回（不白跑一次过滤）
+        assert_eq!(without_disabled(all.clone(), &[]).len(), 3);
+        // 精确匹配：禁用 beta 不能连 beta-extra 一起干掉
+        let kept = without_disabled(all.clone(), &["beta".to_string()]);
+        let names: Vec<&str> = kept.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta-extra"]);
+        // 大小写不同不算命中（name 规范本就要求小写，这里是防呆）
+        assert_eq!(
+            without_disabled(all.clone(), &["BETA".to_string()]).len(),
+            3
+        );
+        // 名单里有不存在的名字也不影响
+        assert_eq!(without_disabled(all, &["ghost".to_string()]).len(), 3);
+    }
+
+    #[test]
+    fn deletable_only_allows_market_and_local() {
+        assert!(deletable(SkillSource::Local).is_ok());
+        assert!(deletable(SkillSource::Market).is_ok());
+        // 内置：删了下次更新就回来，没有意义
+        assert!(deletable(SkillSource::Builtin).unwrap_err().contains("内置"));
+        // 工作区：属于用户的 Git 仓库，不能替人删项目文件
+        assert!(deletable(SkillSource::Workspace).unwrap_err().contains("工作区"));
     }
 }

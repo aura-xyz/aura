@@ -196,6 +196,14 @@ pub async fn send_message(
         .and_then(|db| db::load_todos(&db, &session_id).ok())
         .unwrap_or_default();
 
+    // 被禁用的技能：每轮读一次。技能页的开关改了，下一轮发送即生效。
+    let disabled_skills: Vec<String> = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|db| db::disabled_skill_names(&db).ok())
+        .unwrap_or_default();
+
     let result = {
         let mut ctx = TurnContext {
             app: &app,
@@ -213,6 +221,7 @@ pub async fn send_message(
                     let _ = db::save_todos(&db, &session_id, &next);
                 }
             }),
+            disabled_skills: &disabled_skills,
         };
         run_turn(&mut ctx, message).await
     };
@@ -683,6 +692,96 @@ pub async fn pull_ollama_model(
         }),
     );
     Ok(added)
+}
+
+/// 技能在界面上的投影：字段来自磁盘扫描 + 库里的启用覆盖。
+#[derive(serde::Serialize)]
+pub struct SkillView {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    /// builtin | market | local | workspace
+    pub source: String,
+    /// 激活期间可用工具白名单；空 = 不收窄
+    pub allowed_tools: Vec<String>,
+    pub enabled: bool,
+    /// 技能目录与 SKILL.md 的绝对路径（展示与删除都用它）
+    pub dir: String,
+    pub path: String,
+}
+
+/// 列出技能：磁盘扫描为准，库只提供启用状态。
+///
+/// 工作区技能取**当前工作区**（与 runner 的执行目录同一来源）；
+/// 没有工作区时只剩全局三个来源，扫描器会自己跳过不存在的目录。
+#[tauri::command]
+pub fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillView>, String> {
+    let ws = state.workspace.lock().map_err(lock_err)?.clone();
+    let skills = crate::agent::skill::scan_with_globals(&ws);
+    let db = state.db.lock().map_err(lock_err)?;
+    let overrides: HashMap<String, bool> = db::load_skill_rows(&db)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|r| (r.name, r.enabled))
+        .collect();
+    Ok(skills
+        .into_iter()
+        .map(|s| SkillView {
+            // 没有记录 = 默认启用：用户没动过的技能不该被当成关闭
+            enabled: overrides.get(&s.name).copied().unwrap_or(true),
+            name: s.name,
+            description: s.description,
+            version: s.version,
+            source: s.source.as_str().to_string(),
+            allowed_tools: s.allowed_tools,
+            dir: s.dir.to_string_lossy().into_owned(),
+            path: s.dir.join("SKILL.md").to_string_lossy().into_owned(),
+        })
+        .collect())
+}
+
+/// 启用/禁用技能。禁用后不进 L1 索引（模型看不到），也不参与激活。
+#[tauri::command]
+pub fn set_skill_enabled(
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let ws = state.workspace.lock().map_err(lock_err)?.clone();
+    let skills = crate::agent::skill::scan_with_globals(&ws);
+    let Some(sk) = skills.iter().find(|s| s.name == name) else {
+        return Err(format!("技能 {name} 不存在，可能已被移动或删除"));
+    };
+    let db = state.db.lock().map_err(lock_err)?;
+    db::set_skill_enabled(
+        &db,
+        &sk.name,
+        &sk.dir.to_string_lossy(),
+        sk.source.as_str(),
+        enabled,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// 删除技能（连目录一起删）。
+///
+/// **目录只从本轮扫描结果取**，不接受前端传路径——扫描出来的目录必然位于
+/// 我们自己的技能根目录下，因此不存在任意路径删除。内置技能随应用发布、
+/// 工作区技能属于用户的 Git 仓库，两者都不删，只允许禁用/自行清理。
+#[tauri::command]
+pub fn delete_skill(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    let ws = state.workspace.lock().map_err(lock_err)?.clone();
+    let skills = crate::agent::skill::scan_with_globals(&ws);
+    let Some(sk) = skills.iter().find(|s| s.name == name) else {
+        return Err(format!("技能 {name} 不存在，可能已被删除"));
+    };
+    match crate::agent::skill::deletable(sk.source) {
+        Ok(()) => {}
+        Err(msg) => return Err(msg.into()),
+    }
+    std::fs::remove_dir_all(&sk.dir).map_err(|e| format!("删除技能目录失败：{e}"))?;
+    let db = state.db.lock().map_err(lock_err)?;
+    db::remove_skill_row(&db, &name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

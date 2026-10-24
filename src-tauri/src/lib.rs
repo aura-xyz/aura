@@ -6,11 +6,11 @@ pub mod secure;
 pub mod tools;
 
 use commands::{
-    fetch_remote_models, get_api_config, get_global_rules, get_models, get_provider_statuses,
-    get_providers, get_selected_model, get_workspace, load_sessions, pull_ollama_model,
-    refresh_provider_models, remove_session, remove_workspace, save_session, save_todos,
-    send_message, set_api_config, set_global_rules, set_pinned_models, set_providers,
-    set_selected_model, set_workspace, stop_message, AppState,
+    delete_skill, fetch_remote_models, get_api_config, get_global_rules, get_models,
+    get_provider_statuses, get_providers, get_selected_model, get_workspace, list_skills,
+    load_sessions, pull_ollama_model, refresh_provider_models, remove_session, remove_workspace,
+    save_session, save_todos, send_message, set_api_config, set_global_rules, set_pinned_models,
+    set_providers, set_selected_model, set_skill_enabled, set_workspace, stop_message, AppState,
 };
 use tauri::Manager;
 
@@ -203,7 +203,10 @@ pub fn run() {
             fetch_remote_models,
             set_pinned_models,
             pull_ollama_model,
-            remove_workspace
+            remove_workspace,
+            list_skills,
+            set_skill_enabled,
+            delete_skill
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
