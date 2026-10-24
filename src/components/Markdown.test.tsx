@@ -45,3 +45,42 @@ describe("Markdown 代码块语言标签", () => {
     expect(screen.queryByText("const")).toBeNull();
   });
 });
+
+/**
+ * 高亮语言注册（v0.6.0）。
+ *
+ * rehype-highlight 的 `languages` 选项是**替换**而非追加默认集——
+ * 只传新增语言会让 bash/rust/python 静默失去高亮（界面只是没了颜色，
+ * 不报错）。这一组断言钉住三件事：默认集还在、新注册的真的在解析、
+ * 未注册的不解析。
+ */
+describe("Markdown 高亮语言注册", () => {
+  it("默认语言仍然高亮（common 集没被 languages 选项顶掉）", async () => {
+    const { container } = await renderMd("```rust\nfn main() {}\n```");
+    expect(container.querySelector('code [class*="hljs-"]')).not.toBeNull();
+  });
+
+  it("补充注册的语言真正生效（http：自动检测对它是零 token）", async () => {
+    // 为什么挑 http 做判别：未注册时 rehype-highlight 的 highlight 抛错后
+    // 走 highlightAuto 兜底，而自动检测对 HTTP 报文完全无感（零 token）——
+    // 所以 hljs-meta 只可能来自显式注册，这条断言骗不了人。
+    // （toml 之类不行：自动检测能猜个八九不离十，断言会假绿。）
+    const { container } = await renderMd(
+      "```http\nPOST /v1/chat HTTP/1.1\nHost: api.example.com\n```",
+    );
+    expect(container.querySelector("code .hljs-meta")).not.toBeNull();
+  });
+
+  it("toml 代码块有高亮（ini 语法覆盖，无独立 toml 文件）", async () => {
+    // 这条盯用户可见结果：```toml 必须有颜色。ini 的别名含 toml，
+    // 注册 ini 即覆盖；即便换实现，结论不能变。
+    const { container } = await renderMd('```toml\n[package]\nname = "aura"\n```');
+    expect(container.querySelector('code [class*="hljs-"]')).not.toBeNull();
+    expect(screen.getByText("TOML")).toBeInTheDocument();
+  });
+
+  it("未注册的语言不高亮（对照组）", async () => {
+    const { container } = await renderMd("```nim\nvar x = 1\n```");
+    expect(container.querySelector('code [class*="hljs-"]')).toBeNull();
+  });
+});

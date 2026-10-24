@@ -4,6 +4,18 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { common } from "lowlight";
+// common 集之外补充的语言。highlight.js 不随包发布这些子模块的类型，
+// 声明在 src/vite-env.d.ts。注意两点：
+// - TOML 没有独立语法文件，highlight.js 用 ini 语法覆盖（ini 的别名含
+//   toml，注册 ini 后 ```toml 块即可高亮，已实测产出 hljs-attr 等 token）；
+// - zig 是第三方插件，highlight.js 未内置，不纳入。
+import ini from "highlight.js/lib/languages/ini";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import powershell from "highlight.js/lib/languages/powershell";
+import nginx from "highlight.js/lib/languages/nginx";
+import protobuf from "highlight.js/lib/languages/protobuf";
+import http from "highlight.js/lib/languages/http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "katex/dist/katex.min.css";
 
@@ -30,6 +42,7 @@ const LANG_LABELS: Record<string, string> = {
   go: "Go",
   graphql: "GraphQL",
   html: "HTML",
+  ini: "INI",
   java: "Java",
   javascript: "JavaScript",
   json: "JSON",
@@ -69,7 +82,29 @@ function langLabel(raw: string): string {
 // 而 react-markdown 的解析（remark 词法分析 + 高亮 + KaTeX）并不便宜。
 // 长对话里每个历史 block 都挂着一个 Markdown，全量重解析会拖垮流式渲染。
 const REMARK_PLUGINS = [remarkGfm, remarkMath];
-const REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight];
+// languages 选项是**替换**而非追加（rehype-highlight: settings.languages || common），
+// 因此必须显式摊开 common 再补额外语言——只传新增项会让 bash/rust/python 等
+// 全部失去高亮。补的语言：ini（覆盖 TOML）、dockerfile、powershell、
+// nginx、protobuf、http。
+//
+// 插件+选项必须写成**元组**：裸数组字面量会被推断成 `(Plugin|对象)[]`，
+// 赋给 react-markdown 的 PluggableList 时报「position 0 不匹配」，
+// 所以这里显式标注元组类型。
+const HIGHLIGHT_PLUGIN: [typeof rehypeHighlight, Parameters<typeof rehypeHighlight>[0]] = [
+  rehypeHighlight,
+  {
+    languages: {
+      ...common,
+      ini,
+      dockerfile,
+      powershell,
+      nginx,
+      protobuf,
+      http,
+    },
+  },
+];
+const REHYPE_PLUGINS = [rehypeKatex, HIGHLIGHT_PLUGIN];
 
 /**
  * react-markdown 没有 `isBlock` 参数，只能靠 children 结构判断：
@@ -89,7 +124,7 @@ const COMPONENTS = {
       {children}
     </a>
   ),
-  /** 代码块右上角标出语言；行内代码由 CSS 自行处理，不在此处介入 */
+  /** 代码块左上角标出语言；行内代码由 CSS 自行处理，不在此处介入 */
   pre: ({ children }: { children?: React.ReactNode }) => {
     const lang = pickLang(children);
     return (

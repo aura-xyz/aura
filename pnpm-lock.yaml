@@ -35,9 +35,15 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      highlight.js:
+        specifier: 11.11.2
+        version: 11.11.2
       katex:
         specifier: ^0.19.0
         version: 0.19.0
+      lowlight:
+        specifier: 3.3.0
+        version: 3.3.0
       lucide-react:
         specifier: ^1.52.0
         version: 1.52.0(@types/react@19.3.0)(react@19.3.0)
