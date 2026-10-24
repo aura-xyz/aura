@@ -1,0 +1,17 @@
+{
+    "platforms":  [
+                      {
+                          "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.0/Aura_0.6.0_win_x64_Setup.exe",
+                          "architecture":  "x86_64",
+                          "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjlNRXZNZW15aFRVMUlCVXEwYlQvSTVxMTFLbnUvWHlVajUvRjMyQ1ZaOVJIaVFsa3dod0prV2lSZnJ6dVdMc0pNRUtVMEQ4S3BWM0NQVlREWHFHL1FBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODA3MzgzCWZpbGU6YXVyYV8wLjYuMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC42LjAKOG9lbDIxUnFTajRKUWtmMFl4ZXppRmlnOEhtemdjK1lvcTZHc0prRS9pOTdITmRGTG5Sck8vdTh1cy85cnVGVGQzbDBmeUpGanlGRTU1K0dicER5QWc9PQo="
+                      },
+                      {
+                          "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.0/Aura_0.6.0_win_x64.msi",
+                          "architecture":  "x86_64-msi",
+                          "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjh0emM2L0phVDc1MVhQOHNKUFllSjdET2huRlpOM2JzTWdDUnFRaWpVNERSMmdJSHl5TjUwVGo4UmZDMHBTSnhZK1dWdlFDdlNOM0dxMnQyVElQb2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODA3MzgzCWZpbGU6YXVyYV8wLjYuMF94NjRfZW4tVVMubXNpCXZlcnNpb246MC42LjAKaWVqRlVRQVJIMXY1WEw4KzlES0E2Nkp6Zmx6TXpkUEU2c2FBQTdCQzlIT3o2eDRQOEVoeFdoNlFUMDBJaWVRazZmTXhCQTZvY0w0RUdXaFZYcFBrQUE9PQo="
+                      }
+                  ],
+    "pub_date":  "2026-10-24T02:23:12Z",
+    "version":  "0.6.0",
+    "notes":  "## 更新内容\n- 侧边栏改为悬浮卡片形态：四周留白、圆角细边框，标题栏去掉分割线\n- 收起侧边栏时，设置按钮随下边缘平滑上升，不再先跳上去再收边缘\n- 对话发出第一条消息后，工作区即锁定不可更改，一个对话唯一对应一个工作区\n- 输入区改版：模式切换与模型选择收进输入卡片，布局更紧凑\n- 代码块语言标识移至左上角；新增 ini（TOML）、Dockerfile、PowerShell、nginx、protobuf、HTTP 的语法高亮\n- API Key 改为加密存储（Windows DPAPI），不再以明文落盘；更换 Windows 用户或重装系统后需重新填写密钥"
+}

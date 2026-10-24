@@ -32,6 +32,26 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/**
+ * 更新失败的兜底出口：浏览器打开最新发布页。
+ *
+ * 内置更新要经 GitHub 的发布资产域名（release-assets.githubusercontent.com），
+ * 该域名在国内常被阻断且多数加速工具未覆盖——此时应用内检查/下载必然失败，
+ * 而用户浏览器往往能正常访问。给一条可见的出路，好过只留一句报错。
+ */
+function BrowserFallback({ className = "" }: { className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => openUrl(`${REPO_URL}/releases/latest`)}
+      className={`flex items-center gap-1 self-start text-xs text-brand transition-opacity hover:underline ${className}`}
+    >
+      <ExternalLink size={12} className="shrink-0" />
+      在浏览器中打开下载页
+    </button>
+  );
+}
+
 export default function AboutSection() {
   const [version, setVersion] = useState("");
   const [state, setState] = useState<CheckState>({ kind: "idle" });
@@ -159,6 +179,9 @@ export default function AboutSection() {
               <p className="ml-6 break-all text-xs text-subtle">
                 {state.result.reason}
               </p>
+              {/* 网络受限时（如 GitHub 资产域名不可达）检查永远失败，
+                  给一条到发布页的出路——浏览器往往能正常打开。 */}
+              <BrowserFallback className="ml-6 mt-0.5" />
             </div>
           )}
 
@@ -193,10 +216,14 @@ export default function AboutSection() {
           )}
 
           {state.kind === "error" && (
-            <p className="flex items-start gap-2 text-sm text-danger">
-              <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-              <span>安装失败：{state.message}</span>
-            </p>
+            <div className="flex flex-col gap-1.5">
+              <p className="flex items-start gap-2 text-sm text-danger">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <span>安装失败：{state.message}</span>
+              </p>
+              {/* 内置下载同样要经 GitHub 资产域名；失败时引导用户去浏览器。 */}
+              <BrowserFallback className="ml-6" />
+            </div>
           )}
 
           {state.kind === "idle" && (
