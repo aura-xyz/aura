@@ -11,7 +11,9 @@ import Markdown from "./Markdown";
 const UserBubble = memo(function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble px-4 py-3 text-[15px] leading-relaxed">
+      {/* 品牌蓝浅底是「归属」锚点：AI 侧维持灰底，对话归属一眼可辨。
+          色值与灰底的可辨识度由 lib/contrast.test.ts 钉住。 */}
+      <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed">
         {content}
       </div>
     </div>

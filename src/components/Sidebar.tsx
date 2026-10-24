@@ -251,9 +251,18 @@ const isOpen = expanded.has(w);
                           <div
                             data-ctx-session={s.id}
                             className={`group flex items-center rounded-tag transition-colors ${
-                              s.id === activeId ? "bg-bubble" : "hover:bg-bubble"
+                              // 选中态用品牌蓝浅底 + 左侧品牌色竖线，与页签激活线同源
+                              s.id === activeId
+                                ? "bg-bubble-user font-medium text-foreground"
+                                : "hover:bg-bubble"
                             }`}
                           >
+                            {s.id === activeId && (
+                              <span
+                                aria-hidden="true"
+                                className="ml-1 h-4 w-0.5 shrink-0 rounded-full bg-brand"
+                              />
+                            )}
                             {renamingId === s.id ? (
                               <input
                                 autoFocus
