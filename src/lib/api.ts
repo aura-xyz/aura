@@ -226,19 +226,116 @@ export interface MarketSkillView {
   version: string;
   tags: string[];
   author: string;
+  /** 这条来自哪个源（官方 / 自定义源名） */
+  registry: string;
   /** 市场目录下是否已安装 */
   installed: boolean;
+  /** 已安装版本（空串 = 读不出）；与 version 不同即可提示更新 */
+  installed_version: string;
 }
 
-/** 拉取官方技能市场清单（网络请求，失败需重试）。 */
-export function listMarketSkills(): Promise<MarketSkillView[]> {
+/** 市场清单 + 各源失败原因。单个源挂掉不该让整个市场空白。 */
+export interface MarketList {
+  skills: MarketSkillView[];
+  errors: string[];
+}
+
+/** 拉取全部源的技能清单（网络请求，失败需重试）。 */
+export function listMarketSkills(): Promise<MarketList> {
   return invoke("list_market_skills");
 }
 
+export type FindingSeverity = "high" | "medium" | "info";
+
+export interface AuditFinding {
+  severity: FindingSeverity;
+  /** 规则 id，稳定标识 */
+  rule: string;
+  /** 相对技能根的路径 */
+  file: string;
+  /** 行号，0 = 文件级问题 */
+  line: number;
+  note: string;
+  excerpt: string;
+}
+
+export interface SkillAudit {
+  findings: AuditFinding[];
+  file_count: number;
+  total_bytes: number;
+  /** 是否含可执行脚本 */
+  has_scripts: boolean;
+  scanned_files: number;
+}
+
+/** 安装前审查报告（下载 + 校验 + 解包 + 扫描，不写入磁盘）。 */
+export interface SkillInspection {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  registry: string;
+  already_installed: boolean;
+  installed_version: string;
+  /** frontmatter 里的 name，可能与目录 id 不同 */
+  skill_name: string;
+  /** 技能申请的工具范围；空 = 不收窄 */
+  tools: string[];
+  package_files: string[];
+  bytes: number;
+  audit: SkillAudit;
+}
+
+export interface InstallSummary {
+  version: string;
+  skill_name: string;
+  /** 更新时保留下来的用户文件 */
+  kept: string[];
+  high: number;
+  medium: number;
+  has_scripts: boolean;
+  file_count: number;
+}
+
+/** 一个市场来源。官方源 removable=false，不可删除。 */
+export interface SkillSourceView {
+  name: string;
+  url: string;
+  removable: boolean;
+  repo: string;
+}
+
+export function listSkillSources(): Promise<SkillSourceView[]> {
+  return invoke("list_skill_sources");
+}
+
+/** 添加自定义源（仅 GitHub 仓库根地址），返回更新后的源列表。 */
+export function addSkillSource(url: string): Promise<SkillSourceView[]> {
+  return invoke("add_skill_source", { url });
+}
+
+export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
+  return invoke("remove_skill_source", { url });
+}
+
 /**
- * 安装市场技能。后端会以服务端清单为准重新取一次地址与哈希，
- * 前端不传 URL——避免「界面传什么就装什么」。
+ * 下载并审查一个市场技能，返回权限与风险清单。不写入任何东西——
+ * 用户看过报告后才会真正安装。
  */
-export function installMarketSkill(id: string): Promise<void> {
-  return invoke("install_market_skill", { id });
+export function inspectMarketSkill(id: string): Promise<SkillInspection> {
+  return invoke("inspect_market_skill", { id });
+}
+
+/**
+ * 安装/更新市场技能。后端会以服务端清单为准重新解析地址与哈希，
+ * 前端不传 URL——避免「界面传什么就装什么」。
+ *
+ * `acceptRisky` 只是「用户已看过高危清单」的确认位，不能跳过审查本身。
+ */
+export function installMarketSkill(
+  id: string,
+  acceptRisky: boolean,
+  update: boolean,
+): Promise<InstallSummary> {
+  return invoke("install_market_skill", { id, acceptRisky, update });
 }

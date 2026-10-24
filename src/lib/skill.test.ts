@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { MarketSkillView, SkillView } from "./api";
+import type { AuditFinding, MarketSkillView, SkillView } from "./api";
 import {
+  auditCounts,
+  auditHeadline,
   canDelete,
+  canUpdate,
   deleteBlockedReason,
   enabledCount,
   filterMarket,
+  formatBytes,
+  groupFindings,
   groupSkills,
+  permissionLines,
+  SEVERITY_LABEL,
   SOURCE_LABEL,
   toolsLabel,
 } from "./skill";
@@ -109,7 +116,9 @@ describe("filterMarket", () => {
       version: "1.0.0",
       tags: ["development", "mcp"],
       author: "anthropics",
+      registry: "官方",
       installed: false,
+      installed_version: "",
     },
     {
       id: "code-review",
@@ -118,7 +127,9 @@ describe("filterMarket", () => {
       version: "0.2.0",
       tags: ["review"],
       author: "aura",
+      registry: "官方",
       installed: true,
+      installed_version: "0.2.0",
     },
   ];
 
@@ -142,5 +153,105 @@ describe("filterMarket", () => {
     expect(filterMarket(items, "MCP").length).toBe(1);
     expect(filterMarket(items, "mcp").length).toBe(1);
     expect(filterMarket(items, "zzz")).toEqual([]);
+  });
+});
+
+describe("审查报告", () => {
+  function finding(
+    partial: Partial<AuditFinding> & Pick<AuditFinding, "severity" | "rule">,
+  ): AuditFinding {
+    return {
+      file: "SKILL.md",
+      line: 5,
+      note: `${partial.rule} 的说明`,
+      excerpt: "",
+      ...partial,
+    };
+  }
+
+  it("按严重度计数", () => {
+    const counts = auditCounts({
+      findings: [
+        finding({ severity: "high", rule: "rm_rf" }),
+        finding({ severity: "high", rule: "ssh_private_key" }),
+        finding({ severity: "medium", rule: "sudo" }),
+        finding({ severity: "info", rule: "ignore_previous" }),
+      ],
+    });
+    expect(counts).toEqual({ high: 2, medium: 1, info: 1 });
+    expect(auditCounts({ findings: [] })).toEqual({ high: 0, medium: 0, info: 0 });
+  });
+
+  it("高危排前面，同级保持后端顺序（文件+行号）", () => {
+    const info = finding({ severity: "info", rule: "i", line: 1 });
+    const high = finding({ severity: "high", rule: "h", line: 9 });
+    const medium = finding({ severity: "medium", rule: "m", line: 3 });
+    const high2 = finding({ severity: "high", rule: "h2", line: 2 });
+    expect(groupFindings([info, high, medium, high2]).map((f) => f.rule)).toEqual([
+      "h",
+      "h2",
+      "m",
+      "i",
+    ]);
+  });
+
+  it("摘要文案随最高严重度变化", () => {
+    expect(auditHeadline({ high: 2, medium: 0, info: 0 })).toContain("2 条高危");
+    expect(auditHeadline({ high: 0, medium: 1, info: 3 })).toContain("1 条需注意");
+    expect(auditHeadline({ high: 0, medium: 0, info: 2 })).toContain("仅有提示");
+    expect(auditHeadline({ high: 0, medium: 0, info: 0 })).toContain("未发现可疑");
+  });
+
+  it("权限说明：空工具范围要写清楚是「不限」", () => {
+    expect(permissionLines([], false)).toEqual([
+      "工具范围：不限（完全继承当前会话模式的权限）",
+    ]);
+    const withScript = permissionLines(["read_file", "run_script"], true);
+    expect(withScript[0]).toContain("read_file、run_script");
+    expect(withScript[1]).toContain("可执行脚本");
+  });
+
+  it("严重度文案齐全", () => {
+    expect(SEVERITY_LABEL).toEqual({ high: "高危", medium: "注意", info: "提示" });
+  });
+});
+
+describe("canUpdate", () => {
+  const base: MarketSkillView = {
+    id: "x",
+    name: "X",
+    description: "",
+    version: "2.0.0",
+    tags: [],
+    author: "",
+    registry: "官方",
+    installed: true,
+    installed_version: "1.0.0",
+  };
+
+  it("已安装且版本不同才提示更新", () => {
+    expect(canUpdate(base)).toBe(true);
+  });
+
+  it("未安装不给更新", () => {
+    expect(canUpdate({ ...base, installed: false })).toBe(false);
+  });
+
+  it("版本读不出（空串）时不给更新，避免每次刷新都提示", () => {
+    expect(canUpdate({ ...base, installed_version: "" })).toBe(false);
+    expect(canUpdate({ ...base, version: "" })).toBe(false);
+  });
+
+  it("版本相同不提示", () => {
+    expect(canUpdate({ ...base, installed_version: "2.0.0" })).toBe(false);
+  });
+});
+
+describe("formatBytes", () => {
+  it("按量级切换单位", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(900)).toBe("900 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
   });
 });

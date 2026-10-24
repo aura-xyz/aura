@@ -53,6 +53,12 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
              path TEXT NOT NULL,
              source TEXT NOT NULL,
              enabled INTEGER NOT NULL DEFAULT 1
+         );
+         -- v0.6.3：市场自定义源。官方源写死在代码里（不可删），这里只存
+         -- 用户添加的 GitHub 仓库；url 已归一化为 raw 基址。
+         CREATE TABLE IF NOT EXISTS skill_sources (
+             url TEXT PRIMARY KEY,
+             name TEXT NOT NULL
          );",
     )?;
     migrate(&conn)?;
@@ -157,6 +163,39 @@ pub fn disabled_skill_names(conn: &Connection) -> Result<Vec<String>, rusqlite::
     let mut stmt = conn.prepare_cached("SELECT name FROM skills WHERE enabled = 0")?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
     rows.collect()
+}
+
+/// 用户添加的市场源。官方源不在表里（写死在代码里，不可删）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRow {
+    pub name: String,
+    pub url: String,
+}
+
+pub fn load_skill_sources(conn: &Connection) -> Result<Vec<SourceRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached("SELECT name, url FROM skill_sources ORDER BY name")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(SourceRow {
+            name: r.get(0)?,
+            url: r.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 添加源。同 url 重复添加只更新名字（用户改了个称呼不该报错）。
+pub fn add_skill_source(conn: &Connection, url: &str, name: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO skill_sources (url, name) VALUES (?1, ?2)
+         ON CONFLICT(url) DO UPDATE SET name = excluded.name",
+        params![url, name],
+    )?;
+    Ok(())
+}
+
+pub fn remove_skill_source(conn: &Connection, url: &str) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM skill_sources WHERE url = ?1", params![url])?;
+    Ok(())
 }
 
 pub fn save_session(
@@ -712,6 +751,36 @@ mod tests {
         // 删除行后回到「无记录」状态，而不是留下一条 enabled=1 的残行
         remove_skill_row(&conn, "demo").unwrap();
         assert!(load_skill_rows(&conn).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skill_sources_round_trip() {
+        let dir = std::env::temp_dir().join(format!("aura-db-test-{}-sources", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("sources.db")).unwrap();
+
+        // 官方源不入库，空表就是「只有官方源」
+        assert!(load_skill_sources(&conn).unwrap().is_empty());
+
+        add_skill_source(&conn, "https://raw.githubusercontent.com/team/skills/HEAD/", "skills")
+            .unwrap();
+        add_skill_source(&conn, "https://raw.githubusercontent.com/other/kit/HEAD/", "kit")
+            .unwrap();
+        let rows = load_skill_sources(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "kit", "按名字排序，界面顺序稳定");
+
+        // 同 url 再添加：只改名，不新增行
+        add_skill_source(&conn, "https://raw.githubusercontent.com/team/skills/HEAD/", "团队技能")
+            .unwrap();
+        let rows = load_skill_sources(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.name == "团队技能"));
+
+        remove_skill_source(&conn, "https://raw.githubusercontent.com/other/kit/HEAD/").unwrap();
+        assert_eq!(load_skill_sources(&conn).unwrap().len(), 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }

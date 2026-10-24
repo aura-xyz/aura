@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,13 +8,21 @@ const {
   setEnabledMock,
   deleteSkillMock,
   listMarketMock,
+  inspectMarketMock,
   installMarketMock,
+  listSourcesMock,
+  addSourceMock,
+  removeSourceMock,
 } = vi.hoisted(() => ({
   listSkillsMock: vi.fn(),
   setEnabledMock: vi.fn(),
   deleteSkillMock: vi.fn(),
   listMarketMock: vi.fn(),
+  inspectMarketMock: vi.fn(),
   installMarketMock: vi.fn(),
+  listSourcesMock: vi.fn(),
+  addSourceMock: vi.fn(),
+  removeSourceMock: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -22,10 +30,19 @@ vi.mock("../lib/api", () => ({
   setSkillEnabled: setEnabledMock,
   deleteSkill: deleteSkillMock,
   listMarketSkills: listMarketMock,
+  inspectMarketSkill: inspectMarketMock,
   installMarketSkill: installMarketMock,
+  listSkillSources: listSourcesMock,
+  addSkillSource: addSourceMock,
+  removeSkillSource: removeSourceMock,
 }));
 
-import type { MarketSkillView, SkillView } from "../lib/api";
+import type {
+  MarketSkillView,
+  SkillInspection,
+  SkillSourceView,
+  SkillView,
+} from "../lib/api";
 import SkillsPage from "./SkillsPage";
 
 function skill(
@@ -53,19 +70,68 @@ function marketItem(partial: Partial<MarketSkillView> & Pick<MarketSkillView, "i
     version: "1.0.0",
     tags: [],
     author: "",
+    registry: "官方",
     installed: false,
+    installed_version: "",
     ...partial,
   };
 }
+
+const OFFICIAL_SOURCE: SkillSourceView = {
+  name: "官方",
+  url: "https://raw.githubusercontent.com/aura-xyz/aura-skill-registry/main/",
+  removable: false,
+  repo: "https://github.com/aura-xyz/aura-skill-registry",
+};
+
+/** 审查报告（默认无风险）。 */
+function inspection(partial: Partial<SkillInspection> = {}): SkillInspection {
+  return {
+    id: "mcp-builder",
+    name: "MCP 服务器构建",
+    description: "说明",
+    version: "1.0.0",
+    registry: "官方",
+    already_installed: false,
+    installed_version: "",
+    skill_name: "mcp-builder",
+    tools: ["read_file"],
+    package_files: ["SKILL.md"],
+    bytes: 2048,
+    audit: {
+      findings: [],
+      file_count: 1,
+      total_bytes: 2048,
+      has_scripts: false,
+      scanned_files: 1,
+    },
+    ...partial,
+  };
+}
+
+const SUMMARY = {
+  version: "1.0.0",
+  skill_name: "mcp-builder",
+  kept: [],
+  high: 0,
+  medium: 0,
+  has_scripts: false,
+  file_count: 1,
+};
 
 beforeEach(() => {
   listSkillsMock.mockReset();
   setEnabledMock.mockReset();
   deleteSkillMock.mockReset();
   listMarketMock.mockReset();
+  inspectMarketMock.mockReset();
   installMarketMock.mockReset();
+  listSourcesMock.mockReset();
+  addSourceMock.mockReset();
+  removeSourceMock.mockReset();
   // 默认市场为空：既有用例不必关心市场，各自按需覆盖
-  listMarketMock.mockResolvedValue([]);
+  listMarketMock.mockResolvedValue({ skills: [], errors: [] });
+  listSourcesMock.mockResolvedValue([OFFICIAL_SOURCE]);
 });
 
 describe("SkillsPage", () => {
@@ -177,24 +243,28 @@ describe("SkillsPage", () => {
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
   });
 
-  // ---- 市场（v0.6.1 第二段） ----
+  // ---- 市场（v0.6.1 / v0.6.3 加固） ----
 
   it("市场清单渲染卡片，可按名称/标签搜索", async () => {
     listSkillsMock.mockResolvedValue([]);
-    listMarketMock.mockResolvedValue([
-      marketItem({
-        id: "mcp-builder",
-        name: "MCP 服务器构建",
-        tags: ["development", "mcp"],
-        installed: true,
-      }),
-      marketItem({ id: "code-review", name: "代码审查", tags: ["review"] }),
-    ]);
+    listMarketMock.mockResolvedValue({
+      skills: [
+        marketItem({
+          id: "mcp-builder",
+          name: "MCP 服务器构建",
+          tags: ["development", "mcp"],
+          installed: true,
+          installed_version: "1.0.0",
+        }),
+        marketItem({ id: "code-review", name: "代码审查", tags: ["review"] }),
+      ],
+      errors: [],
+    });
     render(<SkillsPage onClose={vi.fn()} />);
 
     expect(await screen.findByText("MCP 服务器构建")).toBeInTheDocument();
     expect(screen.getByText("代码审查")).toBeInTheDocument();
-    // 已安装的只给角标，不再给安装按钮
+    // 已安装同版本：只给角标，不再给按钮
     expect(screen.getByText("已安装")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "安装" })).toHaveLength(1);
 
@@ -209,37 +279,146 @@ describe("SkillsPage", () => {
     expect(screen.getByText("没有匹配的技能。")).toBeInTheDocument();
   });
 
-  it("点击安装调用命令、标记已安装并刷新本地列表", async () => {
+  it("点安装先弹审查报告，确认后才调用安装命令", async () => {
     listSkillsMock.mockResolvedValue([]);
-    listMarketMock.mockResolvedValue([
-      marketItem({ id: "mcp-builder", name: "MCP 服务器构建" }),
-    ]);
-    installMarketMock.mockResolvedValue(undefined);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "mcp-builder", name: "MCP 服务器构建" })],
+      errors: [],
+    });
+    inspectMarketMock.mockResolvedValue(inspection());
+    installMarketMock.mockResolvedValue(SUMMARY);
     render(<SkillsPage onClose={vi.fn()} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
-    expect(installMarketMock).toHaveBeenCalledWith("mcp-builder");
-    // 装完立刻变成「已安装」，并重新拉本地列表（第二次）
-    expect(await screen.findByText("已安装")).toBeInTheDocument();
+    expect(inspectMarketMock).toHaveBeenCalledWith("mcp-builder");
+
+    const dialog = await screen.findByRole("dialog");
+    // 审查报告展示前不落盘
+    expect(installMarketMock).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("申请的权限")).toBeInTheDocument();
+    expect(within(dialog).getByText(/工具范围：read_file/)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "安装" }));
+    // 干净包：不需要高危确认，首次安装
+    expect(installMarketMock).toHaveBeenCalledWith("mcp-builder", false, false);
+    // 装完立刻刷新本地列表并给出回执
     await waitFor(() => expect(listSkillsMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/已安装「MCP 服务器构建」/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("安装失败时给出后端原因，不标记已安装", async () => {
+  it("有高危内容时按钮变「仍然安装」，确认位随之为 true", async () => {
     listSkillsMock.mockResolvedValue([]);
-    listMarketMock.mockResolvedValue([marketItem({ id: "x", name: "X 技能" })]);
-    installMarketMock.mockRejectedValue("技能包校验失败（sha256 不匹配）");
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "danger", name: "危险技能" })],
+      errors: [],
+    });
+    inspectMarketMock.mockResolvedValue(
+      inspection({
+        id: "danger",
+        name: "危险技能",
+        audit: {
+          findings: [
+            {
+              severity: "high",
+              rule: "rm_rf",
+              file: "SKILL.md",
+              line: 5,
+              note: "递归强制删除文件",
+              excerpt: "rm -rf ./dist",
+            },
+          ],
+          file_count: 1,
+          total_bytes: 100,
+          has_scripts: true,
+          scanned_files: 1,
+        },
+      }),
+    );
+    installMarketMock.mockResolvedValue(SUMMARY);
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("高危")).toBeInTheDocument();
+    expect(within(dialog).getByText("递归强制删除文件")).toBeInTheDocument();
+    expect(within(dialog).getByText("rm -rf ./dist")).toBeInTheDocument();
+    expect(within(dialog).getByText(/包含可执行脚本/)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "仍然安装" }));
+    expect(installMarketMock).toHaveBeenCalledWith("danger", true, false);
+  });
+
+  it("审查失败只提示原因，不弹窗也不安装", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "x", name: "X 技能" })],
+      errors: [],
+    });
+    inspectMarketMock.mockRejectedValue("技能包校验失败（sha256 不匹配）");
     render(<SkillsPage onClose={vi.fn()} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
     expect(await screen.findByText(/sha256 不匹配/)).toBeInTheDocument();
-    // 失败不该把卡片标成已安装
-    expect(screen.getByRole("button", { name: "安装" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(installMarketMock).not.toHaveBeenCalled();
+  });
+
+  it("安装失败时弹窗不关，错误显示在弹窗内可重试", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "x", name: "X 技能" })],
+      errors: [],
+    });
+    inspectMarketMock.mockResolvedValue(inspection({ id: "x", name: "X 技能" }));
+    installMarketMock.mockRejectedValue("检测到 1 条高危内容，确认后才会安装");
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "安装" }));
+    expect(await within(dialog).findByText(/高危内容/)).toBeInTheDocument();
+    // 弹窗还在，用户可以看清后重试
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("已安装且版本不同时给「更新」入口，确认后按更新安装", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [
+        marketItem({
+          id: "mcp-builder",
+          name: "MCP 服务器构建",
+          version: "2.0.0",
+          installed: true,
+          installed_version: "1.0.0",
+        }),
+      ],
+      errors: [],
+    });
+    inspectMarketMock.mockResolvedValue(
+      inspection({ version: "2.0.0", already_installed: true, installed_version: "1.0.0" }),
+    );
+    installMarketMock.mockResolvedValue({ ...SUMMARY, version: "2.0.0" });
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "更新到 v2.0.0" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/已安装 v1.0.0，将更新到 v2.0.0/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/你自己加进技能目录的文件会保留/)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "更新" }));
+    expect(installMarketMock).toHaveBeenCalledWith("mcp-builder", false, true);
+    expect(await screen.findByText(/已更新「MCP 服务器构建」到 v2.0.0/)).toBeInTheDocument();
   });
 
   it("市场清单失败不影响本地技能，且可重试", async () => {
     listSkillsMock.mockResolvedValue([LOCAL]);
-    listMarketMock.mockRejectedValueOnce("连接超时").mockResolvedValueOnce([]);
+    listMarketMock
+      .mockRejectedValueOnce("连接超时")
+      .mockResolvedValueOnce({ skills: [], errors: [] });
     render(<SkillsPage onClose={vi.fn()} />);
 
     // 本地列表照常可用
@@ -247,5 +426,65 @@ describe("SkillsPage", () => {
     expect(await screen.findByText(/获取市场清单失败：连接超时/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("注册表里暂时没有技能。")).toBeInTheDocument();
+  });
+
+  it("单个源失败时仍展示其它源的条目，并说明是哪个源", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "ok", name: "可用条目" })],
+      errors: ["团队：https://… 返回 HTTP 404"],
+    });
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    expect(await screen.findByText("可用条目")).toBeInTheDocument();
+    expect(screen.getByText(/部分来源拉取失败：团队/)).toBeInTheDocument();
+  });
+
+  it("来源区块展示官方源（不可删），可添加与移除自定义源", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    const custom: SkillSourceView = {
+      name: "skills",
+      url: "https://raw.githubusercontent.com/team/skills/HEAD/",
+      removable: true,
+      repo: "https://raw.githubusercontent.com/team/skills/HEAD/",
+    };
+    addSourceMock.mockResolvedValue([OFFICIAL_SOURCE, custom]);
+    removeSourceMock.mockResolvedValue([OFFICIAL_SOURCE]);
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    expect(await screen.findByText("官方")).toBeInTheDocument();
+    // 官方源没有移除按钮
+    expect(screen.queryByRole("button", { name: "移除来源 官方" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /添加源/ }));
+    await userEvent.type(
+      screen.getByLabelText("仓库地址"),
+      "https://github.com/team/skills",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(addSourceMock).toHaveBeenCalledWith("https://github.com/team/skills");
+    // 添加后重新拉清单（新源的条目要出现）
+    await waitFor(() => expect(listMarketMock).toHaveBeenCalledTimes(2));
+
+    await userEvent.click(await screen.findByRole("button", { name: "移除来源 skills" }));
+    expect(removeSourceMock).toHaveBeenCalledWith(custom.url);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "移除来源 skills" })).toBeNull(),
+    );
+  });
+
+  it("添加源失败时在源区块内提示原因", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    addSourceMock.mockRejectedValue("目前只支持 GitHub 仓库，请填 github.com/owner/repo");
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    await screen.findByText("官方");
+    await userEvent.click(screen.getByRole("button", { name: /添加源/ }));
+    await userEvent.type(screen.getByLabelText("仓库地址"), "https://gitlab.com/a/b");
+    await userEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    expect(await screen.findByText(/只支持 GitHub 仓库/)).toBeInTheDocument();
+    // 失败不该关掉输入框，用户可以直接改
+    expect(screen.getByLabelText("仓库地址")).toBeInTheDocument();
   });
 });

@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | Workspace | 工作区根 `.agents/skills/` | 随 Git 共享，团队协作 |
 //! | Local | `app_data_dir()/skills/local/` | 用户自建 |
-//! | Market | `app_data_dir()/skills/market/` | 市场下载（v0.6.2 接入） |
+//! | Market | `app_data_dir()/skills/market/` | 市场下载（v0.6.1 接入） |
 //! | Builtin | 安装目录 `resources/builtin-skills/` | 随 App 发版，**只读** |
 //!
 //! 同名技能高优先级覆盖低优先级：**Workspace > Local > Market > Builtin**。
@@ -41,7 +41,7 @@ use std::sync::OnceLock;
 pub enum SkillSource {
     /// 安装目录内置，随 App 发版更新，只读
     Builtin,
-    /// 市场下载（v0.6.2 接入）
+    /// 市场下载（v0.6.1 接入）
     Market,
     /// 用户自建（应用数据目录）
     Local,
