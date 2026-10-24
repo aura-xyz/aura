@@ -306,7 +306,12 @@ const isOpen = expanded.has(w);
         )}
       </div>
 
-      <footer className="shrink-0 px-3 pb-3">
+      {/* mt-auto：折叠时列表 DOM 瞬间从分组切换为圆点（短），若无自动
+          外边距，设置按钮会立刻跳到圆点下方，而下边缘还在 min-height
+          过渡中慢慢上升——表现为「先提按钮、再收边缘」。有了 mt-auto，
+          过渡中产生的自由空间被它吸收，按钮钉在底边随下边缘一起上升；
+          静态两态没有自由空间，表现与此前完全一致。 */}
+      <footer className="mt-auto shrink-0 px-3 pb-3">
         <button
           type="button"
           onClick={onOpenSettings}

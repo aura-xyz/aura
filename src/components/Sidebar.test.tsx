@@ -197,6 +197,15 @@ describe("Sidebar", () => {
     expect(btn?.className).toContain("px-0");
   });
 
+  /// 折叠时列表 DOM 瞬间从分组切到圆点（变短），设置按钮必须靠 mt-auto
+  /// 钉在容器底边，随 min-height 过渡一起上升；没有这个自动边距，按钮会
+  /// 先跳到圆点下方、下边缘才慢慢追上来。静态两态无自由空间，不受影响。
+  it("设置按钮带 mt-auto，折叠时跟随下边缘上升", async () => {
+    const { container } = await mount();
+    const footer = container.querySelector("footer");
+    expect(footer?.className).toContain("mt-auto");
+  });
+
   it("点新建对话交给外部处理，不自己弹目录选择器", async () => {
     const onNew = vi.fn();
     await mount({ onNew });
