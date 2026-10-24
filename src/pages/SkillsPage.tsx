@@ -15,11 +15,13 @@ import {
   deleteSkill,
   inspectMarketSkill,
   installMarketSkill,
+  listMarketProviders,
   listMarketSkills,
   listSkillSources,
   listSkills,
   removeSkillSource,
   setSkillEnabled,
+  type MarketProviderView,
   type MarketSkillView,
   type SkillInspection,
   type SkillSourceView,
@@ -52,7 +54,17 @@ type LoadState =
 /** 市场清单是网络请求，与本地列表分开管：网络慢不该拖住本地技能。 */
 type MarketState =
   | { kind: "loading" }
-  | { kind: "ready"; items: MarketSkillView[]; errors: string[] }
+  | {
+      kind: "ready";
+      items: MarketSkillView[];
+      errors: string[];
+      /** 总条数（源分页时有效） */
+      total: number;
+      /** 总页数（源分页时有效） */
+      totalPages: number;
+      /** 该源是否分页 */
+      paged: boolean;
+    }
   | { kind: "error"; message: string };
 
 /** 顶部提示。成功与失败用同一处展示，但要能区分颜色——装成功却飘一条红字很怪。 */
@@ -223,6 +235,17 @@ export default function SkillsPage({ onClose }: Props) {
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
+  /** 可用的技能源（Provider）。 */
+  const [providers, setProviders] = useState<MarketProviderView[]>([]);
+  /**
+   * 当前选中的源。`""` = 全部源（聚合）。
+   *
+   * SkillHub 有 8 万条，必须**按源拉**——聚合模式只拉官方与自建源，
+   * 第三方源要用户主动切过去再搜。
+   */
+  const [providerFilter, setProviderFilter] = useState("");
+  /** 市场页码（仅分页源有效） */
+  const [marketPage, setMarketPage] = useState(1);
 
   async function refresh() {
     try {
@@ -232,15 +255,47 @@ export default function SkillsPage({ onClose }: Props) {
     }
   }
 
-  /** 市场清单。网络不通时只影响这一块，本地技能照常可用。 */
-  async function loadMarket() {
+  /**
+   * 市场清单。网络不通时只影响这一块，本地技能照常可用。
+   *
+   * `query` 只在**选中单个源**时作为远端搜索词传出去——聚合模式下
+   * 各源的搜索语义不同，用本地过滤更稳。
+   */
+  async function loadMarket(opts?: { provider?: string; query?: string; page?: number }) {
+    const provider = opts?.provider ?? providerFilter;
+    const page = opts?.page ?? marketPage;
+    const q = opts?.query ?? (provider ? query : "");
     setMarket({ kind: "loading" });
     try {
-      const list = await listMarketSkills();
-      setMarket({ kind: "ready", items: list.skills, errors: list.errors });
+      const list = await listMarketSkills(provider || undefined, q || undefined, page);
+      setMarket({
+        kind: "ready",
+        items: list.skills,
+        errors: list.errors,
+        total: list.total,
+        totalPages: list.total_pages,
+        paged: list.paged,
+      });
     } catch (e) {
       setMarket({ kind: "error", message: String(e) });
     }
+  }
+
+  /** 拉取可用源。读不到时市场仍能用默认源，不必打断用户。 */
+  async function loadProviders() {
+    try {
+      setProviders(await listMarketProviders());
+    } catch {
+      setProviders([]);
+    }
+  }
+
+  /** 切换源：清空搜索与页码，重拉该源的清单。 */
+  function switchProvider(id: string) {
+    setProviderFilter(id);
+    setQuery("");
+    setMarketPage(1);
+    void loadMarket({ provider: id, page: 1 });
   }
 
   /** 源列表与清单分开拉：源是本地的，清单要联网，谁也不该拖累谁。 */
@@ -256,6 +311,7 @@ export default function SkillsPage({ onClose }: Props) {
   useEffect(() => {
     void refresh();
     void loadSources();
+    void loadProviders();
     void loadMarket();
   }, []);
 
@@ -608,6 +664,42 @@ export default function SkillsPage({ onClose }: Props) {
               </p>
             )}
 
+            {/* 来源筛选：SkillHub 有 8 万条，必须按源拉，不能一次全取 */}
+            {providers.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => switchProvider("")}
+                  aria-pressed={providerFilter === ""}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                    providerFilter === ""
+                      ? "border-brand text-brand"
+                      : "border-line text-subtle hover:border-brand"
+                  }`}
+                >
+                  全部
+                </button>
+                {providers.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => switchProvider(p.id)}
+                    aria-pressed={providerFilter === p.id}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                      providerFilter === p.id
+                        ? "border-brand text-brand"
+                        : "border-line text-subtle hover:border-brand"
+                    }`}
+                  >
+                    {p.label}
+                    {p.kind === "第三方" && (
+                      <span className="ml-1 text-[10px] opacity-70">第三方</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {marketItems !== null && marketItems.length > 0 && (
               <>
                 <div className="relative">
@@ -617,8 +709,22 @@ export default function SkillsPage({ onClose }: Props) {
                   />
                   <input
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="搜索名称、说明或标签"
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      // 选中单个源时走**远端**搜索（SkillHub 支持 q 参数）；
+                      // 聚合模式下各源搜索语义不同，用本地过滤。
+                      if (providerFilter) {
+                        setMarketPage(1);
+                        void loadMarket({
+                          provider: providerFilter,
+                          query: e.target.value,
+                          page: 1,
+                        });
+                      }
+                    }}
+                    placeholder={
+                      providerFilter ? "在该源内搜索" : "搜索名称、说明或标签"
+                    }
                     aria-label="搜索市场技能"
                     className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
                   />
@@ -641,6 +747,16 @@ export default function SkillsPage({ onClose }: Props) {
                             <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
                               {item.registry || "官方"}
                             </span>
+                            {/* 上游不提供哈希时必须标出来——用户有权知道自己
+                                装的���西没被验证过 */}
+                            {!item.integrity_verified && (
+                              <span
+                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
+                                title="该来源不提供包的完整性校验，安装前会做完整静态审查"
+                              >
+                                无完整性校验
+                              </span>
+                            )}
                           </div>
                           <p className="mt-1.5 text-xs leading-relaxed text-subtle">
                             {item.description}
@@ -692,6 +808,41 @@ export default function SkillsPage({ onClose }: Props) {
                   ))
                 )}
               </>
+            )}
+
+            {/* 分页：仅对支持分页的源显示（如 SkillHub 的 8 万条） */}
+            {market.kind === "ready" && market.paged && market.totalPages > 1 && (
+              <div className="flex items-center justify-between px-1 text-xs">
+                <span className="text-subtle">
+                  第 {marketPage} / {market.totalPages} 页 · 共 {market.total} 条
+                </span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    disabled={marketPage <= 1}
+                    onClick={() => {
+                      const next = marketPage - 1;
+                      setMarketPage(next);
+                      void loadMarket({ page: next });
+                    }}
+                    className="rounded-md border border-line px-2 py-1 text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    disabled={marketPage >= market.totalPages}
+                    onClick={() => {
+                      const next = marketPage + 1;
+                      setMarketPage(next);
+                      void loadMarket({ page: next });
+                    }}
+                    className="rounded-md border border-line px-2 py-1 text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
             )}
 
             {marketItems !== null && marketItems.length === 0 && !marketDown && (

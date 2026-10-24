@@ -219,15 +219,22 @@ export function deleteSkill(name: string): Promise<void> {
 }
 
 export interface MarketSkillView {
+  /** 远端 id（provider 内唯一，用于回查安装） */
   id: string;
+  /** 本地安装目录名 */
+  slug: string;
   /** 注册表里的展示名（可为中文），与技能自身 name 无关 */
   name: string;
   description: string;
   version: string;
   tags: string[];
   author: string;
-  /** 这条来自哪个源（官方 / 自定义源名） */
+  /** 这条来自哪个源（官方 / 自定义源名 / SkillHub） */
   registry: string;
+  /** 源标识（用于「只看某个源」的筛选） */
+  provider_id: string;
+  /** 上游是否提供完整性校验。false 时界面必须明确告知 */
+  integrity_verified: boolean;
   /** 市场目录下是否已安装 */
   installed: boolean;
   /** 已安装版本（空串 = 读不出）；与 version 不同即可提示更新 */
@@ -238,11 +245,47 @@ export interface MarketSkillView {
 export interface MarketList {
   skills: MarketSkillView[];
   errors: string[];
+  /** 总条数（源支持分页时有效，否则为 0） */
+  total: number;
+  /** 总页数（源支持分页时有效，否则为 0） */
+  total_pages: number;
+  /** 该源是否分页 */
+  paged: boolean;
 }
 
-/** 拉取全部源的技能清单（网络请求，失败需重试）。 */
-export function listMarketSkills(): Promise<MarketList> {
-  return invoke("list_market_skills");
+/**
+ * 拉取技能清单。
+ *
+ * `providerId` 指定则只拉那个源（SkillHub 有 8 万条，必须按源拉）；
+ * 不指定则聚合全部源。`query` 只对支持搜索的源生效。
+ */
+export function listMarketSkills(
+  providerId?: string,
+  query?: string,
+  page?: number,
+): Promise<MarketList> {
+  return invoke("list_market_skills", {
+    providerId: providerId ?? null,
+    query: query ?? null,
+    page: page ?? null,
+  });
+}
+
+/** 一个技能源（Provider）。 */
+export interface MarketProviderView {
+  /** 源标识 */
+  id: string;
+  /** 展示名 */
+  label: string;
+  /** 类别：官方 / GitHub / 第三方 */
+  kind: string;
+  /** 是否可删除 */
+  removable: boolean;
+}
+
+/** 列出全部可用的技能源。 */
+export function listMarketProviders(): Promise<MarketProviderView[]> {
+  return invoke("list_market_providers");
 }
 
 export type FindingSeverity = "high" | "medium" | "info";
@@ -283,6 +326,10 @@ export interface SkillInspection {
   tools: string[];
   /** 声明里 Aura 不认识的工具名。非空 = 这个技能装不了 */
   unknown_tools: string[];
+  /** 上游是否提供完整性校验 */
+  integrity_verified: boolean;
+  /** 完整性说明（未校验时告诉用户为什么） */
+  integrity_note: string;
   package_files: string[];
   bytes: number;
   audit: SkillAudit;

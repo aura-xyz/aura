@@ -13,6 +13,7 @@ const {
   listSourcesMock,
   addSourceMock,
   removeSourceMock,
+  providersMock,
 } = vi.hoisted(() => ({
   listSkillsMock: vi.fn(),
   setEnabledMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   listSourcesMock: vi.fn(),
   addSourceMock: vi.fn(),
   removeSourceMock: vi.fn(),
+  providersMock: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -35,6 +37,7 @@ vi.mock("../lib/api", () => ({
   listSkillSources: listSourcesMock,
   addSkillSource: addSourceMock,
   removeSkillSource: removeSourceMock,
+  listMarketProviders: providersMock,
 }));
 
 import type {
@@ -66,11 +69,14 @@ const WORKSPACE = skill({ name: "ws-skill", source: "workspace" });
 function marketItem(partial: Partial<MarketSkillView> & Pick<MarketSkillView, "id">): MarketSkillView {
   return {
     name: partial.id,
+    slug: partial.id,
     description: `${partial.id} 的市场说明`,
     version: "1.0.0",
     tags: [],
     author: "",
     registry: "官方",
+    provider_id: "official",
+    integrity_verified: true,
     installed: false,
     installed_version: "",
     ...partial,
@@ -97,6 +103,8 @@ function inspection(partial: Partial<SkillInspection> = {}): SkillInspection {
     skill_name: "mcp-builder",
     tools: ["read_file"],
     unknown_tools: [],
+    integrity_verified: true,
+    integrity_note: "来源提供完整性校验（sha256）",
     package_files: ["SKILL.md"],
     bytes: 2048,
     audit: {
@@ -135,9 +143,18 @@ beforeEach(() => {
   listSourcesMock.mockReset();
   addSourceMock.mockReset();
   removeSourceMock.mockReset();
+  providersMock.mockReset();
   // 默认市场为空：既有用例不必关心市场，各自按需覆盖
-  listMarketMock.mockResolvedValue({ skills: [], errors: [] });
+  listMarketMock.mockResolvedValue({
+    skills: [],
+    errors: [],
+    total: 0,
+    total_pages: 0,
+    paged: false,
+  });
   listSourcesMock.mockResolvedValue([OFFICIAL_SOURCE]);
+  // 默认无 Provider：源筛选条不出现，既有用例不受影响
+  providersMock.mockResolvedValue([]);
 });
 
 describe("SkillsPage", () => {
@@ -266,6 +283,9 @@ describe("SkillsPage", () => {
   it("市场清单渲染卡片，可按名称/标签搜索", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [
         marketItem({
           id: "mcp-builder",
@@ -298,9 +318,87 @@ describe("SkillsPage", () => {
     expect(screen.getByText("没有匹配的技能。")).toBeInTheDocument();
   });
 
+  /// v0.6.2：按源分类展示。
+  ///
+  /// SkillHub 有 8 万条，必须能只拉一个源——否则打开市场就要下载
+  /// 整个第三方库的首页数据。
+  it("可以按源筛选，只拉选中的那个源", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    providersMock.mockResolvedValue([
+      { id: "official", label: "官方", kind: "官方", removable: false },
+      { id: "skillhub", label: "SkillHub", kind: "第三方", removable: true },
+    ]);
+    listMarketMock.mockResolvedValue({
+      skills: [],
+      errors: [],
+      total: 0,
+      total_pages: 0,
+      paged: false,
+    });
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    // 初始是聚合拉取
+    await waitFor(() => expect(listMarketMock).toHaveBeenCalled());
+    expect(listMarketMock.mock.calls[0][0]).toBeUndefined();
+
+    // 切到 SkillHub
+    await userEvent.click(screen.getByRole("button", { name: /SkillHub/ }));
+    await waitFor(() =>
+      expect(listMarketMock).toHaveBeenCalledWith("skillhub", undefined, 1),
+    );
+  });
+
+  /// 无上游哈希的源必须标出来——用户有权知道自己装的东西没被验证过。
+  it("无完整性校验的条目带标记", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
+      skills: [
+        marketItem({
+          id: "third-party",
+          name: "第三方技能",
+          registry: "SkillHub",
+          provider_id: "skillhub",
+          integrity_verified: false,
+        }),
+      ],
+      errors: [],
+    });
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    expect(await screen.findByText("无完整性校验")).toBeInTheDocument();
+  });
+
+  /// 分页源要给出翻页控件。
+  it("分页的源显示页码与翻页按钮", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    listMarketMock.mockResolvedValue({
+      skills: [marketItem({ id: "a", name: "技能 A" })],
+      errors: [],
+      total: 80381,
+      total_pages: 40191,
+      paged: true,
+    });
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    expect(await screen.findByText(/第 1 \/ 40191 页/)).toBeInTheDocument();
+    expect(screen.getByText(/共 80381 条/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一页" })).toBeInTheDocument();
+    // 上一页在第一页时禁用
+    expect(screen.getByRole("button", { name: "上一页" })).toBeDisabled();
+  });
+
   it("点安装先弹审查报告，确认后才调用安装命令", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "mcp-builder", name: "MCP 服务器构建" })],
       errors: [],
     });
@@ -330,6 +428,9 @@ describe("SkillsPage", () => {
   it("有高危内容时按钮变「仍然安装」，确认位随之为 true", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "danger", name: "危险技能" })],
       errors: [],
     });
@@ -377,6 +478,9 @@ describe("SkillsPage", () => {
   it("工具名无效的技能无法安装，按钮禁用", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "broken", name: "工具名写错的技能" })],
       errors: [],
     });
@@ -407,6 +511,9 @@ describe("SkillsPage", () => {
   it("审查失败只提示原因，不弹窗也不安装", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "x", name: "X 技能" })],
       errors: [],
     });
@@ -423,6 +530,9 @@ describe("SkillsPage", () => {
   it("安装失败时弹窗不关，错误显示在弹窗内可重试", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "x", name: "X 技能" })],
       errors: [],
     });
@@ -442,6 +552,9 @@ describe("SkillsPage", () => {
   it("已安装且版本不同时给「更新」入口，确认后按更新安装", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [
         marketItem({
           id: "mcp-builder",
@@ -491,6 +604,9 @@ describe("SkillsPage", () => {
   it("所有源都拉不到时给出整块失败与重试，而不是一句「部分来源」", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [],
       errors: ["官方：连接超时 / HTTP 404"],
     });
@@ -506,6 +622,9 @@ describe("SkillsPage", () => {
   it("单个源失败时仍展示其它源的条目，并说明是哪个源", async () => {
     listSkillsMock.mockResolvedValue([]);
     listMarketMock.mockResolvedValue({
+      total: 0,
+      total_pages: 0,
+      paged: false,
       skills: [marketItem({ id: "ok", name: "可用条目" })],
       errors: ["团队：https://… 返回 HTTP 404"],
     });

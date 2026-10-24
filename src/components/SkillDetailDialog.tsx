@@ -91,6 +91,14 @@ export default function SkillDetailDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {/* 上游不提供完整性校验时必须说清楚。
+              这是「提示但仍可装」——真正的护栏是下面的静态审查。 */}
+          {!inspection.integrity_verified && (
+            <p className="mb-3 rounded-card border border-line px-3 py-2 text-xs leading-relaxed text-subtle">
+              {inspection.integrity_note}。安装前会对包内全部文本文件做静态审查。
+            </p>
+          )}
+
           {broken && (
             <div className="mb-3 rounded-card border border-danger px-3 py-2">
               <p className="flex items-center gap-2 text-xs font-medium text-danger">
