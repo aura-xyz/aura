@@ -27,6 +27,7 @@ Agente de IA de escritorio con prioridad local, construido con Tauri 2.0 + React
 - **Salida en streaming**: renderizado incremental por SSE con efecto de máquina de escribir; la generación se puede detener en cualquier momento.
 - **Conjunto completo de herramientas**: `list_files` / `read_file` / `search_workspace` para lectura y búsqueda, `write_file` / `string_replace` / `replace_lines` para editar archivos, `run_script` para ejecutar comandos —con tarjetas de acción en tiempo real, reintentos en caso de fallo y avisos de diagnóstico.
 - **Gestión de contexto**: el historial se comprime automáticamente al acercarse al límite de contexto, de modo que las conversaciones largas no se interrumpen; la lista de tareas se guarda por separado y sobrevive a la compresión.
+- **Skills (habilidades)**: instrucciones reutilizables escritas como `SKILL.md` en el espacio de trabajo o en el equipo. El modelo las carga cuando las necesita, así que las que no se cargan no consumen contexto, y una habilidad solo puede restringir permisos: nunca saltarse los límites del modo. La página Skills lista todas las habilidades con su origen (espacio de trabajo / local / mercado / integradas) y permite activarlas, desactivarlas o eliminarlas, además de instalarlas desde el mercado con un clic.
 - **Página de ajustes**: barra lateral plegable; los ajustes cubren apariencia, servicios de modelos y opciones generales, con cambio de tema claro/oscuro y reglas globales.
 - **Persistencia local**: el historial de sesiones, las listas de tareas y los ajustes se guardan en una base de datos SQLite local; las claves API se cifran en reposo con Windows DPAPI —nada depende de la nube.
 
@@ -46,6 +47,10 @@ La lista de tareas se borra automáticamente al completarse todos los pasos, se 
 
 > **Avisos de cambios de comportamiento**
 >
+> - v0.6.1:
+>   - La página Skills ya está disponible: muestra el origen, la versión y las herramientas permitidas de cada habilidad, y permite activarlas, desactivarlas o eliminarlas (las integradas y las del espacio de trabajo no se pueden eliminar).
+>   - Nuevo mercado de habilidades: instala habilidades del registro oficial con un clic; cada paquete se verifica obligatoriamente con su sha256.
+>   - Corregido el fallo constante de «buscar actualizaciones» (el manifiesto de publicación estaba mal formado desde la v0.5.0; no era un problema de red).
 > - v0.6.0:
 >   - Una vez enviado el primer mensaje de una conversación, su espacio de trabajo ya no se puede cambiar (cada conversación corresponde a exactamente un espacio de trabajo).
 >   - Zona de entrada rediseñada: el conmutador de modos y el selector de modelo pasan a estar dentro de la tarjeta de entrada, con un diseño más compacto.

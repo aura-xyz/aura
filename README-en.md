@@ -27,6 +27,7 @@ A local-first desktop AI Agent, built with Tauri 2.0 + React 19 + TypeScript. Co
 - **Streaming output**: SSE incremental rendering with a typewriter effect; generation can be stopped at any time.
 - **Complete toolset**: `list_files` / `read_file` / `search_workspace` for reading and search, `write_file` / `string_replace` / `replace_lines` for editing, `run_script` for running commands — with live action cards, retry on failure, and diagnostic notices.
 - **Context management**: history is compressed automatically as it approaches the context limit so long conversations never break; the task checklist is stored separately and survives compression.
+- **Skills**: reusable instructions written as `SKILL.md` files in the workspace or on this machine. The model loads them on demand, so unloaded skills cost no context, and a skill can only narrow permissions — it can never bypass the mode limits. The Skills page lists every skill with its source (workspace / local / market / built-in) and lets you enable, disable or delete them, plus install new ones from the skill market in one click.
 - **Settings page**: collapsible sidebar; settings cover appearance, model services, and general options, with light/dark theme switching and global rules.
 - **Local persistence**: session history, task checklists, and settings live in a local SQLite database; API keys are encrypted at rest with Windows DPAPI — nothing depends on the cloud.
 
@@ -46,6 +47,10 @@ The checklist clears automatically once all steps are complete, and is saved wit
 
 > **Behavior change notices**
 >
+> - v0.6.1:
+>   - The Skills page is live: see each skill's source, version and allowed tools, then enable, disable or delete it (built-in and workspace skills cannot be deleted).
+>   - New skill market: install skills from the official registry in one click; every package is verified against its sha256.
+>   - Fixed "check for updates" failing every time (the release manifest had been malformed since v0.5.0 — not a network problem).
 > - v0.6.0:
 >   - Once the first message is sent in a conversation, its workspace can no longer be changed (one conversation maps to exactly one workspace).
 >   - Redesigned input area: the mode switcher and model picker now live inside the input card for a more compact layout.
