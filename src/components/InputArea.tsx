@@ -66,10 +66,11 @@ export default function InputArea({
 
   return (
     <div className="px-6 pb-5 pt-3">
-      {/* items-center 而非 items-end：发送按钮比单行输入框高，
-          底部对齐会让输入框顶部留出空隙、文字整体偏下（用户反馈的问题）。
-          多行时按钮停在垂直中间也更符合直觉。 */}
-      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center gap-2 rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-colors focus-within:border-brand focus-within:shadow-sm">
+      {/* 参考图版式：一个圆角卡片两段式——上半部输入区（最小两行高，
+          单行时也保持舒展的留白），下半部工具行收入卡内；卡片外只放
+          次级控件（工作区/模式/快捷键提示）。token 不变：圆角、细边框、
+          轻阴影、focus 描边。 */}
+      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-colors focus-within:border-brand focus-within:shadow-sm">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -83,32 +84,44 @@ export default function InputArea({
                 ? "描述要执行的任务…"
                 : "输入消息…"
           }
-          className="max-h-[33vh] min-h-6 flex-1 resize-none overflow-y-auto bg-transparent py-0 text-[15px] leading-6 outline-none placeholder:text-subtle"
+          className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
         />
-        {busy ? (
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label="停止生成"
-            className="rounded-full border border-line p-2 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-          >
-            <Square size={14} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={submit}
-disabled={!value.trim() || !workspace}
-            aria-label={workspace ? "发送" : "请先选择工作区"}
-     className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
-          >
-       <ArrowUp size={14} />
-          </button>
-        )}
+        <div className="mt-1 flex items-center justify-between gap-2">
+          {/* 工具行居左：模式胶囊（Chat/Plan/Build）。参考图此处是
+              「添加上下文」的 +，本应用没有对应功能，用已有的模式切换
+              补位——它本来就是每次发送时生效的核心开关。 */}
+          <ModeTabs mode={mode} onChange={onModeChange} />
+          <div className="flex shrink-0 items-center gap-2">
+            <ModelSelect
+              models={models}
+              selectedModel={selectedModel}
+              onChange={onModelChange}
+            />
+            {busy ? (
+              <button
+                type="button"
+                onClick={onStop}
+                aria-label="停止生成"
+                className="rounded-full border border-line p-2 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!value.trim() || !workspace}
+                aria-label={workspace ? "发送" : "请先选择工作区"}
+                className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
+              >
+                <ArrowUp size={14} />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
       <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <ModeTabs mode={mode} onChange={onModeChange} />
           {/* 首条消息发出后工作区即锁定：按钮整体隐藏而非置灰——
               一个对话唯一对应一个工作区，没有「改」这个操作了。 */}
           {!workspaceLocked && (
@@ -117,12 +130,6 @@ disabled={!value.trim() || !workspace}
               onChange={onWorkspaceChange}
             />
           )}
-    <span className="h-3 w-px bg-line" />
-      <ModelSelect
-         models={models}
-            selectedModel={selectedModel}
-     onChange={onModelChange}
-          />
         </div>
         <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行</p>
       </div>
