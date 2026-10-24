@@ -219,15 +219,22 @@ export function deleteSkill(name: string): Promise<void> {
 }
 
 export interface MarketSkillView {
+  /** 远端 id（provider 内唯一，用于回查安装） */
   id: string;
+  /** 本地安装目录名 */
+  slug: string;
   /** 注册表里的展示名（可为中文），与技能自身 name 无关 */
   name: string;
   description: string;
   version: string;
   tags: string[];
   author: string;
-  /** 这条来自哪个源（官方 / 自定义源名） */
+  /** 这条来自哪个源（官方 / 自定义源名 / SkillHub） */
   registry: string;
+  /** 源标识（用于「只看某个源」的筛选） */
+  provider_id: string;
+  /** 上游是否提供完整性校验。false 时界面必须明确告知 */
+  integrity_verified: boolean;
   /** 市场目录下是否已安装 */
   installed: boolean;
   /** 已安装版本（空串 = 读不出）；与 version 不同即可提示更新 */
@@ -238,11 +245,47 @@ export interface MarketSkillView {
 export interface MarketList {
   skills: MarketSkillView[];
   errors: string[];
+  /** 总条数（源支持分页时有效，否则为 0） */
+  total: number;
+  /** 总页数（源支持分页时有效，否则为 0） */
+  total_pages: number;
+  /** 该源是否分页 */
+  paged: boolean;
 }
 
-/** 拉取全部源的技能清单（网络请求，失败需重试）。 */
-export function listMarketSkills(): Promise<MarketList> {
-  return invoke("list_market_skills");
+/**
+ * 拉取技能清单。
+ *
+ * `providerId` 指定则只拉那个源（SkillHub 有 8 万条，必须按源拉）；
+ * 不指定则聚合全部源。`query` 只对支持搜索的源生效。
+ */
+export function listMarketSkills(
+  providerId?: string,
+  query?: string,
+  page?: number,
+): Promise<MarketList> {
+  return invoke("list_market_skills", {
+    providerId: providerId ?? null,
+    query: query ?? null,
+    page: page ?? null,
+  });
+}
+
+/** 一个技能源（Provider）。 */
+export interface MarketProviderView {
+  /** 源标识 */
+  id: string;
+  /** 展示名 */
+  label: string;
+  /** 类别：官方 / GitHub / 第三方 */
+  kind: string;
+  /** 是否可删除 */
+  removable: boolean;
+}
+
+/** 列出全部可用的技能源。 */
+export function listMarketProviders(): Promise<MarketProviderView[]> {
+  return invoke("list_market_providers");
 }
 
 export type FindingSeverity = "high" | "medium" | "info";
@@ -281,6 +324,12 @@ export interface SkillInspection {
   skill_name: string;
   /** 技能申请的工具范围；空 = 不收窄 */
   tools: string[];
+  /** 声明里 Aura 不认识的工具名。非空 = 这个技能装不了 */
+  unknown_tools: string[];
+  /** 上游是否提供完整性校验 */
+  integrity_verified: boolean;
+  /** 完整性说明（未校验时告诉用户为什么） */
+  integrity_note: string;
   package_files: string[];
   bytes: number;
   audit: SkillAudit;
@@ -316,6 +365,101 @@ export function addSkillSource(url: string): Promise<SkillSourceView[]> {
 
 export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
   return invoke("remove_skill_source", { url });
+}
+
+// ── 操作时间线（v0.6.2）─────────────────────────────────────────
+
+export type TimelineKind =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "denied"
+  | "context"
+  | "todo"
+  | "error"
+  | "notice";
+
+/** 一条时间线记录。 */
+export interface TimelineEntry {
+  session_id: string;
+  seq: number;
+  ts_ms: number;
+  /** 第几轮（工具轮次）；0 = 对话开始 */
+  turn: number;
+  kind: TimelineKind;
+  title: string;
+  detail: string | null;
+  ok: boolean;
+  /** 耗时（毫秒），仅工具类有 */
+  duration_ms: number | null;
+}
+
+/** 读某会话的时间线（对话级隔离：只返回该会话的记录）。 */
+export function listTimeline(sessionId: string): Promise<TimelineEntry[]> {
+  return invoke("list_timeline", { sessionId });
+}
+
+/** 导出某会话的时间线为 Markdown。 */
+export function exportTimeline(
+  sessionId: string,
+  title?: string,
+): Promise<string> {
+  return invoke("export_timeline", { sessionId, title: title ?? null });
+}
+
+// ── 路径白名单（v0.6.2）─────────────────────────────────────────
+
+/** 一个白名单条目。 */
+export interface AllowlistPathView {
+  /** 归一化后的绝对路径（正斜杠） */
+  path: string;
+  /** 展示名 */
+  label: string;
+  /** 内置默认项（技能目录），不可删除 */
+  builtin: boolean;
+  /** 目录是否还存在 */
+  exists: boolean;
+}
+
+/** 路径判定结果。level 决定前端要不要弹确认框。 */
+export interface AllowlistCheck {
+  /** "allow" | "confirm" | "reject" */
+  level: "allow" | "confirm" | "reject";
+  /** 面向用户的说明 */
+  reason: string;
+  /** 归一化后的绝对路径 */
+  path: string;
+}
+
+export function listAllowlistPaths(): Promise<AllowlistPathView[]> {
+  return invoke("list_allowlist_paths");
+}
+
+/**
+ * 判定路径能否加入白名单。只判定不落库。
+ *
+ * 后端在真正写入时会**重新判定**——这里的结论只是给界面用的。
+ */
+export function checkAllowlistPath(path: string): Promise<AllowlistCheck> {
+  return invoke("check_allowlist_path", { path });
+}
+
+/**
+ * 添加白名单路径。
+ *
+ * `acknowledged` 只表示「用户看到了警告并点了确认」，
+ * 不能用来绕过硬拒档——后端会重新判定并拒绝危险路径。
+ */
+export function addAllowlistPath(
+  path: string,
+  label: string | undefined,
+  acknowledged: boolean,
+): Promise<AllowlistPathView[]> {
+  return invoke("add_allowlist_path", { path, label, acknowledged });
+}
+
+export function removeAllowlistPath(path: string): Promise<AllowlistPathView[]> {
+  return invoke("remove_allowlist_path", { path });
 }
 
 /**

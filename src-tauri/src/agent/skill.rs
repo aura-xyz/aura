@@ -138,6 +138,18 @@ pub fn market_root() -> Option<PathBuf> {
         .map(|r| r.dir.clone())
 }
 
+/// 本地技能根目录（`app_data_dir/skills/local`）。
+///
+/// v0.6.2 把它作为**路径白名单的内置默认项**：授权后模型可以像在工作区
+/// 里一样读写这里，从而能创建与维护自己的技能。
+pub fn local_root() -> Option<PathBuf> {
+    GLOBAL_ROOTS
+        .get()?
+        .iter()
+        .find(|r| r.source == SkillSource::Local)
+        .map(|r| r.dir.clone())
+}
+
 /// 去掉被禁用的技能（v0.6.1）。
 ///
 /// 禁用状态存在库里，由调用方读好传进来；这里只做纯过滤，保持本模块

@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.1-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.6.2-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -27,7 +27,9 @@ Agente de IA de desktop com prioridade local, construído com Tauri 2.0 + React 
 - **Saída em streaming**: renderização incremental via SSE com efeito de máquina de escrever; a geração pode ser interrompida a qualquer momento.
 - **Conjunto completo de ferramentas**: `list_files` / `read_file` / `search_workspace` para leitura e busca, `write_file` / `string_replace` / `replace_lines` para editar arquivos, `run_script` para executar comandos —com cartões de ação em tempo real, nova tentativa em caso de falha e avisos de diagnóstico.
 - **Gestão de contexto**: o histórico é comprimido automaticamente ao se aproximar do limite de contexto, para que conversas longas não sejam interrompidas; a lista de tarefas é salva separadamente e sobrevive à compactação.
-- **Skills (habilidades)**: instruções reutilizáveis escritas como `SKILL.md` na área de trabalho ou na máquina. O modelo as carrega sob demanda, então as que não são carregadas não consomem contexto, e uma habilidade só pode restringir permissões — nunca contornar os limites do modo. A página Skills lista todas as habilidades com a origem (área de trabalho / local / mercado / integradas) e permite ativá-las, desativá-las ou excluí-las. O mercado instala com um clique, mas **inspeciona o pacote antes**: lista as permissões que a habilidade pede e quaisquer comandos perigosos ou linhas de injeção de prompt que ele contenha, e você decide. Também é possível adicionar qualquer repositório do GitHub como fonte extra.
+- **Lista de permissões de caminhos**: além da área de trabalho, você pode autorizar outros diretórios para o modelo ler e gravar (o diretório de habilidades, para ele manter as próprias). Diretórios do sistema e de chaves são **sempre recusados**; pastas como `Desktop` ou `Documents` perguntam antes.
+- **Linha do tempo de operações**: a「Trilha」na barra lateral registra cada passo desta conversa: quais ferramentas foram chamadas, com quais argumentos, quanto demoraram e onde algo foi bloqueado. Isolada por conversa, com busca e exportável em Markdown.
+- **Skills (habilidades)**: instruções reutilizáveis escritas como `SKILL.md` na área de trabalho ou na máquina. O modelo as carrega sob demanda, então as que não são carregadas não consomem contexto, e uma habilidade só pode restringir permissões — nunca contornar os limites do modo. A página Skills lista todas as habilidades com a origem (área de trabalho / local / mercado / integradas) e permite ativá-las, desativá-las ou excluí-las. O mercado instala com um clique, mas **inspeciona o pacote antes**: lista as permissões que a habilidade pede e quaisquer comandos perigosos ou linhas de injeção de prompt que ele contenha, e você decide. Também é possível adicionar qualquer repositório do GitHub como fonte extra, ou conectar uma biblioteca de habilidades de terceiros como o SkillHub (**filtrar por fonte e pesquisar dentro dela**).
 - **Página de configurações**: barra lateral recolhível; as configurações cobrem aparência, serviços de modelo e opções gerais, com alternância de tema claro/escuro e regras globais.
 - **Persistência local**: histórico de sessões, listas de tarefas e configurações ficam em um banco de dados SQLite local; as chaves de API são criptografadas em repouso com Windows DPAPI —nada depende da nuvem.
 
@@ -47,6 +49,12 @@ A lista de tarefas é limpa automaticamente quando todos os passos são concluí
 
 > **Avisos de mudanças de comportamento**
 >
+> - v0.6.2:
+>   - Lista de permissões de caminhos: autoriza outros diretórios para o modelo ler e gravar. Diretórios do sistema e de chaves são recusados; pastas com dados pessoais exigem confirmação
+>   - O mercado passa a aceitar várias fontes com filtro por fonte, e se conecta à biblioteca de terceiros SkillHub
+>   - A instalação pelo mercado valida os nomes de ferramenta declarados: uma habilidade com erro não instala e você recebe o nome que está errado
+>   - Nova linha do tempo de operações: registra cada passo de uma conversa, com busca e exportação em Markdown
+>   - O seletor de área de trabalho foi para perto do seletor de modelo
 > - v0.6.1:
 >   - A página Skills está disponível: mostra a origem, a versão e as ferramentas permitidas de cada habilidade, e permite ativá-las, desativá-las ou excluí-las (as integradas e as da área de trabalho não podem ser excluídas).
 >   - Novo mercado de habilidades: instale habilidades do registro oficial com um clique; cada pacote é verificado obrigatoriamente pelo seu sha256.

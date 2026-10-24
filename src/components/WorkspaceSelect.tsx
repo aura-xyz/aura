@@ -44,7 +44,8 @@ export default function WorkspaceSelect({ workspace, onChange }: Props) {
       disabled={busy}
       aria-label={unset ? "选择工作区目录" : `工作区：${basename(workspace)}`}
       title={workspace || "选择工作区目录"}
-      className={`flex items-center gap-1.5 py-1 text-xs transition-colors hover:text-foreground disabled:opacity-60 ${
+      // shrink-0 + 内部 truncate：工作区名要能被截断，但不能把图标压扁。
+      className={`flex min-w-0 items-center gap-1.5 py-1 text-xs transition-colors hover:text-foreground disabled:opacity-60 ${
         unset ? "text-brand" : "text-subtle"
       }`}
     >

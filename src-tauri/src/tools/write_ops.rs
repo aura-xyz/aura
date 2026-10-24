@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{atomic_write, display_path, resolve_path_for_write, ToolOutput};
+use super::{atomic_write, display_path, resolve_path_for_write, scope::AccessScope, ToolOutput};
 
 /// 单个工具回填的最大字符数（摘要本身很短，此处只是防御上限）。
 const SUMMARY_CAP: usize = 200;
@@ -56,10 +56,10 @@ fn write_summary(display: &str, content: &str) -> String {
 }
 
 /// `write_file`：创建新文件或全量覆写，父目录不存在时递归创建。
-pub fn write_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn write_file(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let path = read_args(args, "path")?;
     let content = read_args(args, "content")?;
-    let target = resolve_path_for_write(root, path)?;
+    let target = resolve_path_for_write(scope, path)?;
     let shown = display_path(path);
 
     if target.is_dir() {
@@ -67,7 +67,7 @@ pub fn write_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
     }
     // 已存在的文件走一次常规校验（防止对目录/链接写入）
     if target.exists() {
-        super::ensure_inside(root, &target)?;
+        super::ensure_allowed(scope, &target)?;
     }
 
     atomic_write(&target, content)?;
@@ -81,7 +81,7 @@ pub fn write_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
 ///
 /// `old_string` 必须唯一命中，否则要求模型补充上下文——这能避免
 /// 「替换了错误的位置」这类静默破坏。
-pub fn string_replace(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn string_replace(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let path = read_args(args, "path")?;
     let old = read_args(args, "old_string")?;
     let new = read_args(args, "new_string")?;
@@ -90,7 +90,7 @@ pub fn string_replace(root: &Path, args: &Value) -> Result<ToolOutput, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let target = resolve_path_for_write(root, path)?;
+    let target = resolve_path_for_write(scope, path)?;
     let shown = display_path(path);
     let content = read_for_edit(&target, &shown)?;
 
@@ -139,7 +139,7 @@ pub fn string_replace(root: &Path, args: &Value) -> Result<ToolOutput, String> {
 }
 
 /// `replace_lines`：按行号区间整段替换，替换内容是**该区间的完整新文本**。
-pub fn replace_lines(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn replace_lines(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let path = read_args(args, "path")?;
     let new_content = read_args(args, "new_content")?;
     let start = args
@@ -167,7 +167,7 @@ pub fn replace_lines(root: &Path, args: &Value) -> Result<ToolOutput, String> {
         return Err("`end_line` 不能小于 `start_line`".into());
     }
 
-    let target = resolve_path_for_write(root, path)?;
+    let target = resolve_path_for_write(scope, path)?;
     let shown = display_path(path);
     let content = read_for_edit(&target, &shown)?;
 
@@ -207,6 +207,7 @@ pub fn replace_lines(root: &Path, args: &Value) -> Result<ToolOutput, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::scope::testutil::scope as test_scope;
 
     fn ws_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let base = std::env::temp_dir().join(format!("aura_writeops_{}", name));
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn write_file_creates_and_overwrites() {
         let (ws, base) = ws_fixture("create");
-        let out = write_file(&ws, &serde_json::json!({ "path": "a.txt", "content": "第一版" })).unwrap();
+        let out = write_file(&test_scope(ws.clone()), &serde_json::json!({ "path": "a.txt", "content": "第一版" })).unwrap();
         assert_eq!(out.label, "Write a.txt");
         assert!(out.result.contains("已写入 a.txt"));
         assert_eq!(fs::read_to_string(ws.join("a.txt")).unwrap(), "第一版");
@@ -227,7 +228,7 @@ mod tests {
         assert!(!out.result.contains("第一版"));
 
         // 覆写
-        write_file(&ws, &serde_json::json!({ "path": "a.txt", "content": "第二版" })).unwrap();
+        write_file(&test_scope(ws.clone()), &serde_json::json!({ "path": "a.txt", "content": "第二版" })).unwrap();
         assert_eq!(fs::read_to_string(ws.join("a.txt")).unwrap(), "第二版");
         let _ = fs::remove_dir_all(&base);
     }
@@ -236,7 +237,7 @@ mod tests {
     fn write_file_creates_nested_dirs() {
         let (ws, base) = ws_fixture("nested");
         write_file(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "x/y/z/deep.txt", "content": "内容" }),
         )
         .unwrap();
@@ -247,7 +248,7 @@ mod tests {
     #[test]
     fn write_file_rejects_traversal() {
         let (ws, base) = ws_fixture("reject");
-        let err = write_file(&ws, &serde_json::json!({ "path": "../evil.txt", "content": "x" }))
+        let err = write_file(&test_scope(ws.clone()), &serde_json::json!({ "path": "../evil.txt", "content": "x" }))
             .unwrap_err();
         assert!(err.contains(".."), "err: {}", err);
         let _ = fs::remove_dir_all(&base);
@@ -257,7 +258,7 @@ mod tests {
     fn write_file_rejects_directory_target() {
         let (ws, base) = ws_fixture("dir");
         fs::create_dir_all(ws.join("adir")).unwrap();
-        let err = write_file(&ws, &serde_json::json!({ "path": "adir", "content": "x" })).unwrap_err();
+        let err = write_file(&test_scope(ws.clone()), &serde_json::json!({ "path": "adir", "content": "x" })).unwrap_err();
         assert!(err.contains("目录"), "err: {}", err);
         let _ = fs::remove_dir_all(&base);
     }
@@ -269,7 +270,7 @@ mod tests {
 
         // 出现两次且未指定 replace_all → 拒绝
         let err = string_replace(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "c.txt", "old_string": "foo", "new_string": "bar" }),
         )
         .unwrap_err();
@@ -277,7 +278,7 @@ mod tests {
 
         // 显式 replace_all → 全部替换
         let out = string_replace(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({
                 "path": "c.txt", "old_string": "foo",
                 "new_string": "bar", "replace_all": true
@@ -296,7 +297,7 @@ mod tests {
         fs::write(ws.join("c.txt"), "line1\nline2\nline3").unwrap();
 
         let out = string_replace(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "c.txt", "old_string": "line2", "new_string": "改过的line2" }),
         )
         .unwrap();
@@ -308,7 +309,7 @@ mod tests {
 
         // 未命中应报错并提示先读文件
         let err = string_replace(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "c.txt", "old_string": "不存在的", "new_string": "x" }),
         )
         .unwrap_err();
@@ -321,7 +322,7 @@ mod tests {
     fn string_replace_missing_file_hint() {
         let (ws, base) = ws_fixture("missing");
         let err = string_replace(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "nope.txt", "old_string": "a", "new_string": "b" }),
         )
         .unwrap_err();
@@ -335,7 +336,7 @@ mod tests {
         fs::write(ws.join("l.txt"), "1\n2\n3\n4\n5").unwrap();
 
         let out = replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({
                 "path": "l.txt", "start_line": 2, "end_line": 3,
                 "new_content": "新A\n新B"
@@ -353,7 +354,7 @@ mod tests {
         fs::write(ws.join("l.txt"), "1\n2\n3").unwrap();
 
         replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({
                 "path": "l.txt", "start_line": 2, "end_line": "end",
                 "new_content": "X"
@@ -364,7 +365,7 @@ mod tests {
 
         // end_line 超出范围应被截断而非报错
         replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({
                 "path": "l.txt", "start_line": 1, "end_line": 999,
                 "new_content": "ONLY"
@@ -381,21 +382,21 @@ mod tests {
         fs::write(ws.join("l.txt"), "1\n2\n3").unwrap();
 
         let err = replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "l.txt", "start_line": 3, "end_line": 1, "new_content": "x" }),
         )
         .unwrap_err();
         assert!(err.contains("不能小于"), "err: {}", err);
 
         let err = replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "l.txt", "start_line": 0, "end_line": 1, "new_content": "x" }),
         )
         .unwrap_err();
         assert!(err.contains(">= 1"), "err: {}", err);
 
         let err = replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "l.txt", "start_line": 99, "end_line": 100, "new_content": "x" }),
         )
         .unwrap_err();
@@ -408,7 +409,7 @@ mod tests {
         let (ws, base) = ws_fixture("eol");
         fs::write(ws.join("l.txt"), "1\n2\n3\n").unwrap();
         replace_lines(
-            &ws,
+            &test_scope(ws.clone()),
             &serde_json::json!({ "path": "l.txt", "start_line": 1, "end_line": 1, "new_content": "一" }),
         )
         .unwrap();

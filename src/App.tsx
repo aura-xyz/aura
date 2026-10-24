@@ -10,6 +10,7 @@ import { workspaceMenuItems } from "./lib/workspaceMenu";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
+import TimelinePage from "./pages/TimelinePage";
 import { StoreProvider, useStore } from "./store";
 
 function basename(p: string): string {
@@ -53,7 +54,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     deleteSession,
     removeWorkspace,
   } = useStore();
-  const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp">(
+  const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp" | "timeline">(
     "chat",
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -122,6 +123,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       onOpenSettings={() => setView("settings")}
           onOpenSkills={() => setView("skills")}
           onOpenMcp={() => setView("mcp")}
+          onOpenTimeline={() => setView("timeline")}
   onNavigate={() => setView("chat")}
         />
 
@@ -141,6 +143,10 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
           ) : view === "mcp" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <McpPage onClose={() => setView("chat")} />
+            </div>
+          ) : view === "timeline" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <TimelinePage onClose={() => setView("chat")} />
             </div>
           ) : (
             <>

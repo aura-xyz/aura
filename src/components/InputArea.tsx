@@ -86,12 +86,25 @@ export default function InputArea({
           }
           className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
         />
-        <div className="mt-1 flex items-center justify-between gap-2">
+        {/* 工具行。flex-wrap：窄屏时右侧的控件折行而不是被挤掉。
+            工作区与模型挨在一起——它们都是「这次任务在哪儿、用什么」，
+            分散在两行反而要来回扫。 */}
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
           {/* 工具行居左：模式胶囊（Chat/Plan/Build）。参考图此处是
               「添加上下文」的 +，本应用没有对应功能，用已有的模式切换
               补位——它本来就是每次发送时生效的核心开关。 */}
           <ModeTabs mode={mode} onChange={onModeChange} />
-          <div className="flex shrink-0 items-center gap-2">
+          {/* 右侧组用 min-w-0 而非 shrink-0：模型名可能很长，
+              固定不收缩会把工作区按钮挤出可视区。 */}
+          <div className="flex min-w-0 items-center gap-3">
+            {/* 首条消息发出后工作区即锁定：按钮整体隐藏而非置灰——
+                一个对话唯一对应一个工作区，没有「改」这个操作了。 */}
+            {!workspaceLocked && (
+              <WorkspaceSelect
+                workspace={workspace}
+                onChange={onWorkspaceChange}
+              />
+            )}
             <ModelSelect
               models={models}
               selectedModel={selectedModel}
@@ -120,17 +133,7 @@ export default function InputArea({
           </div>
         </div>
       </div>
-      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          {/* 首条消息发出后工作区即锁定：按钮整体隐藏而非置灰——
-              一个对话唯一对应一个工作区，没有「改」这个操作了。 */}
-          {!workspaceLocked && (
-            <WorkspaceSelect
-              workspace={workspace}
-              onChange={onWorkspaceChange}
-            />
-          )}
-        </div>
+      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-end gap-3">
         <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行</p>
       </div>
     </div>

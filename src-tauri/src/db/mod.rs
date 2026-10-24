@@ -59,6 +59,29 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
          CREATE TABLE IF NOT EXISTS skill_sources (
              url TEXT PRIMARY KEY,
              name TEXT NOT NULL
+         );
+         -- v0.6.2：操作时间线。记录模型在一次会话里的全部操作。
+         -- session_id 实现「对话级隔离」：查某会话只取它的行。
+         CREATE TABLE IF NOT EXISTS timeline (
+             session_id  TEXT NOT NULL,
+             seq         INTEGER NOT NULL,
+             ts_ms       INTEGER NOT NULL,
+             turn        INTEGER NOT NULL DEFAULT 0,
+             kind        TEXT NOT NULL,
+             title       TEXT NOT NULL,
+             detail      TEXT,
+             ok          INTEGER NOT NULL DEFAULT 1,
+             duration_ms INTEGER,
+             PRIMARY KEY (session_id, seq)
+         );
+         -- v0.6.2：路径白名单。授权给模型访问的额外目录。
+         -- path 是归一化后的绝对路径（正斜杠），builtin=1 是内置默认项
+         -- （skills/local，不可删）。判定逻辑在 paths.rs，不在库里。
+         CREATE TABLE IF NOT EXISTS path_allowlist (
+             path TEXT PRIMARY KEY,
+             label TEXT NOT NULL,
+             builtin INTEGER NOT NULL DEFAULT 0,
+             added_at INTEGER NOT NULL DEFAULT 0
          );",
     )?;
     migrate(&conn)?;
@@ -196,6 +219,146 @@ pub fn add_skill_source(conn: &Connection, url: &str, name: &str) -> Result<(), 
 pub fn remove_skill_source(conn: &Connection, url: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM skill_sources WHERE url = ?1", params![url])?;
     Ok(())
+}
+
+/// 一条路径白名单。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowlistRow {
+    /// 归一化后的绝对路径（正斜杠）
+    pub path: String,
+    /// 展示名
+    pub label: String,
+    /// 内置默认项（不可删）
+    pub builtin: bool,
+}
+
+pub fn load_allowlist(conn: &Connection) -> Result<Vec<AllowlistRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT path, label, builtin FROM path_allowlist ORDER BY builtin DESC, added_at, path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(AllowlistRow {
+            path: r.get(0)?,
+            label: r.get(1)?,
+            builtin: r.get::<_, i64>(2)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 添加白名单项。同路径重复添加只更新展示名。
+pub fn add_allowlist(
+    conn: &Connection,
+    path: &str,
+    label: &str,
+    builtin: bool,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO path_allowlist (path, label, builtin, added_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(path) DO UPDATE SET label = excluded.label",
+        params![path, label, builtin as i64, now()],
+    )?;
+    Ok(())
+}
+
+/// 写入一条时间线记录。
+///
+/// 同 seq 覆盖（重试写入不会产生重复行）。
+pub fn add_timeline_entry(conn: &Connection, e: &crate::timeline::TimelineEntry) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO timeline (session_id, seq, ts_ms, turn, kind, title, detail, ok, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(session_id, seq) DO UPDATE SET
+             ts_ms = excluded.ts_ms,
+             turn = excluded.turn,
+             kind = excluded.kind,
+             title = excluded.title,
+             detail = excluded.detail,
+             ok = excluded.ok,
+             duration_ms = excluded.duration_ms",
+        params![
+            e.session_id,
+            e.seq,
+            e.ts_ms,
+            e.turn,
+            kind_str(e.kind),
+            e.title,
+            e.detail,
+            e.ok as i64,
+            e.duration_ms,
+        ],
+    )?;
+    Ok(())
+}
+
+/// 类型与字符串互转（库里存字符串，代码里用枚举）。
+fn kind_str(k: crate::timeline::EntryKind) -> &'static str {
+    match k {
+        crate::timeline::EntryKind::User => "user",
+        crate::timeline::EntryKind::Assistant => "assistant",
+        crate::timeline::EntryKind::Tool => "tool",
+        crate::timeline::EntryKind::Denied => "denied",
+        crate::timeline::EntryKind::Context => "context",
+        crate::timeline::EntryKind::Todo => "todo",
+        crate::timeline::EntryKind::Error => "error",
+        crate::timeline::EntryKind::Notice => "notice",
+    }
+}
+
+/// 字符串 → 类型。认不出来的当作提示（不丢数据）。
+fn kind_from(s: &str) -> crate::timeline::EntryKind {
+    use crate::timeline::EntryKind::*;
+    match s {
+        "user" => User,
+        "assistant" => Assistant,
+        "tool" => Tool,
+        "denied" => Denied,
+        "context" => Context,
+        "todo" => Todo,
+        "error" => Error,
+        _ => Notice,
+    }
+}
+
+/// 读某会话的全部时间线记录，按 seq 升序。
+pub fn load_timeline(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<crate::timeline::TimelineEntry>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT session_id, seq, ts_ms, turn, kind, title, detail, ok, duration_ms
+         FROM timeline WHERE session_id = ?1 ORDER BY seq",
+    )?;
+    let rows = stmt.query_map(params![session_id], |r| {
+        Ok(crate::timeline::TimelineEntry {
+            session_id: r.get(0)?,
+            seq: r.get(1)?,
+            ts_ms: r.get(2)?,
+            turn: r.get(3)?,
+            kind: kind_from(&r.get::<_, String>(4)?),
+            title: r.get(5)?,
+            detail: r.get(6)?,
+            ok: r.get::<_, i64>(7)? != 0,
+            duration_ms: r.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// 删掉某会话的时间线（会话被删除时一起清掉）。
+pub fn delete_timeline(conn: &Connection, session_id: &str) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM timeline WHERE session_id = ?1", params![session_id])?;
+    Ok(())
+}
+
+/// 删除白名单项。内置项不可删——返回 false 表示没删。
+pub fn remove_allowlist(conn: &Connection, path: &str) -> Result<bool, rusqlite::Error> {
+    let n = conn.execute(
+        "DELETE FROM path_allowlist WHERE path = ?1 AND builtin = 0",
+        params![path],
+    )?;
+    Ok(n > 0)
 }
 
 pub fn save_session(
@@ -718,6 +881,96 @@ mod tests {
         let conn = open(&dir.join("t.db")).unwrap();
         save_todos(&conn, "ghost", &[crate::agent::Todo::new("s1", "任务")]).unwrap();
         assert!(load_sessions(&conn).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v0.6.2：时间线的读写往返与**对话级隔离**。
+    ///
+    /// 隔离是这张表的核心语义：两个会话的记录混在一起就没意义了。
+    #[test]
+    fn timeline_round_trip_and_session_isolation() {
+        let dir = std::env::temp_dir().join(format!("aura-db-test-{}-timeline", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("timeline.db")).unwrap();
+
+        use crate::timeline::{EntryKind, TimelineEntry};
+
+        let e1 = TimelineEntry::new("s1", 0, 1000, 0, EntryKind::User, "你好");
+        let e2 = TimelineEntry::new("s1", 1, 2000, 1, EntryKind::Tool, "Read a.rs")
+            .with_detail("参数：{}")
+            .with_duration(42);
+        let e3 = TimelineEntry::new("s2", 0, 3000, 0, EntryKind::User, "另一个会话");
+        add_timeline_entry(&conn, &e1).unwrap();
+        add_timeline_entry(&conn, &e2).unwrap();
+        add_timeline_entry(&conn, &e3).unwrap();
+
+        // 只取得到本会话的记录
+        let rows = load_timeline(&conn, "s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].title, "你好");
+        assert_eq!(rows[0].kind, EntryKind::User);
+        assert_eq!(rows[1].kind, EntryKind::Tool);
+        assert_eq!(rows[1].duration_ms, Some(42));
+        assert_eq!(rows[1].detail.as_deref(), Some("参数：{}"));
+        assert!(rows[1].ok);
+
+        // 另一个会话只看到自己那条
+        let other = load_timeline(&conn, "s2").unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].title, "另一个会话");
+
+        // 同 seq 覆盖而不是产生重复行
+        let mut dup = e1.clone();
+        dup.title = "改过的".into();
+        add_timeline_entry(&conn, &dup).unwrap();
+        let rows = load_timeline(&conn, "s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].title, "改过的");
+
+        // 删除会话时一并清掉
+        delete_timeline(&conn, "s1").unwrap();
+        assert!(load_timeline(&conn, "s1").unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v0.6.2：路径白名单的读写往返。
+    ///
+    /// 内置项（builtin=1）必须删不掉——它是「技能目录」这个默认授权，
+    /// 用户可以在设置里看到它，但不该能移除掉整个能力。
+    #[test]
+    fn allowlist_round_trip() {
+        let dir = std::env::temp_dir().join(format!("aura-db-test-{}-allowlist", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("allowlist.db")).unwrap();
+
+        assert!(load_allowlist(&conn).unwrap().is_empty());
+
+        add_allowlist(&conn, "C:/data", "数据目录", false).unwrap();
+        add_allowlist(&conn, "C:/app/skills/local", "技能目录", true).unwrap();
+
+        let rows = load_allowlist(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        // 内置项排在前面（ORDER BY builtin DESC）
+        assert!(rows[0].builtin);
+        assert_eq!(rows[0].label, "技能目录");
+        assert!(!rows[1].builtin);
+        assert_eq!(rows[1].path, "C:/data");
+
+        // 同路径重复添加只更新名字，不新增行
+        add_allowlist(&conn, "C:/data", "新名字", false).unwrap();
+        let rows = load_allowlist(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].label, "新名字");
+
+        // 内置项删不掉
+        assert!(!remove_allowlist(&conn, "C:/app/skills/local").unwrap());
+        assert_eq!(load_allowlist(&conn).unwrap().len(), 2);
+
+        // 用户项能删
+        assert!(remove_allowlist(&conn, "C:/data").unwrap());
+        assert_eq!(load_allowlist(&conn).unwrap().len(), 1);
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

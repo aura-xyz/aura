@@ -44,6 +44,37 @@ describe("InputArea", () => {
     expect(props.onWorkspaceChange).toHaveBeenCalledWith("E:/dev/picked");
   });
 
+  /// v0.6.2：工作区按钮移到模型 Tab 旁边。
+  ///
+  /// 两者都是「这次任务在哪儿、用什么」，分散在两行要来回扫。
+  /// 用「同一个父容器」断言，比断言坐标稳。
+  it("工作区选择与模型选择在同一行", async () => {
+    mount({
+      models: [
+        {
+          key: "m1",
+          id: "m1",
+          label: "某模型",
+          provider: "p",
+          provider_name: "厂商",
+          context_limit: 100,
+          pinned: true,
+        },
+      ] as ModelInfo[],
+      selectedModel: "m1",
+    });
+    const ws = screen.getByRole("button", { name: /工作区/ });
+    const model = screen.getByRole("button", { name: "选择模型" });
+    // 两者必须在**同一个直接父容器**里（即同一个右侧组）。
+    // WorkspaceSelect 直接返回 button，ModelSelect 外包一层 div，
+    // 所以要比「button 的父元素」而不是固定层数。
+    const wsGroup = ws.parentElement;
+    const modelGroup = model.parentElement?.parentElement;
+    expect(wsGroup).toBe(modelGroup);
+    // 工作区已绑定时显示的是目录名（aura），不是「选择工作区」
+    expect(wsGroup?.textContent).toContain("aura");
+  });
+
   /// v0.6.0：首条消息发出后工作区锁定，按钮整体隐藏（不是置灰）——
   /// 没有「改」这个操作了。隐藏比禁用少一分「其实可以但被拦住」的暗示。
   it("首条消息发出后隐藏工作区选择按钮", async () => {

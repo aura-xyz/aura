@@ -1,9 +1,8 @@
 use std::fs;
-use std::path::Path;
 
 use serde_json::Value;
 
-use super::{display_path, ensure_inside, resolve_path, ToolOutput};
+use super::{display_path, ensure_allowed, resolve_path, scope::AccessScope, ToolOutput};
 
 const MAX_LINES: usize = 500;
 
@@ -18,10 +17,10 @@ fn read_args<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("缺少参数 `{}` 或类型错误", key))
 }
 
-pub fn list_files(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn list_files(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let path = read_args(args, "path")?;
-    let target = resolve_path(root, path)?;
-    let target = ensure_inside(root, &target)?;
+    let target = resolve_path(scope, path)?;
+    let target = ensure_allowed(scope, &target)?;
     let meta = fs::metadata(&target).map_err(|_| format!("目录不存在: {}", path))?;
     if !meta.is_dir() {
         return Err(format!("不是目录: {}", path));
@@ -53,7 +52,7 @@ pub fn list_files(root: &Path, args: &Value) -> Result<ToolOutput, String> {
     })
 }
 
-pub fn read_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
+pub fn read_file(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
     let path = read_args(args, "path")?;
     let start = match args.get("start_line") {
         None => 1,
@@ -79,8 +78,8 @@ pub fn read_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
         }
     }
 
-    let target = resolve_path(root, path)?;
-    let target = ensure_inside(root, &target)?;
+    let target = resolve_path(scope, path)?;
+    let target = ensure_allowed(scope, &target)?;
     let meta = fs::metadata(&target).map_err(|_| format!("文件不存在: {}", path))?;
     if meta.is_dir() {
         return Err(format!("是目录，请使用 list_files: {}", path));
@@ -126,6 +125,7 @@ pub fn read_file(root: &Path, args: &Value) -> Result<ToolOutput, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::scope::testutil::scope as test_scope;
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -141,10 +141,10 @@ mod tests {
     #[test]
     fn lists_single_level_with_dirs() {
         let root = fixture("list");
-        let out = list_files(&root, &json!({ "path": "/" })).unwrap();
+        let out = list_files(&test_scope(root.clone()), &json!({ "path": "/" })).unwrap();
         assert_eq!(out.label, "Read /");
         assert_eq!(out.result, json!({"files": ["README.md", "src/"]}).to_string());
-        let out = list_files(&root, &json!({ "path": "src/" })).unwrap();
+        let out = list_files(&test_scope(root.clone()), &json!({ "path": "src/" })).unwrap();
         assert_eq!(out.label, "Read src/");
         let _ = fs::remove_dir_all(&root);
     }
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn reads_range_with_line_numbers() {
         let root = fixture("range");
-        let out = read_file(&root, &json!({ "path": "src/main.rs", "start_line": 2, "end_line": 3 })).unwrap();
+        let out = read_file(&test_scope(root.clone()), &json!({ "path": "src/main.rs", "start_line": 2, "end_line": 3 })).unwrap();
         assert_eq!(out.label, "Read src/main.rs L2 - L3");
         assert_eq!(out.result, "2: // hi\n3: let x = 1;\n");
         let _ = fs::remove_dir_all(&root);
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn reads_full_file_as_one_label() {
         let root = fixture("full");
-        let out = read_file(&root, &json!({ "path": "README.md", "start_line": 1, "end_line": "end" })).unwrap();
+        let out = read_file(&test_scope(root.clone()), &json!({ "path": "README.md", "start_line": 1, "end_line": "end" })).unwrap();
         assert_eq!(out.label, "Read README.md");
         assert!(out.result.starts_with("1: # Title"));
         let _ = fs::remove_dir_all(&root);
@@ -170,10 +170,10 @@ mod tests {
     #[test]
     fn rejects_bad_ranges_and_dirs() {
         let root = fixture("bad");
-        assert!(read_file(&root, &json!({ "path": "src/main.rs", "start_line": 5, "end_line": "end" })).is_err());
-        assert!(read_file(&root, &json!({ "path": "src/main.rs", "start_line": 3, "end_line": 1 })).is_err());
-        assert!(read_file(&root, &json!({ "path": "src" })).is_err());
-        assert!(read_file(&root, &json!({ "path": "../secret" })).is_err());
+        assert!(read_file(&test_scope(root.clone()), &json!({ "path": "src/main.rs", "start_line": 5, "end_line": "end" })).is_err());
+        assert!(read_file(&test_scope(root.clone()), &json!({ "path": "src/main.rs", "start_line": 3, "end_line": 1 })).is_err());
+        assert!(read_file(&test_scope(root.clone()), &json!({ "path": "src" })).is_err());
+        assert!(read_file(&test_scope(root.clone()), &json!({ "path": "../secret" })).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 }
