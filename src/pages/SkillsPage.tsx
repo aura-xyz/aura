@@ -336,6 +336,7 @@ export default function SkillsPage({ onClose }: Props) {
     const update = detail.already_installed;
     // 有高危项时，点「仍然安装」本身就是确认动作
     const acceptRisky = auditCounts(detail.audit).high > 0;
+    const label = detail.name || detail.id;
     setInstalling(true);
     setInstallError(null);
     try {
@@ -343,7 +344,6 @@ export default function SkillsPage({ onClose }: Props) {
       setDetail(null);
       await refresh();
       await loadMarket();
-      const label = detail.name || detail.id;
       setNotice({
         kind: "ok",
         text: update
