@@ -84,8 +84,10 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "load_skill",
         kind: ToolKind::Read,
         desc: "加载指定技能（Skill）的完整指引。技能清单见系统提示中的「技能」一节；\
-               某个技能的用途与当前任务匹配时必须先加载它，再严格按指引执行。",
-        example: "{\"name\": \"技能名\"}（名称必须与技能索引中完全一致）",
+               某个技能的用途与当前任务匹配时必须先加载它，再严格按指引执行。\n\
+               技能目录里若还有参考文档、模板或脚本，用 `file` 参数按相对路径读取\
+               （只能读该技能目录内的文件）。",
+        example: "{\"name\": \"技能名\"}（读附属文件：{\"name\": \"技能名\", \"file\": \"reference.md\"}）",
         run: run_load_skill,
         label: label_load_skill,
         max_consecutive: READ_LIMIT,
@@ -249,10 +251,15 @@ fn label_lines(args: &Value) -> String {
     format!("Edit {} L{} - L{}", display_path(path), start, end)
 }
 
-/// `Load skill 'code-explainer'`
+/// `Load skill 'code-explainer'` / `Load skill 'pdf' › reference.md`
 fn label_load_skill(args: &Value) -> String {
     let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
-    format!("Load skill '{}'", name)
+    let file = args.get("file").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if file.is_empty() {
+        format!("Load skill '{}'", name)
+    } else {
+        format!("Load skill '{}' › {}", name, file)
+    }
 }
 
 /// `load_skill` 的执行体。
@@ -260,12 +267,32 @@ fn label_load_skill(args: &Value) -> String {
 /// 技能库的扫描与正文渲染在 `agent::skill`（那是 agent 层的概念，
 /// prompt 注入与激活态都在那边）；这里只做工具层的适配。
 /// `root` 是工作区根目录，用于发现 `.agents/skills/` 下的工作区技能。
+///
+/// 带 `file` 时读的是技能目录内的附属文件（参考文档 / 模板 / 脚本源码）——
+/// 那条路径在应用数据目录，`read_file` 到不了，只能从这个口子进。
 fn run_load_skill(root: &Path, args: &Value) -> Result<ToolOutput, String> {
     let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let body = crate::agent::skill::load_skill_body(root, name)?;
+    let file = args
+        .get("file")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+
+    if file.is_empty() {
+        let body = crate::agent::skill::load_skill_body(root, name)?;
+        return Ok(ToolOutput {
+            label: label_load_skill(args),
+            result: body,
+        });
+    }
+
+    let content = crate::agent::skill::read_skill_file(root, name, file)?;
     Ok(ToolOutput {
         label: label_load_skill(args),
-        result: body,
+        result: format!(
+            "技能 `{}` 的附属文件 `{file}`（相对技能目录）：\n\n{content}",
+            name.trim()
+        ),
     })
 }
 
@@ -297,6 +324,19 @@ mod tests {
         assert_eq!(max_consecutive("read_file"), READ_LIMIT);
         assert_eq!(max_consecutive("write_file"), WRITE_LIMIT);
         assert_eq!(max_consecutive("unknown"), READ_LIMIT);
+    }
+
+    #[test]
+    fn load_skill_label_shows_attached_file() {
+        // 读附属文件与加载技能是两件事，动作卡片上要能一眼区分
+        assert_eq!(
+            label_load_skill(&serde_json::json!({ "name": "pdf" })),
+            "Load skill 'pdf'"
+        );
+        assert_eq!(
+            label_load_skill(&serde_json::json!({ "name": "pdf", "file": "reference.md" })),
+            "Load skill 'pdf' › reference.md"
+        );
     }
 
     #[test]

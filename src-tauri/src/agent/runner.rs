@@ -82,11 +82,23 @@ fn throttle_key(name: &str, args: &Value) -> String {
 /// `load_skill|*` 的通配计数误判成死循环，而换技能本是正常操作。
 fn tool_target(name: &str, args: &Value) -> String {
     if name.starts_with("load_skill") {
-        return args
+        // 同一技能的不同附属文件是不同目标；只取 name 会让「读第 4 个参考文件」
+        // 被当成对同一目标的死循环。
+        let skill = args
             .get("name")
             .and_then(|v| v.as_str())
-            .map(|n| n.trim().chars().take(40).collect())
+            .map(|n| n.trim().chars().take(40).collect::<String>())
             .unwrap_or_default();
+        let file = args
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(|f| f.trim().chars().take(60).collect::<String>())
+            .unwrap_or_default();
+        return if file.is_empty() {
+            skill
+        } else {
+            format!("{skill}:{file}")
+        };
     }
     args.get("path")
         .and_then(|v| v.as_str())

@@ -429,26 +429,80 @@ pub fn gate_active_skill(name: &str, active: &[SkillManifest]) -> SkillVerdict {
     ))
 }
 
+/// 按名字找技能，找不到时把可用技能列出来帮模型自我纠正。
+fn find_skill(workspace: &Path, name: &str) -> Result<SkillManifest, String> {
+    let name = name.trim();
+    let skills = scan_with_globals(workspace);
+    match skills.iter().find(|s| s.name == name) {
+        Some(sk) => Ok(sk.clone()),
+        None => {
+            let avail = if skills.is_empty() {
+                "（当前没有任何可用技能）".to_string()
+            } else {
+                skills
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            };
+            Err(format!("技能 `{name}` 不存在，当前可用技能：{avail}"))
+        }
+    }
+}
+
 /// `load_skill` 工具的实现体：扫描技能库并返回该技能的完整指引。
 pub fn load_skill_body(workspace: &Path, name: &str) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
+    if name.trim().is_empty() {
         return Err("缺少技能名称 name，可用技能见系统提示中的技能索引".into());
     }
-    let skills = scan_with_globals(workspace);
-    let Some(sk) = skills.iter().find(|s| s.name == name) else {
-        let avail = if skills.is_empty() {
-            "（当前没有任何可用技能）".to_string()
-        } else {
-            skills
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect::<Vec<_>>()
-                .join("、")
-        };
-        return Err(format!("技能 `{name}` 不存在，当前可用技能：{avail}"));
-    };
-    Ok(render_full(sk))
+    Ok(render_full(&find_skill(workspace, name)?))
+}
+
+/// 附属文件大小上限。技能里的参考文档通常几十 KB，超过这个量级多半是误用。
+const MAX_SKILL_FILE: u64 = 512 * 1024;
+
+/// 读技能目录内的文件（参考文档、脚本源码、模板）。
+///
+/// 为什么需要它：技能目录在应用数据 / 安装目录下，**不在工作区里**，
+/// 所以 `read_file` 够不着。而技能正文经常写「详见 reference.md」——
+/// 模型却没有任何办法打开它。这个入口把「能读的范围」严格限制在
+/// **该技能自己的目录内**，不扩大到整个技能根，更不碰工作区之外的其他路径。
+pub fn read_skill_file(workspace: &Path, name: &str, file: &str) -> Result<String, String> {
+    let sk = find_skill(workspace, name)?;
+    let rel = file.trim();
+    if rel.is_empty() {
+        return Err("file 不能为空".into());
+    }
+    // 统一成正斜杠后逐条排除越界写法：绝对路径、盘符、`..`、UNC
+    let rel = rel.replace('\\', "/");
+    if rel.starts_with('/') || rel.contains("..") || rel.contains(':') {
+        return Err(format!("只能读技能目录内的文件（不支持绝对路径）：{file}"));
+    }
+
+    let root = sk
+        .dir
+        .canonicalize()
+        .map_err(|e| format!("技能目录不可用：{e}"))?;
+    let target = root.join(&rel);
+    // canonicalize 之后再判一次：技能目录里若混入符号链接，这一步才拦得住
+    let target = target
+        .canonicalize()
+        .map_err(|_| format!("技能「{}」里没有文件 {rel}", sk.name))?;
+    if !target.starts_with(&root) {
+        return Err(format!("只能读技能目录内的文件：{file}"));
+    }
+    if !target.is_file() {
+        return Err(format!("{rel} 不是文件"));
+    }
+    let meta = std::fs::metadata(&target).map_err(|e| format!("读取失败：{e}"))?;
+    if meta.len() > MAX_SKILL_FILE {
+        return Err(format!(
+            "文件过大（{} KB），请挑需要的片段查看",
+            meta.len() / 1024
+        ));
+    }
+    std::fs::read_to_string(&target)
+        .map_err(|e| format!("读取失败（可能是二进制文件，无法按文本读取）：{e}"))
 }
 
 /// L2 正文回执：身份信息 + 工具范围 + `SKILL.md` 正文。
@@ -778,22 +832,108 @@ mod tests {
     /// 这条盯着真实文件而非测试字面量：改坏了 SKILL.md（手滑动 frontmatter、
     /// 引入非法 name）时，编译与其余测试都无感，只有它会在发版前拦下。
     #[test]
-    fn shipped_builtin_demo_skill_parses() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/resources/builtin-skills/code-explainer/SKILL.md"
-        );
-        let content = std::fs::read_to_string(path).unwrap();
-        let m = parse_skill_md(&content).unwrap();
-        assert_eq!(m.name, "code-explainer");
-        assert!(!m.description.is_empty());
-        assert_eq!(m.version, "0.1.0");
-        // 只读技能：声明里不得出现写/执行工具，否则激活期会自相矛盾
-        for t in ["write_file", "string_replace", "replace_lines", "run_script"] {
-            assert!(!m.allowed_tools.contains(&t.to_string()), "演示技能不应声明 {t}");
+    fn shipped_builtin_skills_parse() {
+        // 内置技能是随包发布的「活文件」：写坏 frontmatter、声明了不存在的
+        // 工具、name 与目录名不一致，都会让用户在 Skills 页看到一个坏条目。
+        // 这里把整个目录扫一遍，任何一个不合格就直接失败。
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/builtin-skills");
+        let mut checked = 0;
+        let mut dirs: Vec<_> = std::fs::read_dir(&root)
+            .expect("内置技能目录必须存在")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("SKILL.md").is_file())
+            .collect();
+        dirs.sort();
+
+        for dir in &dirs {
+            let content = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+            let m = parse_skill_md(&content)
+                .unwrap_or_else(|e| panic!("{} 解析失败：{e}", dir.display()));
+            let dir_name = dir.file_name().unwrap().to_string_lossy().to_string();
+            assert_eq!(m.name, dir_name, "name 必须与目录名一致（模型按 name 引用）");
+            assert!(!m.description.trim().is_empty(), "{dir_name} 缺少 description");
+            assert!(
+                !m.allowed_tools.is_empty(),
+                "{dir_name} 未声明 allowed-tools：激活期不收窄，等于继承全部权限"
+            );
+            for t in &m.allowed_tools {
+                assert!(
+                    crate::tools::registry::is_known(t),
+                    "{dir_name} 声明了未注册的工具 {t}"
+                );
+            }
+            assert!(!m.body.trim().is_empty(), "{dir_name} 正文为空");
+            checked += 1;
         }
-        assert!(m.allowed_tools.contains(&"read_file".to_string()));
-        assert!(m.body.contains("资深架构师"));
+        assert!(checked >= 3, "内置技能至少三个（docx/pdf/skill-creator），实际 {checked}");
+    }
+
+    // ---- 附属文件（v0.6.3 新增能力） ----
+
+    #[test]
+    fn read_skill_file_reads_inside_skill_dir() {
+        let base = tmp("read_file_ok");
+        let ws = base.join("ws");
+        let skills = ws.join(".agents/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        write_skill(&skills, "demo", FULL);
+        std::fs::create_dir_all(skills.join("demo/reference")).unwrap();
+        std::fs::write(skills.join("demo/reference/guide.md"), "参考正文").unwrap();
+
+        let text = read_skill_file(&ws, "demo", "reference/guide.md").unwrap();
+        assert_eq!(text, "参考正文");
+        // 反斜杠也认（Windows 习惯）
+        let text = read_skill_file(&ws, "demo", "reference\\guide.md").unwrap();
+        assert_eq!(text, "参考正文");
+    }
+
+    #[test]
+    fn read_skill_file_rejects_escapes() {
+        let base = tmp("read_file_escape");
+        let ws = base.join("ws");
+        let skills = ws.join(".agents/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        write_skill(&skills, "demo", FULL);
+        // 技能目录之外放一个「机密」文件，任何写法都不该读到
+        std::fs::write(ws.join("secret.txt"), "机密").unwrap();
+
+        for bad in [
+            "../secret.txt",
+            "../../secret.txt",
+            "C:/Windows/win.ini",
+            "/etc/passwd",
+            "reference/../../secret.txt",
+            "",
+        ] {
+            assert!(
+                read_skill_file(&ws, "demo", bad).is_err(),
+                "越界路径 {bad:?} 必须被拒"
+            );
+        }
+        // 存在的目录不是文件
+        assert!(read_skill_file(&ws, "demo", "reference").is_err());
+        // 技能不存在时给出可用列表
+        let err = read_skill_file(&ws, "nope", "SKILL.md").unwrap_err();
+        assert!(err.contains("不存在"));
+    }
+
+    #[test]
+    fn read_skill_file_guards_size_and_binary() {
+        let base = tmp("read_file_big");
+        let ws = base.join("ws");
+        let skills = ws.join(".agents/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        write_skill(&skills, "demo", FULL);
+
+        std::fs::write(skills.join("demo/big.txt"), vec![b'a'; (MAX_SKILL_FILE + 1) as usize])
+            .unwrap();
+        let err = read_skill_file(&ws, "demo", "big.txt").unwrap_err();
+        assert!(err.contains("过大"), "{err}");
+
+        std::fs::write(skills.join("demo/bin.dat"), [0xff, 0xfe, 0x00]).unwrap();
+        let err = read_skill_file(&ws, "demo", "bin.dat").unwrap_err();
+        assert!(err.contains("二进制"), "{err}");
     }
 
     #[test]
