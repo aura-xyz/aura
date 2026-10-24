@@ -1,0 +1,139 @@
+[简体中文](./README.md) | [English](./README-en.md) | [日本語](./README-ja.md) | [Español](./README-es.md) | **Português**
+
+<p align="center">
+  <img src="./logo.png" width="128" alt="Aura" />
+</p>
+
+<h1 align="center">Aura</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
+  <img src="https://img.shields.io/badge/version-v0.5.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
+  <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
+</p>
+
+Agente de IA de desktop com prioridade local, construído com Tauri 2.0 + React 19 + TypeScript. Suporta vários provedores de modelos na nuvem e frameworks de inferência local; sessões, credenciais e configurações ficam todas na sua máquina.
+
+## Funcionalidades
+
+- **Múltiplos provedores**: 17 predefinições de provedores integradas (OpenRouter, OpenAI, DeepSeek, Moonshot Kimi, Zhipu GLM, MiniMax, SiliconFlow, 01.AI, Baichuan, StepFun, Groq, xAI, Together, Alibaba Bailian, Volcano Ark, Tencent Hunyuan, além de endpoints personalizados compatíveis com OpenAI). Ao escolher um provedor, o endereço oficial da API é preenchido automaticamente.
+- **Modelos locais**: suporte a Ollama e llama.cpp server — verifique o status do serviço, baixe modelos e acompanhe o progresso do download dentro do app.
+- **Catálogo e favoritos**: obtenha com um clique a lista completa de modelos de um provedor, pesquise e marque seus favoritos; os favoritos são agrupados por provedor e podem ser trocados a qualquer momento na página de conversa.
+- **Três modos de trabalho**: Chat, Plan e Build, alternados pelas abas. O modo aplicado é o selecionado no momento de enviar cada mensagem.
+- **Lista de tarefas**: o modo Plan produz passos executáveis exibidos na barra lateral; o modo Build os avança passo a passo com atualizações de status em tempo real.
+- **Sessões com múltiplos workspaces**: a barra lateral organiza as sessões por espaço de trabalho —criar, alternar e excluir—; menu de contexto pelo botão direito e renomeação em linha (nenhum arquivo em disco é tocado). Após o envio da primeira mensagem, o espaço de trabalho fica bloqueado: cada conversa corresponde a exatamente um espaço de trabalho.
+- **Fallback automático**: quando o modelo principal atinge o limite de requisições ou falha, o Aura alterna para o próximo modelo disponível da cadeia de reserva e informa o motivo.
+- **Saída em streaming**: renderização incremental via SSE com efeito de máquina de escrever; a geração pode ser interrompida a qualquer momento.
+- **Conjunto completo de ferramentas**: `list_files` / `read_file` / `search_workspace` para leitura e busca, `write_file` / `string_replace` / `replace_lines` para editar arquivos, `run_script` para executar comandos —com cartões de ação em tempo real, nova tentativa em caso de falha e avisos de diagnóstico.
+- **Gestão de contexto**: o histórico é comprimido automaticamente ao se aproximar do limite de contexto, para que conversas longas não sejam interrompidas; a lista de tarefas é salva separadamente e sobrevive à compactação.
+- **Página de configurações**: barra lateral recolhível; as configurações cobrem aparência, serviços de modelo e opções gerais, com alternância de tema claro/escuro e regras globais.
+- **Persistência local**: histórico de sessões, listas de tarefas e configurações ficam em um banco de dados SQLite local; as chaves de API são criptografadas em repouso com Windows DPAPI —nada depende da nuvem.
+
+## Modos de trabalho
+
+Escolha um modo pelas abas. **O modo aplicado é o selecionado no momento de enviar cada mensagem, e pode ser alterado a qualquer momento.** Os três modos diferem no alcance das ações permitidas e no foco do prompt:
+
+| Modo | Finalidade | Ler arquivos | Modificar arquivos | Executar comandos | Foco |
+| --- | --- | :---: | :---: | :---: | --- |
+| Chat | Perguntas e respostas | ✓ | — | — | Responde diretamente, sem fluxo de trabalho |
+| Plan | Produzir um plano | ✓ | — | — | Primeiro investiga o estado atual, depois dá passos executáveis |
+| Build | Fazer o trabalho | ✓ | ✓ | ✓ | Avança a lista de tarefas passo a passo com progresso em tempo real |
+
+As permissões são impostas pelo próprio programa: mesmo que o modelo tente chamar uma ferramenta de escrita no modo Chat ou Plan, a chamada é interceptada com um aviso para alternar para o modo Build —nunca falha em silêncio.
+
+A lista de tarefas é limpa automaticamente quando todos os passos são concluídos, é salva junto com a sessão e é restaurada após reiniciar.
+
+> **Avisos de mudanças de comportamento**
+>
+> - v0.6.0:
+>   - Após o envio da primeira mensagem em uma conversa, seu espaço de trabalho não pode mais ser alterado (cada conversa corresponde a exatamente um espaço de trabalho).
+>   - Área de entrada redesenhada: o alternador de modos e o seletor de modelo passam a ficar dentro do cartão de entrada, com um layout mais compacto.
+>   - O rótulo de linguagem dos blocos de código foi movido para o canto superior esquerdo; adicionado realce para ini (TOML), Dockerfile, PowerShell, nginx, protobuf e HTTP.
+>   - As chaves de API agora são criptografadas em repouso (Windows DPAPI) em vez de armazenadas em texto puro; após trocar de usuário do Windows ou reinstalar o sistema, será necessário inseri-las novamente.
+> - Desde v0.5.0: o modo Chat passou de acesso total para somente leitura. Após atualizar, alterne para o modo "Build" se quiser que o Aura modifique arquivos diretamente.
+> - v0.5.2:
+>   - Novas entradas no topo da barra lateral: "Nova conversa", "Skills" e "MCP"; as duas últimas são reservas para funcionalidades futuras.
+>   - O recolhimento e a expansão da barra lateral agora usam uma animação de transição suave.
+>   - O diretório de trabalho passa a ser escolhido ao criar uma nova conversa; não é possível enviar mensagens antes de escolher.
+>   - Conversas no mesmo diretório são agrupadas automaticamente.
+>   - Corrigido um problema em que a primeira mensagem após reiniciar podia ler o diretório do espaço de trabalho anterior.
+> - v0.5.1:
+>   - Corrigido o congelamento prolongado da interface ao executar comandos com muita saída (como instalar dependências ou compilar um projeto).
+>   - Agora é possível emitir várias chamadas de ferramentas em um mesmo turno, executadas em ordem, sem precisar esperar cada resultado para continuar.
+>   - Corrigido um erro de ordem em que os cartões de ação apareciam antes do texto principal quando o modelo "falava primeiro e chamava as ferramentas depois".
+>   - Blocos de código exibem o rótulo de linguagem no canto superior direito.
+>   - Corrigido um problema em que clicar em "Parar" após trocar de sessão interrompia a tarefa de outra sessão.
+>   - Corrigidos dois estilos de aviso vermelhos que não tinham efeito.
+
+## Provedores integrados
+
+| Categoria | Provedores |
+| --- | --- |
+| Internacional | OpenRouter, OpenAI, DeepSeek, Moonshot Kimi, Groq, xAI Grok, Together AI |
+| China | Zhipu GLM, SiliconFlow, 01.AI Yi, Baichuan, StepFun, MiniMax, Alibaba Bailian Qwen, Volcano Ark Doubao, Tencent Hunyuan |
+| Local | Ollama, llama.cpp server |
+| Outros | Azure OpenAI, endpoints personalizados compatíveis com OpenAI (suporta cabeçalhos de requisição personalizados) |
+
+Todos os provedores de nuvem são acessados pelo protocolo compatível com OpenAI, com regras integradas para endpoints que não usam o caminho `/v1`, como DeepSeek, Zhipu GLM e Volcano Ark.
+
+## Capturas de tela
+
+### Página de boas-vindas
+
+![Página de boas-vindas](assets/images/主页面——无对话.png)
+
+### Conversa básica
+
+![Conversa básica](assets/images/基础对话.png)
+
+### Chamadas de ferramentas
+
+![Chamada de ferramenta 1](assets/images/工具调用1.png)
+
+![Chamada de ferramenta 2](assets/images/工具调用2.png)
+
+## Desenvolvimento
+
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+Depuração apenas do frontend:
+
+```bash
+pnpm dev
+```
+
+## Compilação
+
+```bash
+pnpm tauri build
+```
+
+## Configuração
+
+Configure na seção "Serviços de modelo" da página de configurações —um cartão por provedor—:
+
+1. Escolha o provedor de modelos (o endereço oficial da API é preenchido automaticamente)
+2. Preencha a chave de API desse provedor
+3. Clique em "Obter lista de modelos" para buscar os modelos disponíveis, depois pesquise e marque os que deseja manter
+
+As chaves são salvas apenas no banco de dados SQLite local e são criptografadas com Windows DPAPI (vinculadas ao usuário atual do Windows); nunca são enviadas para serviços de terceiros. Após trocar de usuário do Windows ou reinstalar o sistema, será necessário inserir novamente a chave de cada provedor.
+
+Modelos locais (Ollama / llama.cpp) não precisam de chave de API —basta garantir que o serviço local esteja iniciado.
+
+> **Sobre variáveis de ambiente**: `OPENROUTER_API_KEY` é mantido apenas como reserva de compatibilidade histórica para o OpenRouter; insira as chaves dos outros provedores na página de configurações.
+
+## Stack tecnológico
+
+- [Tauri 2.0](https://tauri.app) — backend Rust, janela e IPC
+- React 19 + TypeScript + Vite — frontend
+- Tailwind CSS v4 — estilos (tokens do Pinguo Design System)
+- rusqlite — armazenamento local
+- reqwest — acesso HTTP multiprovedor
+
+## Licença
+
+Este projeto é de código aberto sob a [Apache License 2.0](LICENSE).

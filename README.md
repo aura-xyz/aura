@@ -1,3 +1,5 @@
+**简体中文** | [English](./README-en.md) | [日本語](./README-ja.md) | [Español](./README-es.md) | [Português](./README-pt.md)
+
 <p align="center">
   <img src="./logo.png" width="128" alt="Aura" />
 </p>
