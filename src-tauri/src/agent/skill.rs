@@ -128,6 +128,16 @@ pub fn scan_with_globals(workspace: &Path) -> Vec<SkillManifest> {
     scan(roots, Some(workspace))
 }
 
+/// 市场技能根目录（`app_data_dir/skills/market`）。v0.6.1 安装器要用它；
+/// 根目录在 lib.rs 启动时登记，未登记（如单测）时返回 None。
+pub fn market_root() -> Option<PathBuf> {
+    GLOBAL_ROOTS
+        .get()?
+        .iter()
+        .find(|r| r.source == SkillSource::Market)
+        .map(|r| r.dir.clone())
+}
+
 /// 去掉被禁用的技能（v0.6.1）。
 ///
 /// 禁用状态存在库里，由调用方读好传进来；这里只做纯过滤，保持本模块

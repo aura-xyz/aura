@@ -784,6 +784,59 @@ pub fn delete_skill(state: State<'_, AppState>, name: String) -> Result<(), Stri
     db::remove_skill_row(&db, &name).map_err(|e| e.to_string())
 }
 
+/// 市场里的一个技能（界面投影）。
+#[derive(serde::Serialize)]
+pub struct MarketSkillView {
+    pub id: String,
+    /// 展示名（注册表里的中文名），与技能自身 name 无关
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub tags: Vec<String>,
+    pub author: String,
+    /// 市场根目录下是否已有同名目录
+    pub installed: bool,
+}
+
+/// 拉取官方 registry 清单。网络请求，失败即报错让用户重试。
+#[tauri::command]
+pub async fn list_market_skills() -> Result<Vec<MarketSkillView>, String> {
+    let root = crate::agent::skill::market_root();
+    let skills = crate::market::fetch_registry().await?;
+    Ok(skills
+        .into_iter()
+        .map(|s| MarketSkillView {
+            installed: root
+                .as_ref()
+                .map(|r| r.join(&s.id).is_dir())
+                .unwrap_or(false),
+            id: s.id,
+            name: if s.name.trim().is_empty() {
+                String::new()
+            } else {
+                s.name
+            },
+            description: s.description,
+            version: s.version,
+            tags: s.tags,
+            author: s.author,
+        })
+        .collect())
+}
+
+/// 安装市场技能：以服务端清单为准重新取一次，**不信任前端传来的地址与哈希**。
+#[tauri::command]
+pub async fn install_market_skill(id: String) -> Result<(), String> {
+    let root = crate::agent::skill::market_root()
+        .ok_or_else(|| "技能目录未初始化，请重启应用".to_string())?;
+    let skills = crate::market::fetch_registry().await?;
+    let entry = skills
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("市场清单里没有技能 {id}，请刷新后重试"))?;
+    crate::market::install(&entry, &root).await
+}
+
 #[tauri::command]
 pub fn get_api_config(state: State<'_, AppState>) -> ApiConfig {
     let cfg = state.router.config();

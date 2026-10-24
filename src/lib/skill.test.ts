@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { SkillView } from "./api";
+import type { MarketSkillView, SkillView } from "./api";
 import {
   canDelete,
   deleteBlockedReason,
   enabledCount,
+  filterMarket,
   groupSkills,
   SOURCE_LABEL,
   toolsLabel,
@@ -96,5 +97,50 @@ describe("杂项", () => {
   it("已启用计数", () => {
     expect(enabledCount([BUILTIN, LOCAL, WORKSPACE])).toBe(2);
     expect(enabledCount([])).toBe(0);
+  });
+});
+
+describe("filterMarket", () => {
+  const items: MarketSkillView[] = [
+    {
+      id: "mcp-builder",
+      name: "MCP 服务器构建",
+      description: "指导构建兼容 MCP 协议的服务器",
+      version: "1.0.0",
+      tags: ["development", "mcp"],
+      author: "anthropics",
+      installed: false,
+    },
+    {
+      id: "code-review",
+      name: "代码审查",
+      description: "按清单逐条审查变更",
+      version: "0.2.0",
+      tags: ["review"],
+      author: "aura",
+      installed: true,
+    },
+  ];
+
+  it("空查询原样返回（同一个引用，不白建数组）", () => {
+    expect(filterMarket(items, "")).toBe(items);
+    expect(filterMarket(items, "   ")).toBe(items);
+  });
+
+  it("名称、id、说明、标签都能命中", () => {
+    expect(filterMarket(items, "MCP").map((m) => m.id)).toEqual(["mcp-builder"]);
+    expect(filterMarket(items, "code-rev").map((m) => m.id)).toEqual(["code-review"]);
+    // 只出现在说明里
+    expect(filterMarket(items, "逐条").map((m) => m.id)).toEqual(["code-review"]);
+    // 只出现在标签里
+    expect(filterMarket(items, "development").map((m) => m.id)).toEqual([
+      "mcp-builder",
+    ]);
+  });
+
+  it("大小写不敏感，无匹配返回空", () => {
+    expect(filterMarket(items, "MCP").length).toBe(1);
+    expect(filterMarket(items, "mcp").length).toBe(1);
+    expect(filterMarket(items, "zzz")).toEqual([]);
   });
 });

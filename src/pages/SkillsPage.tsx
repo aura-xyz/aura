@@ -1,22 +1,28 @@
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
+  Check,
+  Download,
   FolderOpen,
+  Search,
   Sparkles,
-  Store,
   TriangleAlert,
   Trash2,
 } from "lucide-react";
 import {
   deleteSkill,
+  installMarketSkill,
+  listMarketSkills,
   listSkills,
   setSkillEnabled,
+  type MarketSkillView,
   type SkillView,
 } from "../lib/api";
 import {
   canDelete,
   deleteBlockedReason,
   enabledCount,
+  filterMarket,
   groupSkills,
   SOURCE_LABEL,
   toolsLabel,
@@ -29,6 +35,12 @@ interface Props {
 type LoadState =
   | { kind: "loading" }
   | { kind: "ready"; skills: SkillView[] }
+  | { kind: "error"; message: string };
+
+/** 市场清单是网络请求，与本地列表分开管：网络慢不该拖住本地技能。 */
+type MarketState =
+  | { kind: "loading" }
+  | { kind: "ready"; items: MarketSkillView[] }
   | { kind: "error"; message: string };
 
 /** 启用开关。role=switch 而非 checkbox：语义是「生效/不生效」，不是选中。 */
@@ -182,7 +194,10 @@ function SkillCard({
 
 export default function SkillsPage({ onClose }: Props) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [market, setMarket] = useState<MarketState>({ kind: "loading" });
+  const [query, setQuery] = useState("");
   const [busyName, setBusyName] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -194,8 +209,19 @@ export default function SkillsPage({ onClose }: Props) {
     }
   }
 
+  /** 市场清单。网络不通时只影响这一块，本地技能照常可用。 */
+  async function loadMarket() {
+    setMarket({ kind: "loading" });
+    try {
+      setMarket({ kind: "ready", items: await listMarketSkills() });
+    } catch (e) {
+      setMarket({ kind: "error", message: String(e) });
+    }
+  }
+
   useEffect(() => {
     void refresh();
+    void loadMarket();
   }, []);
 
   /** 就地更新一条：开关是高频操作，整表重扫会闪一下。 */
@@ -233,11 +259,48 @@ export default function SkillsPage({ onClose }: Props) {
       await deleteSkill(skill.name);
       setConfirming(null);
       await refresh();
+      // 删掉的可能正是市场里装的，同步一下「已安装」角标
+      setMarket((s) =>
+        s.kind === "ready"
+          ? {
+              kind: "ready",
+              items: s.items.map((x) =>
+                x.installed && x.id === skill.name ? { ...x, installed: false } : x,
+              ),
+            }
+          : s,
+      );
       setNotice(`已删除技能「${skill.name}」`);
     } catch (e) {
       setNotice(String(e));
     } finally {
       setBusyName(null);
+    }
+  }
+
+  async function install(item: MarketSkillView) {
+    if (installing) return;
+    setInstalling(item.id);
+    setNotice(null);
+    try {
+      await installMarketSkill(item.id);
+      setMarket((s) =>
+        s.kind === "ready"
+          ? {
+              kind: "ready",
+              items: s.items.map((x) =>
+                x.id === item.id ? { ...x, installed: true } : x,
+              ),
+            }
+          : s,
+      );
+      // 装完立刻出现在「已安装」里，不用用户手动刷新
+      await refresh();
+      setNotice(`已安装「${item.name || item.id}」`);
+    } catch (e) {
+      setNotice(String(e));
+    } finally {
+      setInstalling(null);
     }
   }
 
@@ -360,21 +423,135 @@ export default function SkillsPage({ onClose }: Props) {
                 ))
               )}
             </Section>
-
-            <Section title="市场">
-              <div className="rounded-card border border-dashed border-line px-4 py-4">
-                <p className="flex items-center gap-2 text-sm text-subtle">
-                  <Store size={14} className="shrink-0" />
-                  技能市场将在后续版本接入。
-                </p>
-                <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-                  届时可在这里浏览经过筛选的技能，一键安装到本地；现在可以先把
-                  自己的技能放进目录使用。
-                </p>
-              </div>
-            </Section>
           </>
         )}
+
+        {/* 市场是独立数据源（网络），不跟着本地列表的成败走——
+            本地读失败时，市场照样能浏览安装。 */}
+        <Section
+          title={
+            market.kind === "ready"
+              ? `市场（${market.items.length}）`
+              : "市场"
+          }
+          hint="来自官方技能注册表。安装即把技能包解到本地技能目录，装完可在上方「已安装」里停用或删除。"
+        >
+          {market.kind === "loading" && (
+            <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
+              正在获取市场清单…
+            </p>
+          )}
+
+          {market.kind === "error" && (
+            <div className="rounded-card border border-line px-4 py-3">
+              <p className="flex items-start gap-2 text-xs text-danger">
+                <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 break-words">
+                  获取市场清单失败：{market.message}
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={() => void loadMarket()}
+                className="mt-2 text-xs text-brand hover:underline"
+              >
+                重试
+              </button>
+            </div>
+          )}
+
+          {market.kind === "ready" && (
+            <>
+              {market.items.length === 0 ? (
+                <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
+                  注册表里暂时没有技能。
+                </p>
+              ) : (
+                <>
+                  <div className="relative">
+                    <Search
+                      size={13}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
+                    />
+                    <input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="搜索名称、说明或标签"
+                      aria-label="搜索市场技能"
+                      className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
+                    />
+                  </div>
+                  {filterMarket(market.items, query).length === 0 ? (
+                    <p className="rounded-card border border-dashed border-line px-4 py-3 text-xs text-subtle">
+                      没有匹配的技能。
+                    </p>
+                  ) : (
+                    filterMarket(market.items, query).map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-card border border-line bg-surface p-4"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium">
+                                {item.name || item.id}
+                              </span>
+                              <span className="font-mono text-[11px] text-subtle">
+                                {item.id}
+                              </span>
+                              {item.version && (
+                                <span className="font-mono text-[11px] text-subtle">
+                                  v{item.version}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1.5 text-xs leading-relaxed text-subtle">
+                              {item.description}
+                            </p>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {item.tags.map((t) => (
+                                <span
+                                  key={t}
+                                  className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                              {item.author && (
+                                <span className="text-[11px] text-subtle">
+                                  {item.author}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="shrink-0 pt-0.5">
+                            {item.installed ? (
+                              <span className="flex items-center gap-1 text-xs text-subtle">
+                                <Check size={12} className="text-brand" />
+                                已安装
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void install(item)}
+                                disabled={installing !== null}
+                                className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+                              >
+                                <Download size={12} />
+                                {installing === item.id ? "安装中…" : "安装"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </Section>
 
         <p className="mt-10 flex items-center gap-1.5 text-[11px] text-subtle">
           <Sparkles size={12} className="shrink-0" />

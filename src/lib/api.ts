@@ -217,3 +217,28 @@ export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
 export function deleteSkill(name: string): Promise<void> {
   return invoke("delete_skill", { name });
 }
+
+export interface MarketSkillView {
+  id: string;
+  /** 注册表里的展示名（可为中文），与技能自身 name 无关 */
+  name: string;
+  description: string;
+  version: string;
+  tags: string[];
+  author: string;
+  /** 市场目录下是否已安装 */
+  installed: boolean;
+}
+
+/** 拉取官方技能市场清单（网络请求，失败需重试）。 */
+export function listMarketSkills(): Promise<MarketSkillView[]> {
+  return invoke("list_market_skills");
+}
+
+/**
+ * 安装市场技能。后端会以服务端清单为准重新取一次地址与哈希，
+ * 前端不传 URL——避免「界面传什么就装什么」。
+ */
+export function installMarketSkill(id: string): Promise<void> {
+  return invoke("install_market_skill", { id });
+}

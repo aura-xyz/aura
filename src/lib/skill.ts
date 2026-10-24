@@ -1,4 +1,4 @@
-import type { SkillView } from "./api";
+import type { MarketSkillView, SkillView } from "./api";
 
 /** 来源角标文案。 */
 export const SOURCE_LABEL: Record<SkillView["source"], string> = {
@@ -56,4 +56,21 @@ export function deleteBlockedReason(source: SkillView["source"]): string {
 /** 已启用数量，用于页头概览。 */
 export function enabledCount(skills: SkillView[]): number {
   return skills.filter((s) => s.enabled).length;
+}
+
+/**
+ * 市场清单的本地筛选：匹配 id / 展示名 / 说明 / 标签。
+ *
+ * 纯客户端过滤——清单只有几十条，不必为一个搜索框再走一次网络。
+ * 空查询返回原列表（保持注册表给的顺序）。
+ */
+export function filterMarket<T extends MarketSkillView>(items: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return items;
+  return items.filter((m) =>
+    [m.id, m.name, m.description, ...m.tags]
+      .join("\n")
+      .toLowerCase()
+      .includes(q),
+  );
 }
