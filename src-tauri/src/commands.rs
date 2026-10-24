@@ -947,6 +947,37 @@ pub fn ensure_builtin_allowlist(db: &Connection) {
     let _ = db::add_allowlist(db, &path, label, true);
 }
 
+/// 读某会话的操作时间线。
+///
+/// **对话级隔离**：只返回该 `session_id` 的记录。
+#[tauri::command]
+pub fn list_timeline(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<crate::timeline::TimelineEntry>, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    db::load_timeline(&db, &session_id).map_err(|e| e.to_string())
+}
+
+/// 导出某会话的操作时间线为 Markdown。
+///
+/// 数据能被用户带走 —— 「透明」不只是界面上的一个视图。
+#[tauri::command]
+pub fn export_timeline(
+    state: State<'_, AppState>,
+    session_id: String,
+    title: Option<String>,
+) -> Result<String, String> {
+    let entries = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_timeline(&db, &session_id).map_err(|e| e.to_string())?
+    };
+    Ok(crate::timeline::to_markdown(
+        title.as_deref().unwrap_or("未命名会话"),
+        &entries,
+    ))
+}
+
 /// 列出全部白名单条目（内置 + 用户添加）。
 #[tauri::command]
 pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {
