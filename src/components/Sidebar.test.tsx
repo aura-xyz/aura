@@ -46,6 +46,7 @@ async function mount(props: Partial<Record<string, unknown>> = {}) {
         onOpenSettings={vi.fn()}
     onOpenSkills={vi.fn()}
         onOpenMcp={vi.fn()}
+        onOpenTimeline={vi.fn()}
         {...props}
       />,
     ),
@@ -61,21 +62,24 @@ describe("Sidebar", () => {
     expect(screen.getByText("别的组")).toBeInTheDocument();
   });
 
-  it("导航项按新建对话 / Skills / MCP 的顺序渲染", async () => {
+  it("导航项按新建对话 / Skills / MCP / 轨迹 的顺序渲染", async () => {
     await mount();
     const nav = screen.getByRole("navigation");
     const labels = Array.from(nav.querySelectorAll("span")).map((s) => s.textContent);
-    expect(labels).toEqual(["新建对话", "Skills", "MCP"]);
+    expect(labels).toEqual(["新建对话", "Skills", "MCP", "轨迹"]);
   });
 
   it("点击导航项触发对应回调", async () => {
     const onOpenSkills = vi.fn();
     const onOpenMcp = vi.fn();
-    await mount({ onOpenSkills, onOpenMcp });
+    const onOpenTimeline = vi.fn();
+    await mount({ onOpenSkills, onOpenMcp, onOpenTimeline });
     await userEvent.click(screen.getByText("Skills"));
     await userEvent.click(screen.getByText("MCP"));
+    await userEvent.click(screen.getByText("轨迹"));
     expect(onOpenSkills).toHaveBeenCalledTimes(1);
     expect(onOpenMcp).toHaveBeenCalledTimes(1);
+    expect(onOpenTimeline).toHaveBeenCalledTimes(1);
   });
 
   /// 当前视图要能高亮，否则用户在 Skills 页看不出自己在哪
@@ -179,7 +183,7 @@ describe("Sidebar", () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     const { container } = await mount();
     const btns = Array.from(container.querySelectorAll("nav button"));
-    expect(btns).toHaveLength(3);
+    expect(btns).toHaveLength(4);
     for (const b of btns) {
       expect(b.className).toContain("justify-center");
       expect(b.className).toContain("gap-0");

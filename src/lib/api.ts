@@ -367,6 +367,46 @@ export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
   return invoke("remove_skill_source", { url });
 }
 
+// ── 操作时间线（v0.6.2）─────────────────────────────────────────
+
+export type TimelineKind =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "denied"
+  | "context"
+  | "todo"
+  | "error"
+  | "notice";
+
+/** 一条时间线记录。 */
+export interface TimelineEntry {
+  session_id: string;
+  seq: number;
+  ts_ms: number;
+  /** 第几轮（工具轮次）；0 = 对话开始 */
+  turn: number;
+  kind: TimelineKind;
+  title: string;
+  detail: string | null;
+  ok: boolean;
+  /** 耗时（毫秒），仅工具类有 */
+  duration_ms: number | null;
+}
+
+/** 读某会话的时间线（对话级隔离：只返回该会话的记录）。 */
+export function listTimeline(sessionId: string): Promise<TimelineEntry[]> {
+  return invoke("list_timeline", { sessionId });
+}
+
+/** 导出某会话的时间线为 Markdown。 */
+export function exportTimeline(
+  sessionId: string,
+  title?: string,
+): Promise<string> {
+  return invoke("export_timeline", { sessionId, title: title ?? null });
+}
+
 // ── 路径白名单（v0.6.2）─────────────────────────────────────────
 
 /** 一个白名单条目。 */

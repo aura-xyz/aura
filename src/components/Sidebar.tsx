@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  History,
   MessageSquarePlus,
   PanelLeftClose,
   Plug,
@@ -12,7 +13,7 @@ import { useStore } from "../store";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
 
-export type View = "chat" | "settings" | "skills" | "mcp";
+export type View = "chat" | "settings" | "skills" | "mcp" | "timeline";
 
 interface Props {
   /** 当前视图，用于高亮导航项 */
@@ -21,6 +22,7 @@ interface Props {
   onOpenSettings: () => void;
   onOpenSkills: () => void;
   onOpenMcp: () => void;
+  onOpenTimeline: () => void;
   /** 选中会话后回调，用于从设置/Skills/MCP 页切回对话视图 */
   onNavigate?: () => void;
 }
@@ -36,6 +38,7 @@ export default function Sidebar({
   onOpenSettings,
   onOpenSkills,
   onOpenMcp,
+  onOpenTimeline,
   onNavigate,
 }: Props) {
   const {
@@ -143,6 +146,7 @@ function toggleExpand(w: string) {
             { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },
    { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
             { key: "mcp", label: "MCP", icon: Plug, onClick: onOpenMcp },
+            { key: "timeline", label: "轨迹", icon: History, onClick: onOpenTimeline },
           ] as const
         ).map(({ key, label: text, icon: Icon, onClick }) => (
      <button

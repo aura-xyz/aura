@@ -246,6 +246,14 @@ pub async fn send_message(
                 }
             }),
             disabled_skills: &disabled_skills,
+            persist_timeline: Some(&|entry: crate::timeline::TimelineEntry| {
+                // 时间线落库：每条一次写。
+                // 写失败不阻断对话——时间线是「锦上添花」，不能反过来
+                // 影响模型干活。
+                if let Ok(db) = state.db.lock() {
+                    let _ = db::add_timeline_entry(&db, &entry);
+                }
+            }),
         };
         run_turn(&mut ctx, message).await
     };

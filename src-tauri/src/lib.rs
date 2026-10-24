@@ -7,6 +7,7 @@ pub mod market;
 pub mod paths;
 pub mod providers;
 pub mod secure;
+pub mod timeline;
 pub mod tools;
 
 use commands::{

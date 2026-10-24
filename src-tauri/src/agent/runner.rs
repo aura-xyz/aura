@@ -205,6 +205,11 @@ pub struct TurnContext<'a> {
     /// runner 不持有数据库连接，由 `commands.rs` 注入闭包，
     /// 这样存储细节不会渗进 agent 层，也便于测试时替换。
     pub persist_todos: Option<&'a (dyn Fn(Vec<Todo>) + Send + Sync)>,
+    /// 落盘时间线记录的回调（v0.6.2）。
+    ///
+    /// 与 `persist_todos` 同一思路：runner 不持有数据库连接，
+    /// 由 `commands.rs` 注入闭包，存储细节不渗进 agent 层。
+    pub persist_timeline: Option<&'a (dyn Fn(crate::timeline::TimelineEntry) + Send + Sync)>,
     /// 用户授权的额外目录（路径白名单，v0.6.2）。
     ///
     /// 展示用的绝对路径（正斜杠），会写进 system prompt 的「可访问路径」一节。
@@ -220,6 +225,46 @@ pub struct TurnContext<'a> {
 enum Next {
     Tool(String, Value),
     Reject(String),
+}
+
+/// 写一条时间线记录（无回调时静默跳过）。
+///
+/// 序号由调用方维护（`seq` 参数）——必须严格递增，否则主键会撞。
+fn record_timeline(
+    ctx: &TurnContext<'_>,
+    seq: i64,
+    turn: i64,
+    kind: crate::timeline::EntryKind,
+    title: impl Into<String>,
+    detail: Option<String>,
+    ok: bool,
+    duration_ms: Option<i64>,
+) {
+    let Some(persist) = ctx.persist_timeline else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let mut entry = crate::timeline::TimelineEntry::new(
+        ctx.session_id,
+        seq,
+        now,
+        turn,
+        kind,
+        title,
+    );
+    if let Some(d) = detail {
+        entry = entry.with_detail(d);
+    }
+    if !ok {
+        entry = entry.failed();
+    }
+    if let Some(ms) = duration_ms {
+        entry = entry.with_duration(ms);
+    }
+    persist(entry);
 }
 
 fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
@@ -506,6 +551,19 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
     let _keep_awake = KeepAwake::new();
     ctx.history
         .push(json!({ "role": "user", "content": user_message }));
+    // 时间线序号：会话内严格递增（主键）
+    let mut tl_seq: i64 = 0;
+    record_timeline(
+        ctx,
+        tl_seq,
+        0,
+        crate::timeline::EntryKind::User,
+        truncate_tail(user_message, 80),
+        None,
+        true,
+        None,
+    );
+    tl_seq += 1;
     let mut parse_failures: u32 = 0;
         let mut rejects = RejectCounter::default();
     // v0.5.3：原先只记「上一个工具」的键+次数，一轮里给出多个工具时会互相
@@ -898,6 +956,17 @@ if tool_jsons.is_empty() {
                     let rejected = parse_tool_call(raw_json)
                         .map(|(name, _)| normalize_tool_name(&name))
                         .unwrap_or_else(|_| "unknown".to_string());
+                    record_timeline(
+                        ctx,
+                        tl_seq,
+                        rounds as i64,
+                        crate::timeline::EntryKind::Denied,
+                        format!("{rejected} 被拒绝"),
+                        Some(msg.clone()),
+                        false,
+                        None,
+                    );
+                    tl_seq += 1;
                     let exceeded = rejects.record(&rejected, max_parse_retries);
                     // 另一个兜底：全部拒绝次数也超限时终止，防止模型
                     // 轮换大量工具名无限重试
@@ -935,6 +1004,17 @@ if tool_jsons.is_empty() {
                     consecutive.insert(throttle, seen + 1);
 
                     let body = if over_limit {
+                        record_timeline(
+                            ctx,
+                            tl_seq,
+                            rounds as i64,
+                            crate::timeline::EntryKind::Tool,
+                            format!("{tool_label}（连续调用超限）"),
+                            Some("达到连续调用上限，已拦截".into()),
+                            false,
+                            None,
+                        );
+                        tl_seq += 1;
                         emit_action_detail(
                             ctx.app,
                             ctx.session_id,
@@ -945,14 +1025,37 @@ if tool_jsons.is_empty() {
                         "Error: 连续调用次数超限，请尝试其他工具或基于现有信息直接回复。"
                             .to_string()
                     } else {
-                        match tools::execute(
+                        let tool_started = std::time::Instant::now();
+                        let tool_result = tools::execute(
                             ctx.scope.clone(),
                             name.clone(),
                             args.clone(),
                         )
-                        .await
-                        {
+                        .await;
+                        let tool_ms = tool_started.elapsed().as_millis() as i64;
+                        match tool_result {
                             Ok(out) => {
+                                // 时间线：工具调用（含参数与耗时）
+                                record_timeline(
+                                    ctx,
+                                    tl_seq,
+                                    rounds as i64,
+                                    crate::timeline::EntryKind::Tool,
+                                    out.label.clone(),
+                                    Some(
+                                        format!(
+                                            "参数：{}\n结果：{}",
+                                            truncate_tail(
+                                                &args.to_string(),
+                                                400
+                                            ),
+                                            truncate_tail(&out.result, 600)
+                                        ),
+                                    ),
+                                    true,
+                                    Some(tool_ms),
+                                );
+                                tl_seq += 1;
                                 // Exec 类工具的结果是命令输出，交给前端折叠展示
                                 let detail = if name.starts_with("run_script") {
                                     Some(out.result.clone())
@@ -983,6 +1086,23 @@ if tool_jsons.is_empty() {
                                 out.result
                             }
                             Err(fail) => {
+                                // 时间线：失败的工具调用同样要记——
+                                // 「哪里失败了」往往比「失败了」更重要
+                                record_timeline(
+                                    ctx,
+                                    tl_seq,
+                                    rounds as i64,
+                                    crate::timeline::EntryKind::Tool,
+                                    fail.label.clone(),
+                                    Some(format!(
+                                        "参数：{}\n错误：{}",
+                                        truncate_tail(&args.to_string(), 400),
+                                        fail.error
+                                    )),
+                                    false,
+                                    Some(tool_ms),
+                                );
+                                tl_seq += 1;
                                 // 失败信息始终附带，便于用户看清原因
                                 emit_action_detail(
                                     ctx.app,
