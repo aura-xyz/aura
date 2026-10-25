@@ -222,17 +222,23 @@ fn is_drive_root(path: &Path) -> bool {
 ///
 /// 输入可能来自对话框（用户手输）或目录选择器（已是绝对路径）。
 /// 两者都要能处理。
+///
+/// **反斜杠一律转成正斜杠，不报错。**
+/// v0.6.2 原本遇到 `\` 直接拒绝，理由是「统一用正斜杠」——
+/// 但 Windows 的目录选择器**返回的就是反斜杠路径**
+/// （`C:\Users\x\Desktop`），于是「用选择器添加目录」这条主路径
+/// 必然失败，用户看到的是「请使用正斜杠 /，不要用反斜杠 \」，
+/// 而他根本没机会选择用哪种斜杠。这是 v0.6.3 用户实测报出的问题。
 pub fn normalize(input: &str) -> Result<PathBuf, String> {
     let raw = input.trim();
     if raw.is_empty() {
         return Err("路径不能为空".into());
     }
-    if raw.contains('\\') {
-        return Err("请使用正斜杠 /，不要用反斜杠 \\".into());
-    }
+    // 反斜杠 → 正斜杠。Windows 上两者都是路径分隔符，等价。
+    let raw = raw.replace('\\', "/");
 
     // 已是绝对路径（盘符形式）
-    let p = PathBuf::from(raw);
+    let p = PathBuf::from(&raw);
     if p.is_absolute() {
         return Ok(strip_trailing_slash(p));
     }
@@ -243,10 +249,19 @@ pub fn normalize(input: &str) -> Result<PathBuf, String> {
     Ok(strip_trailing_slash(cwd.join(p)))
 }
 
+/// 去掉末尾斜杠。
+///
+/// **盘符根必须保留斜杠**：`C:/` 去掉斜杠就是 `C:`——那是**相对路径**
+/// （当前盘符的目录），不是根。后果不只是显示难看：
+/// `classify("C:")` 判不出「盘符根」这一档，于是「拒绝系统目录」的闸门
+/// 会被绕过；再存进白名单也是错的路径。
 fn strip_trailing_slash(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy().trim_end_matches('/').to_string();
     if s.is_empty() {
         p
+    } else if s.ends_with(':') {
+        // 盘符根：补回斜杠
+        PathBuf::from(format!("{s}/"))
     } else {
         PathBuf::from(s)
     }
@@ -377,9 +392,34 @@ mod tests {
     }
 
     #[test]
-    fn normalize_rejects_backslash_and_empty() {
+    fn normalize_rejects_empty_only() {
         assert!(normalize("").is_err());
-        assert!(normalize("C:\\Users\\x").is_err());
+        assert!(normalize("   ").is_err());
+    }
+
+    /// **反斜杠必须被接受**（不是拒绝）。
+    ///
+    /// Windows 的目录选择器返回的就是反斜杠路径，v0.6.2 把它当错误拒绝，
+    /// 于是「用选择器添加目录」这条主路径必然失败。
+    #[test]
+    fn normalize_accepts_backslash_and_converts_to_forward_slash() {
+        let abs = normalize("C:\\Users\\x\\Desktop").unwrap();
+        assert!(abs.is_absolute());
+        assert_eq!(abs.to_string_lossy(), "C:/Users/x/Desktop");
+        // 盘符根也一样
+        assert_eq!(normalize("C:\\").unwrap().to_string_lossy(), "C:/");
+    }
+
+    /// 盘符根去掉斜杠会变成 `C:`（相对路径），那会**绕过盘符根拒绝档**。
+    /// 归一化后必须仍然是根。
+    #[test]
+    fn normalized_drive_root_is_still_rejected() {
+        let root = normalize("C:\\").unwrap();
+        assert_eq!(root.to_string_lossy(), "C:/");
+        assert!(
+            classify(&root).is_reject(),
+            "归一化后的盘符根必须仍在拒绝档里"
+        );
     }
 
     #[test]
