@@ -65,7 +65,8 @@ pub fn search_workspace(scope: &AccessScope, args: &Value) -> Result<ToolOutput,
         return Ok(ToolOutput {
             label,
             result: "未找到匹配内容，可尝试更换关键词，或先用 list_files 查看目录结构。".into(),
-        });
+        
+            diff: None,});
     }
     hits.sort_by(|a, b| {
         b.score
@@ -120,7 +121,7 @@ pub fn search_workspace(scope: &AccessScope, args: &Value) -> Result<ToolOutput,
         result.push('\n');
     }
     result.push_str("(可对上述文件使用 read_file 查看完整上下文)");
-    Ok(ToolOutput { label, result })
+    Ok(ToolOutput { label, result, diff: None })
 }
 
 fn collect_hits(root_c: &Path, terms: &[String]) -> Vec<Hit> {

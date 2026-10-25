@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronRight, CircleAlert, Info, LoaderCircle } from "lucide-react";
+import DiffView from "./DiffView";
 
 export function ActionRow({
   text,
@@ -7,6 +8,7 @@ export function ActionRow({
   detail,
   durationMs,
   running,
+  diff,
 }: {
   text: string;
   ok?: boolean;
@@ -15,6 +17,8 @@ export function ActionRow({
   durationMs?: number;
   /** 工具正在执行。成功后端会补发带 ok 与耗时的事件，此处仅覆盖等待期 */
   running?: boolean;
+  /** 文件修改的前后内容（v0.7.0），用于差异视图 */
+  diff?: { path: string; before: string; after: string };
 }) {
   // 失败默认展开，便于直接看到原因；成功默认折叠避免刷屏
   const [open, setOpen] = useState(ok === false);
@@ -70,6 +74,11 @@ export function ActionRow({
         <pre className="scrollbar-hidden ml-5 mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-tag border border-line bg-surface-sunken px-2.5 py-2 text-[12px] leading-relaxed text-subtle">
           {detail}
         </pre>
+      )}
+      {diff && (
+        <div className="ml-5">
+          <DiffView path={diff.path} before={diff.before} after={diff.after} />
+        </div>
       )}
     </div>
   );

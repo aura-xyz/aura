@@ -55,6 +55,12 @@ export interface Block {
   detail?: string;
   /** action 块专用：工具调用耗时（毫秒）。后端在工具执行完后才 emit */
   durationMs?: number;
+  /** action 块专用：文件修改的前后内容（v0.7.0），用于差异视图 */
+  diff?: {
+    path: string;
+    before: string;
+    after: string;
+  };
 }
 
 export type ChatMessage =
@@ -406,6 +412,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ok?: boolean;
       detail?: string;
       duration_ms?: number;
+      diff?: { path: string; before: string; after: string };
     }>("agent:action", (p) => {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;
@@ -417,6 +424,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         detail: p.detail || undefined,
         // 耗时同理：旧版本事件没有这个字段，显示为「无」而非 0
         durationMs: p.duration_ms ?? undefined,
+        // diff 同理：旧版本事件没有这个字段
+        diff: p.diff ?? undefined,
       });
     });
     on<{ session_id: string; text?: string }>("agent:notice", (p) => {

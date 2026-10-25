@@ -5,7 +5,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { common } from "lowlight";
-import CopyButton from "./CopyButton";
+import CodeBlockShell from "./CodeBlockShell";
 // common 集之外补充的语言。highlight.js 不随包发布这些子模块的类型，
 // 声明在 src/vite-env.d.ts。注意两点：
 // - TOML 没有独立语法文件，highlight.js 用 ini 语法覆盖（ini 的别名含
@@ -33,50 +33,6 @@ function isExternal(href: string): boolean {
  * 语言标签显示名。模型输出的语言标识种类很多，只映射常见的，
  * 其余直接回退到标识本身（`tsx`、`sh` 这类反而比猜一个中文名更准确）。
  */
-const LANG_LABELS: Record<string, string> = {
-  bash: "Bash",
-  c: "C",
-  cpp: "C++",
-  cs: "C#",
-  css: "CSS",
-  diff: "Diff",
-  go: "Go",
-  graphql: "GraphQL",
-  html: "HTML",
-  ini: "INI",
-  java: "Java",
-  javascript: "JavaScript",
-  json: "JSON",
-  jsx: "JSX",
-  kotlin: "Kotlin",
-  lua: "Lua",
-  markdown: "Markdown",
-  php: "PHP",
-  python: "Python",
-  py: "Python",
-  rb: "Ruby",
-  rs: "Rust",
-  rust: "Rust",
-  scss: "SCSS",
-  sh: "Shell",
-  shell: "Shell",
-  sql: "SQL",
-  swift: "Swift",
-  toml: "TOML",
-  ts: "TypeScript",
-  tsx: "TSX",
-  typescript: "TypeScript",
-  vue: "Vue",
-  xml: "XML",
-  yaml: "YAML",
-  yml: "YAML",
-  zig: "Zig",
-};
-
-function langLabel(raw: string): string {
-  const key = raw.toLowerCase();
-  return LANG_LABELS[key] ?? raw;
-}
 
 // 这三项必须是模块级常量。在组件体内写字面量会每次 render 都造出新的
 // 数组/对象，让 React.memo 的浅比较恒不相等——memo 形同虚设，
@@ -140,20 +96,14 @@ const COMPONENTS = {
       {children}
     </a>
   ),
-  /** 代码块：左上角语言标签 + 右上角复制按钮 */
+  /** 代码块：左上角语言标签 + 右上角复制按钮；长代码默认折叠 */
   pre: ({ children }: { children?: React.ReactNode }) => {
     const lang = pickLang(children);
     const code = extractCodeText(children);
     return (
-      <div className="md-code" data-ctx-codeblock={code}>
-        {lang && <span className="md-code-lang">{langLabel(lang)}</span>}
-        <CopyButton
-          text={code}
-          className="md-code-copy"
-          label="复制代码"
-        />
-        <pre>{children}</pre>
-      </div>
+      <CodeBlockShell lang={lang} code={code}>
+        {children}
+      </CodeBlockShell>
     );
   },
 };

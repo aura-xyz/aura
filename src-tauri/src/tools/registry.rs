@@ -285,7 +285,8 @@ fn run_load_skill(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
         return Ok(ToolOutput {
             label: label_load_skill(args),
             result: body,
-        });
+        
+            diff: None,});
     }
 
     let content = crate::agent::skill::read_skill_file(&scope.workspace, name, file)?;
@@ -295,7 +296,8 @@ fn run_load_skill(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
             "技能 `{}` 的附属文件 `{file}`（相对技能目录）：\n\n{content}",
             name.trim()
         ),
-    })
+    
+        diff: None,})
 }
 
 #[cfg(test)]

@@ -62,6 +62,7 @@ function renderBlock(block: Block, i: number) {
           ok={block.ok}
           detail={block.detail}
           durationMs={block.durationMs}
+          diff={block.diff}
         />
       );
     case "notice":

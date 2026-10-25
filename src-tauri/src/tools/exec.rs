@@ -262,7 +262,8 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
                                 out
                             }
                         ),
-                    });
+                    
+                        diff: None,});
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -290,7 +291,8 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     Ok(ToolOutput {
         label: format!("Exec '{}'", first_line(command)),
         result: format!("{}\n--- 输出 ---\n{}", code_text, body),
-    })
+    
+        diff: None,})
 }
 
 /// 通过环境变量传递原始命令串。
