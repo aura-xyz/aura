@@ -1073,7 +1073,7 @@ pub fn export_timeline(
     ))
 }
 
-/// 一个候选文件（`@` 引用面板用）。
+/// 一个候选路径（`@` 引用面板用）。文件与目录都在内。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FileCandidate {
     /// 插入输入框的路径：工作区内的用**相对路径**，授权目录用绝对路径
@@ -1082,6 +1082,8 @@ pub struct FileCandidate {
     pub name: String,
     /// 所在目录（展示用）
     pub dir: String,
+    /// 是目录吗
+    pub is_dir: bool,
 }
 
 /// 列出工作区里匹配的文件（`@` 引用面板用）。
@@ -1127,24 +1129,32 @@ pub fn list_workspace_files(
         // 第 0 个根是工作区，其余是授权目录。
         let is_workspace = idx == 0;
         let hits = crate::tools::search::list_paths(root, &query, limit);
-        for rel in hits {
+        for hit in hits {
+            // 目录保留结尾的 `/`（`app/` 与文件 `app` 靠它区分），
+            // 但算「所在目录」与「文件名」时要去掉。
+            let trimmed = hit.path.trim_end_matches('/').to_string();
             let (path, dir) = if is_workspace {
-                let dir = match rel.rfind('/') {
-                    Some(p) => rel[..p].to_string(),
+                let dir = match trimmed.rfind('/') {
+                    Some(p) => trimmed[..p].to_string(),
                     None => String::new(),
                 };
-                (rel.clone(), dir)
+                (hit.path.clone(), dir)
             } else {
-                let abs = root.join(&rel);
-                let abs = crate::paths::display(&abs);
+                let abs = crate::paths::display(&root.join(&trimmed));
                 let dir = match abs.rfind('/') {
                     Some(p) => abs[..p].to_string(),
                     None => String::new(),
                 };
-                (abs, dir)
+                // 绝对路径的目录也保留结尾斜杠
+                (format!("{abs}/"), dir)
             };
-            let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-            out.push(FileCandidate { path, name, dir });
+            let name = trimmed.rsplit('/').next().unwrap_or(&trimmed).to_string();
+            out.push(FileCandidate {
+                path,
+                name,
+                dir,
+                is_dir: hit.is_dir,
+            });
             if out.len() >= limit {
                 break;
             }

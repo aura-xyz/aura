@@ -31,6 +31,8 @@ export interface MentionItem {
   detail: string;
   /** 选中后插入输入框的文本 */
   insert: string;
+  /** 是目录吗（文件类候选用） */
+  isDir?: boolean;
 }
 
 /**
@@ -69,12 +71,13 @@ export function findTrigger(text: string, cursor: number): MentionTrigger | null
 }
 
 /**
- * 文件候选。
+ * 路径候选（文件与目录）。
  *
  * 插入格式 `@<路径>`——与拖放文件用的是同一种写法，模型看到的东西一致。
+ * 目录保留结尾的 `/`（`@<app/>`），模型据此知道那是目录。
  */
 export function fileItems(
-  files: Array<{ path: string; name: string; dir: string }>,
+  files: Array<{ path: string; name: string; dir: string; is_dir: boolean }>,
   query: string,
 ): MentionItem[] {
   const q = query.trim().toLowerCase();
@@ -83,8 +86,9 @@ export function fileItems(
     .map((f) => ({
       kind: "file" as const,
       label: f.name,
-      detail: f.dir,
+      detail: f.is_dir ? `${f.dir}（目录）` : f.dir,
       insert: `@<${f.path}>`,
+      isDir: f.is_dir,
     }));
 }
 

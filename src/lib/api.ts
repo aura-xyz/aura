@@ -208,14 +208,16 @@ export function listSkills(): Promise<SkillView[]> {
   return invoke("list_skills");
 }
 
-/** 一个候选文件（`@` 引用面板用）。 */
+/** 一个候选路径（`@` 引用面板用）。文件与目录都在内。 */
 export interface FileCandidate {
-  /** 插入输入框的路径 */
+  /** 插入输入框的路径。**目录以 `/` 结尾** */
   path: string;
-  /** 文件名 */
+  /** 文件名（目录则是目录名） */
   name: string;
   /** 所在目录 */
   dir: string;
+  /** 是目录吗 */
+  is_dir: boolean;
 }
 
 /**

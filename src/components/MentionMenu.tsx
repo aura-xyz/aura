@@ -1,4 +1,4 @@
-import { FileCode2, Sparkles } from "lucide-react";
+import { FileCode2, Folder, Sparkles } from "lucide-react";
 import type { MentionItem } from "../lib/mentions";
 
 /**
@@ -29,7 +29,9 @@ export default function MentionMenu({
     <div
       role="listbox"
       aria-label={kind === "file" ? "文件引用" : "技能调用"}
-      className="mb-2 max-h-64 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
+      /* 宽度必须与输入卡一致：输入卡是 mx-auto + max-w-4xl 居中限宽，
+         浮层若整块铺满，两者的左右边界就对不上，视觉上像是两个不同的层。 */
+      className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl max-h-64 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
     >
       <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-subtle">
         {kind === "file" ? (
@@ -55,7 +57,10 @@ export default function MentionMenu({
             i === activeIndex ? "bg-bubble" : "hover:bg-bubble"
           }`}
         >
-          <span className="shrink-0 text-sm">{item.label}</span>
+          <span className="flex shrink-0 items-center gap-1 text-sm">
+            {item.isDir && <Folder size={12} className="text-subtle" />}
+            {item.label}
+          </span>
           {item.detail && (
             <span className="min-w-0 flex-1 truncate text-[11px] text-subtle">
               {item.detail}

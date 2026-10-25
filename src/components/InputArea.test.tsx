@@ -264,6 +264,19 @@ describe("InputArea 的 @ / 触发", () => {
     expect(box).toHaveValue("/docx ");
   });
 
+  /// 浮层与输入卡片的宽度约束必须一致（都是 mx-auto + max-w-4xl）。
+  /// 不一致时两者左右边界对不上，看着像两个不同的层。
+  it("浮层宽度与输入框一致", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    const menu = await screen.findByRole("listbox", { name: "文件引用" });
+    const card = box.closest("div.rounded-card")!;
+    const widthOf = (el: Element) => (el.className.match(/max-w-\S+/) ?? [])[0] ?? "";
+    expect(widthOf(menu)).not.toBe("");
+    expect(widthOf(menu)).toBe(widthOf(card));
+  });
+
   it("Esc 关闭浮层，不影响已输入的文字", async () => {
     mount({ sessionId: "s1" });
     const box = screen.getByRole("textbox");

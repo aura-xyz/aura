@@ -68,14 +68,22 @@ describe("findTrigger", () => {
 
 describe("fileItems", () => {
   const files = [
-    { path: "src/store.tsx", name: "store.tsx", dir: "src" },
-    { path: "src/store/notes.md", name: "notes.md", dir: "src/store" },
-    { path: "docs/readme.md", name: "readme.md", dir: "docs" },
+    { path: "src/store.tsx", name: "store.tsx", dir: "src", is_dir: false },
+    { path: "src/store/notes.md", name: "notes.md", dir: "src/store", is_dir: false },
+    { path: "docs/readme.md", name: "readme.md", dir: "docs", is_dir: false },
+    { path: "app/", name: "app", dir: "", is_dir: true },
   ];
 
   it("按文件名或路径过滤", () => {
     const items = fileItems(files, "store");
     expect(items.map((i) => i.label)).toEqual(["store.tsx", "notes.md"]);
+  });
+
+  it("目录保留结尾斜杠，插入后能看出那是目录", () => {
+    const items = fileItems(files, "app");
+    const dir = items.find((i) => i.isDir);
+    expect(dir?.insert).toBe("@<app/>");
+    expect(dir?.detail).toContain("目录");
   });
 
   it("插入格式是 @<路径>，与拖放文件一致", () => {
@@ -84,7 +92,7 @@ describe("fileItems", () => {
   });
 
   it("空过滤词返回全部", () => {
-    expect(fileItems(files, "").length).toBe(3);
+    expect(fileItems(files, "").length).toBe(4);
   });
 });
 
