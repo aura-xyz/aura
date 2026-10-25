@@ -107,11 +107,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-.plugin(tauri_plugin_dialog::init())
-    // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
-    // relaunch 负责重启应用；perms 授予 updater 默认权限集
-    .plugin(tauri_plugin_process::init())
-    .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        // v0.6.3：窗口位置/大小/最大化状态记忆。
+        // 放在 setup 之前：插件要在窗口创建时挂上监听，晚了就记不到首次状态。
+        // 首次启动没有历史状态，仍按下方 inner_size + maximized 走。
+        .plugin(tauri_plugin_window_state::Builder::new().build())
+        // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
+        // relaunch 负责重启应用；perms 授予 updater 默认权限集
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;

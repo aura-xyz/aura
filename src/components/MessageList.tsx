@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { useStore, type Block } from "../store";
+import { plainTextOf } from "../lib/messageText";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
 
@@ -12,8 +13,12 @@ const UserBubble = memo(function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
       {/* 品牌蓝浅底是「归属」锚点：AI 侧维持灰底，对话归属一眼可辨。
-          色值与灰底的可辨识度由 lib/contrast.test.ts 钉住。 */}
-      <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed">
+          色值与灰底的可辨识度由 lib/contrast.test.ts 钉住。
+          data-ctx-message 供全局右键定位，值是要复制的纯文本。 */}
+      <div
+        data-ctx-message={content}
+        className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"
+      >
         {content}
       </div>
     </div>
@@ -56,7 +61,11 @@ const AssistantMessage = memo(function AssistantMessage({
       </div>
     );
   }
-  return <div className="flex flex-col gap-3">{blocks.map(renderBlock)}</div>;
+  return (
+    <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(blocks)}>
+      {blocks.map(renderBlock)}
+    </div>
+  );
 });
 
 function EmptyState() {

@@ -6,6 +6,14 @@ import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
 import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
+import {
+  codeBlockMenuItems,
+  findCodeBlockTarget,
+  findMessageTarget,
+  messageMenuItems,
+  textMenuItems,
+} from "./lib/contextMenuItems";
+import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
@@ -70,6 +78,19 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     }
   }, [activeSession?.messages, view]);
 
+  // v0.6.3：拦截刷新快捷键。
+  // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
+  // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
+  // 本次只拦截不映射行为，留待后续按需定义应用内语义。
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
+      e.preventDefault();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
 
@@ -102,7 +123,51 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       return;
     }
 
-    // 其余区域统一用原生菜单
+    // v0.6.3：消息气泡与代码块补自绘菜单。在此之前这一支是
+    // preventDefault 却不弹菜单，正文右键什么都不发生。
+    const msgEl = findMessageTarget(target);
+    if (msgEl) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: messageMenuItems({
+          onCopy: () => void copyText(msgEl.dataset.ctxMessage ?? ""),
+        }),
+      });
+      return;
+    }
+
+    const codeEl = findCodeBlockTarget(target);
+    if (codeEl) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: codeBlockMenuItems({
+          onCopy: () => void copyText(codeEl.dataset.ctxCodeblock ?? ""),
+        }),
+      });
+      return;
+    }
+
+    // 普通正文：提供「复制」。仅当确有选中文本时才给——
+    // 空选区复制是无意义的空操作，不如直接禁掉。
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: textMenuItems({
+          onCopy: () => document.execCommand("copy"),
+        }),
+      });
+      return;
+    }
+
+    // 既无自绘条目、也无选中内容：禁掉 WebView 原生菜单。
+    // 此前此处注释写「统一用原生菜单」与实际代码相反，已修正。
     e.preventDefault();
   }
 
