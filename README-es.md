@@ -60,6 +60,7 @@ La lista de tareas se borra automáticamente al completarse todos los pasos, se 
   - Ctrl+F abre la búsqueda de sesiones dentro de la app
   - El estado vacío muestra tarjetas de ejemplo que rellenan un prompt inicial en la entrada
   - Cerrar la ventana ahora la minimiza a la bandeja; usa «Salir de Aura» en la página de información para salir por completo
+  - Las actualizaciones ahora se descargan desde varias fuentes y eligen automáticamente la más rápida (las descargas de GitHub son muy lentas en China continental)
 > - v0.6.3:
 >   - Renovación visual: nuevos colores semánticos de éxito, advertencia y marca, y todos los contrastes del modo oscuro alcanzan el estándar de accesibilidad 4.5:1.
 >   - Tus mensajes usan un fondo azul de marca para distinguirse de las respuestas de la IA; la sesión actual de la barra lateral también se marca con el color de marca.

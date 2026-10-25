@@ -60,6 +60,7 @@ The checklist clears automatically once all steps are complete, and is saved wit
   - Ctrl+F opens in-app session search
   - The empty state now shows example cards that fill a starter prompt into the input
   - Closing the window now minimizes it to the tray; use "Quit Aura" in the about page to exit fully
+  - Updates now download from multiple sources and pick the fastest one automatically (GitHub downloads are extremely slow in mainland China)
 > - v0.6.3:
 >   - Visual refresh: new success / warning / brand semantic colors, and every dark-mode contrast ratio now meets the 4.5:1 accessibility standard.
 >   - Your messages use a brand-blue background so they stand out from AI replies; the current sidebar session is brand-marked too.
