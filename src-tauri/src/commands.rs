@@ -382,6 +382,41 @@ pub async fn truncate_history(
     })
 }
 
+/// 侧作用检查结果（前端投影）。
+#[derive(serde::Serialize)]
+pub struct SideEffectsDto {
+    /// 写类工具调用次数（write_file/string_replace/replace_lines）。
+    pub writes: usize,
+    /// 执行类工具调用次数（run_script）。
+    pub execs: usize,
+    /// 受影响的目标路径（去重）。run_script 用命令首行。
+    pub targets: Vec<String>,
+}
+
+/// 检查会话历史中即将被截断部分的侧作用（写/执行工具）。
+///
+/// 用于「重新生成/编辑重跑」前预检：前端据此决定是否弹确认框。
+/// 只读 DB，不修改内存态。
+#[tauri::command]
+pub async fn inspect_side_effects(
+    state: State<'_, AppState>,
+    session_id: String,
+    keep_through_user: usize,
+) -> Result<SideEffectsDto, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    let history = db::load_history(&db, &session_id)
+        .map_err(|e| e.to_string())?
+        .map(|(h, _)| h)
+        .unwrap_or_default();
+
+    let effects = crate::history::inspect_side_effects(&history, keep_through_user);
+    Ok(SideEffectsDto {
+        writes: effects.writes,
+        execs: effects.execs,
+        targets: effects.targets,
+    })
+}
+
 #[derive(serde::Serialize)]
 pub struct SessionSnapshot {
     pub id: String,

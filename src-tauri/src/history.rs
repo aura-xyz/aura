@@ -105,6 +105,76 @@ pub fn apply_truncation(history: &[Value], keep_through_user: usize) -> (Vec<Val
     (kept, plan)
 }
 
+/// 侧作用检查：统计被截断段里的写/执行工具调用。
+///
+/// 用于「重新生成/编辑重跑」前预检：若用户即将丢弃的历史里包含
+/// 写文件或执行命令，弹确认框让用户二次确认。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideEffects {
+    /// 写类工具调用次数（write_file/string_replace/replace_lines）。
+    pub writes: usize,
+    /// 执行类工具调用次数（run_script）。
+    pub execs: usize,
+    /// 受影响的目标路径（去重）。run_script 用命令首行。
+    pub targets: Vec<String>,
+}
+
+/// 检查 history 中 `keep_through_user` 之后被截断部分的侧作用。
+///
+/// 逻辑：
+/// 1. 复用 `truncate_plan` 得到 `keep_entries`
+/// 2. 遍历 `history[keep_entries..]`，正则匹配 `<tool_result name="..." target="...">`
+/// 3. 用 `registry::find(name)` 判定 `ToolKind`，累计 writes/execs，收集 target
+/// 4. target 需反转义（`tool_result_tag` 里把 `"` 转为 `'`）
+pub fn inspect_side_effects(history: &[Value], keep_through_user: usize) -> SideEffects {
+    use crate::tools::registry::{find, ToolKind};
+
+    let plan = truncate_plan(history, keep_through_user);
+    let mut writes = 0usize;
+    let mut execs = 0usize;
+    let mut targets = Vec::new();
+
+    for entry in &history[plan.keep_entries..] {
+        let content = match entry.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // 匹配 <tool_result name="..." target="..."> 或 <tool_result name="...">
+        let re = regex::Regex::new(r#"<tool_result\s+name="([^"]+)"(?:\s+target="([^"]*)")?"#).unwrap();
+        for cap in re.captures_iter(content) {
+            let name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let target = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+
+            if let Some(spec) = find(name) {
+                match spec.kind {
+                    ToolKind::Write => {
+                        writes += 1;
+                        if !target.is_empty() {
+                            let unescaped = target.replace('\'', "\"");
+                            if !targets.contains(&unescaped) {
+                                targets.push(unescaped);
+                            }
+                        }
+                    }
+                    ToolKind::Exec => {
+                        execs += 1;
+                        if !target.is_empty() {
+                            let unescaped = target.replace('\'', "\"");
+                            if !targets.contains(&unescaped) {
+                                targets.push(unescaped);
+                            }
+                        }
+                    }
+                    ToolKind::Read => {}
+                }
+            }
+        }
+    }
+
+    SideEffects { writes, execs, targets }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +314,158 @@ mod tests {
         let (once, _) = apply_truncation(&h, 1);
         let (twice, _) = apply_truncation(&once, 1);
         assert_eq!(once, twice);
+    }
+
+    #[cfg(test)]
+    mod side_effects_tests {
+        use super::*;
+        use serde_json::json;
+
+        fn user(content: &str) -> Value {
+            json!({ "role": "user", "content": content })
+        }
+
+        fn assistant(content: &str) -> Value {
+            json!({ "role": "assistant", "content": content })
+        }
+
+        fn tool_result(name: &str, target: &str, body: &str) -> Value {
+            let target_attr = if target.is_empty() {
+                String::new()
+            } else {
+                format!(r#" target="{}""#, target.replace('"', "'"))
+            };
+            json!({
+                "role": "user",
+                "content": format!("<tool_result name=\"{}\"{}>{}</tool_result>", name, target_attr, body)
+            })
+        }
+
+        #[test]
+        fn 副作用检查_只读工具不计入() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("read_file", "src/main.rs", "内容"),
+                tool_result("search_workspace", "关键词", "片段"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.writes, 0);
+            assert_eq!(effects.execs, 0);
+            assert!(effects.targets.is_empty());
+        }
+
+        #[test]
+        fn 副作用检查_写工具计入_writes() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("write_file", "src/main.rs", "ok"),
+                tool_result("string_replace", "src/lib.rs", "ok"),
+                tool_result("replace_lines", "src/utils.rs", "ok"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.writes, 3);
+            assert_eq!(effects.execs, 0);
+            assert_eq!(effects.targets.len(), 3);
+            assert!(effects.targets.contains(&"src/main.rs".to_string()));
+            assert!(effects.targets.contains(&"src/lib.rs".to_string()));
+            assert!(effects.targets.contains(&"src/utils.rs".to_string()));
+        }
+
+        #[test]
+        fn 副作用检查_执行工具计入_execs() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("run_script", "cargo build", "exit 0"),
+                tool_result("run_script", "cargo test", "exit 0"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.writes, 0);
+            assert_eq!(effects.execs, 2);
+            assert_eq!(effects.targets.len(), 2);
+            assert!(effects.targets.contains(&"cargo build".to_string()));
+            assert!(effects.targets.contains(&"cargo test".to_string()));
+        }
+
+        #[test]
+        fn 副作用检查_同文件多次写入去重() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("write_file", "src/main.rs", "ok"),
+                tool_result("string_replace", "src/main.rs", "ok"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.writes, 2);
+            assert_eq!(effects.targets.len(), 1);
+            assert_eq!(effects.targets[0], "src/main.rs");
+        }
+
+        #[test]
+        fn 副作用检查_target_反转义() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("write_file", "src/main.rs", "ok"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.targets[0], "src/main.rs");
+        }
+
+        #[test]
+        fn 副作用检查_keep_through_user_0_全量检查() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("write_file", "src/main.rs", "ok"),
+            ];
+            let effects = inspect_side_effects(&h, 0);
+            assert_eq!(effects.writes, 1);
+        }
+
+        #[test]
+        fn 副作用检查_越界按_truncate_plan_语义() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+            ];
+            let effects = inspect_side_effects(&h, 99);
+            assert_eq!(effects.writes, 0);
+            assert_eq!(effects.execs, 0);
+        }
+
+        #[test]
+        fn 副作用检查_空历史() {
+            let effects = inspect_side_effects(&[], 3);
+            assert_eq!(effects.writes, 0);
+            assert_eq!(effects.execs, 0);
+            assert!(effects.targets.is_empty());
+        }
+
+        #[test]
+        fn 副作用检查_未知工具名不计入() {
+            let h = vec![
+                user("问题"),
+                assistant("回答"),
+                tool_result("unknown_tool", "x", "ok"),
+                user("第二个问题"),
+                assistant("第二个回答"),
+            ];
+            let effects = inspect_side_effects(&h, 1);
+            assert_eq!(effects.writes, 0);
+            assert_eq!(effects.execs, 0);
+        }
     }
 }
