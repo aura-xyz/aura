@@ -12,6 +12,7 @@ import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
 import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
+import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
 import { useDropZone } from "./hooks/useDropZone";
@@ -285,6 +286,55 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     e.preventDefault();
   }
 
+  /**
+   * 输入框的 props。开始界面与普通对话区用的是同一个输入框，
+   * 只是外边距不同（`variant`），所以 props 抽成一份。
+   */
+  const inputProps = {
+    busy,
+    onSend: sendMessage,
+    onStop: stop,
+    models,
+    selectedModel,
+    onModelChange: setModel,
+    mode,
+    onModeChange: changeMode,
+    workspace: activeSession?.workspace ?? "",
+    onWorkspaceChange: setSessionWorkspace,
+    workspaceLocked: activeSession ? activeSession.messages.length > 0 : false,
+    sessionId: activeSession?.id ?? "",
+    lastUserMessage: lastUserMessageOf(activeSession),
+    editPrefill,
+    editing: editingUserIndex !== null,
+    onCancelEdit: cancelEdit,
+    onSubmit: submitMessage,
+  };
+
+  /** 没有消息（或没有会话）→ 走开始界面 */
+  const isEmptySession = (activeSession?.messages.length ?? 0) === 0;
+
+  /**
+   * 拖放提示：有些路径没被附加，或附加了但需要授权。
+   * 这类信息必须说出来——用户看到路径进了输入框就以为
+   * 模型一定能读，实际可能读不到。
+   */
+  const dropBanner = dropNotice ? (
+    <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+      <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
+        <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
+        <span className="min-w-0 flex-1">{dropNotice}</span>
+        <button
+          type="button"
+          onClick={() => setDropNotice(null)}
+          aria-label="关闭提示"
+          className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle transition-colors hover:border-brand"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
@@ -327,6 +377,16 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TimelinePage onClose={() => setView("chat")} />
             </div>
+          ) : isEmptySession ? (
+            /* 开始界面（v0.7.0）：图标 + 标题 → 输入框 → 示例内容，
+               整体居中成一块。此前标题在消息区、输入框钉在窗口最底，
+               两块离得很远，看着像两个不相干的区域。 */
+            <>
+              {dropBanner}
+              <StartScreen onPick={(prompt) => insertIntoInput(prompt)}>
+                <InputArea {...inputProps} variant="inline" />
+              </StartScreen>
+            </>
           ) : (
             <>
               {/* relative 让回到底部按钮以滚动区为定位基准 */}
@@ -339,44 +399,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
                   messagesLength={activeSession?.messages.length ?? 0}
                 />
               </div>
-              {/* 拖放提示：有些路径没被附加，或附加了但需要授权。
-                  这类信息必须说出来——用户看到路径进了输入框就以为
-                  模型一定能读，实际可能读不到。 */}
-              {dropNotice && (
-                <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
-                  <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
-                    <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
-                    <span className="min-w-0 flex-1">{dropNotice}</span>
-                    <button
-                      type="button"
-                      onClick={() => setDropNotice(null)}
-                      aria-label="关闭提示"
-                      className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
-                    >
-                      关闭
-                    </button>
-                  </div>
-                </div>
-              )}
-<InputArea
-      busy={busy}
-   onSend={sendMessage}
-  onStop={stop}
-       models={models}
-   selectedModel={selectedModel}
-       onModelChange={setModel}
-  mode={mode}
-     onModeChange={changeMode}
-              workspace={activeSession?.workspace ?? ""}
-      onWorkspaceChange={setSessionWorkspace}
-      workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
-      sessionId={activeSession?.id ?? ""}
-      lastUserMessage={lastUserMessageOf(activeSession)}
-      editPrefill={editPrefill}
-      editing={editingUserIndex !== null}
-      onCancelEdit={cancelEdit}
-      onSubmit={submitMessage}
-    />
+              {dropBanner}
+              <InputArea {...inputProps} />
             </>
           )}
         </main>
