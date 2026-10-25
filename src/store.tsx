@@ -54,6 +54,8 @@ export type BlockKind = "text" | "action" | "notice" | "error";
 export interface Block {
   kind: BlockKind;
   text: string;
+  /** action 块专用：工具名（v0.7.1 起）。便于前端直接识别工具类型而不依赖 label 解析 */
+  tool?: string;
   /** action 块专用：工具是否执行成功 */
   ok?: boolean;
   /** action 块专用：可折叠的详细输出（命令 stdout/stderr、失败原因） */

@@ -274,10 +274,12 @@ fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
 /// 工具动作事件。`ok` 区分成功与失败；`detail` 携带可折叠的详细输出
 /// （如命令执行的 stdout/stderr），过长时不应直接铺满对话流；
 /// `duration_ms` 是本次调用耗时，v0.6.3 起透出给前端显示；
-/// `diff` 是文件修改的前后内容，v0.7.0 起用于差异视图。
+/// `diff` 是文件修改的前后内容，v0.7.0 起用于差异视图；
+/// `tool` 是工具名（v0.7.1 起），供前端直接识别工具类型而不依赖 label 解析。
 fn emit_action_detail(
     app: &AppHandle,
     session_id: &str,
+    tool: &str,
     label: &str,
     ok: bool,
     detail: Option<String>,
@@ -286,7 +288,7 @@ fn emit_action_detail(
 ) {
     let _ = app.emit(
         EV_ACTION,
-        json!({ "session_id": session_id, "text": label, "ok": ok, "detail": detail, "duration_ms": duration_ms, "diff": diff }),
+        json!({ "session_id": session_id, "tool": tool, "text": label, "ok": ok, "detail": detail, "duration_ms": duration_ms, "diff": diff }),
     );
 }
 
@@ -1022,6 +1024,7 @@ if tool_jsons.is_empty() {
                         emit_action_detail(
                             ctx.app,
                             ctx.session_id,
+                            &name,
                             &format!("{}（连续调用超限）", tool_label),
                             false,
                             None,
@@ -1072,6 +1075,7 @@ if tool_jsons.is_empty() {
                                 emit_action_detail(
                                     ctx.app,
                                     ctx.session_id,
+                                    &name,
                                     &out.label,
                                     true,
                                     detail,
@@ -1116,6 +1120,7 @@ if tool_jsons.is_empty() {
                                 emit_action_detail(
                                     ctx.app,
                                     ctx.session_id,
+                                    &name,
                                     &fail.label,
                                     false,
                                     Some(fail.error.clone()),
