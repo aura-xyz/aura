@@ -49,7 +49,7 @@ A lista de tarefas é limpa automaticamente quando todos os passos são concluí
 
 > **Avisos de mudanças de comportamento**
 >
-- v0.7.0 (em desenvolvimento, ainda não publicado):
+- v0.7.0:
   - As mensagens aceitam «regenerar» e «editar e reenviar»: ambos rebobinam o contexto antes de reenviar, então nada obsoleto fica para trás
   - Ao regenerar, a versão anterior é mantida e você pode alternar entre elas (alternar só muda a exibição; os turnos seguintes seguem com a versão mais recente)
   - Clique com o botão direito na área de mensagens para copiar uma resposta inteira; blocos de código ganham botão de cópia

@@ -49,7 +49,7 @@ The checklist clears automatically once all steps are complete, and is saved wit
 
 > **Behavior change notices**
 >
-- v0.7.0 (in development, not yet released):
+- v0.7.0:
   - Messages support "regenerate" and "edit & resend": both roll the context back before resending, so nothing stale is left behind
   - Regenerating keeps the old version, and you can switch between them (switching only changes the display; later turns still build on the newest version)
   - Right-click the message area to copy a whole reply; code blocks get a one-click copy button

@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.7.0-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,7 +49,7 @@
 
 > **行为变更提醒**
 >
-- v0.7.0（开发中，尚未发布）：
+- v0.7.0：
   - 消息支持「重新生成」与「编辑后重跑」：两者都会回滚上下文重发，不会残留旧内容
   - 重新生成会保留旧版本，可左右切换回看（切换只影响显示，后续对话仍基于最新版本）
   - 正文右键可复制全文；代码块支持一键复制

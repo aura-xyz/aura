@@ -49,7 +49,7 @@ La lista de tareas se borra automáticamente al completarse todos los pasos, se 
 
 > **Avisos de cambios de comportamiento**
 >
-- v0.7.0 (en desarrollo, aún no publicado):
+- v0.7.0:
   - Los mensajes admiten «regenerar» y «editar y reenviar»: ambos revierten el contexto antes de reenviar, así que no queda nada obsoleto
   - Al regenerar se conserva la versión anterior, y puedes alternar entre ellas (cambiar solo afecta a la visualización; los turnos siguientes siguen basándose en la versión más reciente)
   - Clic derecho en la zona de mensajes para copiar una respuesta completa; los bloques de código tienen botón de copia
