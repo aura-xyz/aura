@@ -1,15 +1,15 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.3/Aura_0.6.3_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjgxZnZoMkJqMHN0L3g4NEdoRFdOT05WOTdEZFhiN3ZLK3FzenZxa290dUc4dTBLb1ZKVHR6ZllnNjVvd3Ywc1lwNm1wK3NGenVtWDF6Qi90TlRmTWdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODg4NjE2CWZpbGU6YXVyYV8wLjYuM194NjQtc2V0dXAuZXhlCXZlcnNpb246MC42LjMKdVZ6NXNib211TkpWU3FBci9lMEhsclR6bXpwVEFpQjgxYmg2TmpqdGdIQjlGbTRhWEQ4UUNUQW5QSnRjbTJLa0lsOS9aY0Z2OEhXc3hGQVBjVUgvQ3c9PQo="
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.0/Aura_0.7.0_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNi9NN0pxUWVwS0FQRmE4bFBNUEgxb2h4WlUxNUdVNDRwb296TnBkVmFaVXlxaGRrb0o0RGhIVy9zTzZjb1BjUVM5VnJMRHNQZ014N2VCUUhCS25QR3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTA3MDU1CWZpbGU6YXVyYV8wLjcuMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC43LjAKS1ZkTlBhU00rRWRDM0ZPWHR0YWIyUitmT09KSXJCQU1rbWdBT2NaeGxPaVdZbVo2MTRnRS90Q1BRNjE2d291Q3BxSkh4eUFEai9HVjBJaGsxck5HQnc9PQo="
                                          },
                       "windows-x86_64-msi":  {
-                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.6.3/Aura_0.6.3_win_x64.msi",
-                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNitOSmMxWWtXZ3h3eC8vZFN0TVdsMytWMzlpKzNiNUZ1bHlMWGprTExOZG5pRmlpaUtSWUNkTWpEcXg3ZjM1WElsdWpyV0dHQkVUV2dwTGhIU1hTM0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODg4NjE2CWZpbGU6YXVyYV8wLjYuM194NjRfZW4tVVMubXNpCXZlcnNpb246MC42LjMKNjNSbmtSZGUvNkdRYVNCV1ZqM213YTNPRTJSVnkwOWNLY1p5MHoyeGp4Wjd6VUJlTTkvNmxOZ3RhaitRWExVWXpmT2pvdDJZRVlVM05XajA5NE9DREE9PQo="
+                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.0/Aura_0.7.0_win_x64.msi",
+                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjZFdFdDOXA0Q3pGc2RTM0xiOUljc091Mm1RQ0NQd1lmSFJKdWo2d2ZaUXREVmZTWlNvWGlDS2FYZnFTVU85MXdqWjVSSkdpMnIxVTl1bmg3NmZlVXdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTA3MDU1CWZpbGU6YXVyYV8wLjcuMF94NjRfZW4tVVMubXNpCXZlcnNpb246MC43LjAKZ1YzelVGUm0yOWxQa1E5Vm9FWmJSZ2RvQUZDUlJnZ2hacVlvWmRScVFKOHArb0lVNTZQUGJ0R1VoTGp5TjlueDFuam92amk1MysrVmtXYVdJVlFqQ2c9PQo="
                                              }
                   },
-    "pub_date":  "2026-10-25T00:41:41Z",
-    "version":  "0.6.3",
-    "notes":  "## 更新内容\n- 界面视觉重构：新增成功/警告/品牌语义色，暗色模式对比度全部达到无障碍标准 4.5:1\n- 你的消息改用品牌蓝底色，与 AI 回复一眼区分；侧边栏当前会话也有品牌色标识\n- 工具调用行显示执行结果色点与耗时，运行中有品牌色转圈指示\n- 消息与代码块支持一键复制（悬停时出现），复制成功有反馈\n- 正文右键不再无响应：消息可复制全文，代码块可复制代码\n- 滚动条改为细条样式，界面不再有网页感\n- 窗口位置与大小现在会被记住，重开应用自动还原\n- 拦截 F5 / Ctrl+R，不再闪白屏\n- 输入内容按对话分别保留，切换会话不丢失；空输入框按上方向键可召回上一条消息\n- 输入框右下角显示实时 token 计数\n- 侧边栏新增「轨迹」入口，路径白名单分区支持警告色提示\n"
+    "pub_date":  "2026-10-25T05:50:04Z",
+    "version":  "0.7.0",
+    "notes":  "## 更新内容\n- 消息支持「重新生成」与「编辑后重跑」：改完措辞直接重发，不会残留旧内容\n- 重新生成会保留旧的回答，可左右切换回看（切换只影响显示，后续对话仍基于最新版本）\n- 文件改动可以展开差异视图，逐行标出哪里增了、哪里删了\n- 超过 20 行的代码默认折叠，点一下展开；代码块支持一键复制\n- 拖入文件即把路径附加到输入框；系统与密钥目录会被拒绝，需要授权的目录会先提示\n- 输入框打 @ 弹出工作区文件列表，可以按目录逐级下钻，选中即插入路径\n- 输入框打 / 弹出已安装技能列表，选中即插入技能名，手动指定用哪个技能\n- 窗口可最小化到系统托盘常驻后台，任务跑完收到系统通知\n- Ctrl+F 呼出应用内会话搜索\n- 空状态新增示例卡片，点击即把引导语填入输入框\n- 开始界面重排：图标标题、输入框、示例内容合在一起\n- 关闭窗口改为最小化到托盘；要完全退出请用关于页的「退出 Aura」\n- 右侧任务面板始终可见，没有内容时收成窄条\n- 自动更新改为多源下载，自动挑最快的下载源\n"
 }
