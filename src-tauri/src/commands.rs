@@ -47,6 +47,9 @@ pub struct AppState {
     /// 当前正在执行的会话 id。Aura 同时只允许一个流。
     running: AsyncMutex<Option<String>>,
     pub db: Mutex<Connection>,
+    /// 自动更新的句柄。检查阶段拿到，安装阶段复用——
+    /// 重新查一次清单就多一次网络往返，也多一个让「安装」平白失败的理由。
+    pub updater: Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 /// Windows 上 `canonicalize()` 会返回 `\\?\` 扩展前缀路径，若与
@@ -115,6 +118,7 @@ impl AppState {
             cancelled: AtomicBool::new(false),
             running: AsyncMutex::new(None),
             db: Mutex::new(db),
+            updater: Mutex::new(None),
         }
     }
 }
@@ -285,6 +289,97 @@ pub async fn remove_session(state: State<'_, AppState>, session_id: String) -> R
     state.sessions.lock().await.remove(&session_id);
     let db = state.db.lock().map_err(lock_err)?;
     db::delete_session(&db, &session_id).map_err(|e| e.to_string())
+}
+
+/// 退出应用（v0.7.0）。
+///
+/// 关闭窗口现在只是**隐藏到托盘**（桌面软件的常驻行为），
+/// 所以必须有一条明确的退出路径，否则用户会以为「关不掉」。
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+/// 发一条系统通知（v0.7.0）。
+///
+/// 前端只在「窗口不在前台」时调用——用户正盯着屏幕时弹通知是打扰。
+/// 通知失败不视为错误：它是锦上添花，不该让调用方（生成流程）失败。
+#[tauri::command]
+pub fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    let result = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show();
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // 通知失败（系统未授权、专注助手等）不该影响主流程
+            eprintln!("[notify] 发送系统通知失败: {}", e);
+            Ok(())
+        }
+    }
+}
+
+/// 截断结果（回给前端）。
+#[derive(serde::Serialize)]
+pub struct TruncateResult {
+    /// 截断后保留的 history entry 数。
+    pub keep_entries: usize,
+    /// 截断后仍然存在的真实用户消息条数。
+    pub keep_user_messages: usize,
+    /// 是否因为请求条数超过实际数量而被截到末尾。
+    pub clamped: bool,
+}
+
+/// 把会话的 agent 历史回滚到「保留到第 N 条真实用户消息为止」。
+///
+/// **内存与 DB 必须同时改**。只改一处会出问题：
+/// - 只改内存 → 重启应用后 `load_history` 又把旧的完整历史读回来；
+/// - 只改 DB → 当前进程里的 `session.history` 仍是旧的，模型会看到
+///   用户刚刚删掉的「未来内容」，生成结果必然错乱。
+///
+/// v0.7.0 的「重新生成」与「编辑消息并重跑」都依赖本命令。
+#[tauri::command]
+pub async fn truncate_history(
+    state: State<'_, AppState>,
+    session_id: String,
+    keep_through_user: usize,
+) -> Result<TruncateResult, String> {
+    // 与 send_message 用同一把锁：它在整个 run_turn 期间持锁，
+    // 所以本命令会等到当前这轮跑完再执行，不会与运行中的流打架。
+    let mut sessions = state.sessions.lock().await;
+
+    // 会话不在内存里（可能从未发过消息，或已被移除）：无事可做。
+    // 不能因此报错——前端可能对空会话点了重新生成。
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return Ok(TruncateResult {
+            keep_entries: 0,
+            keep_user_messages: 0,
+            clamped: keep_through_user > 0,
+        });
+    };
+
+    let (kept, plan) = crate::history::apply_truncation(&session.history, keep_through_user);
+    session.history = kept;
+
+    // DB 侧：save_history 是「只 UPDATE、覆盖写」，正好用来落盘截断结果。
+    // 会话行由前端 save_session 创建；若行不存在，UPDATE 影响 0 行，
+    // 不算错误（内存已同步）。
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::save_history(&db, &session_id, &session.history, session.model_idx)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(TruncateResult {
+        keep_entries: plan.keep_entries,
+        keep_user_messages: plan.keep_user_messages,
+        clamped: plan.keep_user_messages < keep_through_user,
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -978,10 +1073,102 @@ pub fn export_timeline(
     ))
 }
 
+/// 一个候选路径（`@` 引用面板用）。文件与目录都在内。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileCandidate {
+    /// 插入输入框的路径：工作区内的用**相对路径**，授权目录用绝对路径
+    pub path: String,
+    /// 文件名（展示用）
+    pub name: String,
+    /// 所在目录（展示用）
+    pub dir: String,
+    /// 是目录吗
+    pub is_dir: bool,
+}
+
+/// 列出工作区里匹配的文件（`@` 引用面板用）。
+///
+/// 搜的是**会话自己的工作区**（不是全局单值——见不变量 20），
+/// 外加用户授权的白名单目录（授权目录里的文件模型也能读）。
+/// 工作区内的文件给相对路径，授权目录里的给绝对路径。
+#[tauri::command]
+pub fn list_workspace_files(
+    state: State<'_, AppState>,
+    session_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<FileCandidate>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+
+    // 会话自己的工作区；查不到（内存新建、尚未落库）才回落全局。
+    let workspace = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    };
+    let workspace = match workspace {
+        Some(w) => PathBuf::from(w),
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let allowlist = {
+        let db = state.db.lock().map_err(lock_err)?;
+        allowlist_paths(&db)
+    };
+    let scope = crate::tools::AccessScope::new(workspace.clone(), allowlist)
+        .map_err(|e| format!("{e}"))?;
+
+    let mut out: Vec<FileCandidate> = Vec::new();
+    let roots = scope.roots().to_vec();
+    for (idx, root) in roots.iter().enumerate() {
+        // 第 0 个根是工作区，其余是授权目录。
+        let is_workspace = idx == 0;
+        let hits = crate::tools::search::list_paths(root, &query, limit);
+        for hit in hits {
+            // 目录保留结尾的 `/`（`app/` 与文件 `app` 靠它区分），
+            // 但算「所在目录」与「文件名」时要去掉。
+            let trimmed = hit.path.trim_end_matches('/').to_string();
+            let (path, dir) = if is_workspace {
+                let dir = match trimmed.rfind('/') {
+                    Some(p) => trimmed[..p].to_string(),
+                    None => String::new(),
+                };
+                (hit.path.clone(), dir)
+            } else {
+                let abs = crate::paths::display(&root.join(&trimmed));
+                let dir = match abs.rfind('/') {
+                    Some(p) => abs[..p].to_string(),
+                    None => String::new(),
+                };
+                // 绝对路径的目录也保留结尾斜杠
+                (format!("{abs}/"), dir)
+            };
+            let name = trimmed.rsplit('/').next().unwrap_or(&trimmed).to_string();
+            out.push(FileCandidate {
+                path,
+                name,
+                dir,
+                is_dir: hit.is_dir,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// 列出全部白名单条目（内置 + 用户添加）。
 #[tauri::command]
-pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {
-    let db = state.db.lock().map_err(lock_err)?;
+pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {    let db = state.db.lock().map_err(lock_err)?;
     let rows = db::load_allowlist(&db).map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
@@ -1370,6 +1557,7 @@ mod tests {
             cancelled: AtomicBool::new(false),
             running: AsyncMutex::new(Some("sess-A".to_string())),
             db: Mutex::new(db::open(Path::new(":memory:")).unwrap()),
+            updater: Mutex::new(None),
         };
 
         // 别的会话发起停止：忽略

@@ -14,6 +14,7 @@ import {
   getSelectedModel,
   getWorkspace,
   loadSessions,
+  notify as notifyApi,
   removeSession,
   removeWorkspace as removeWorkspaceApi,
   saveSession,
@@ -22,9 +23,19 @@ import {
   setSelectedModel as setSelectedModelApi,
   setWorkspace,
   stopMessage as stopMessageApi,
+  truncateHistory as truncateHistoryApi,
   type ModelInfo,
 } from "./lib/api";
 import { type Mode } from "./lib/mode";
+import {
+  keepThroughForResend,
+  sliceForResend,
+} from "./lib/history";
+import {
+  archiveCurrent,
+  removedAssistant,
+  switchVersion,
+} from "./lib/versions";
 import {
   applyAutoClear,
   isTodoStatus,
@@ -49,11 +60,49 @@ export interface Block {
   detail?: string;
   /** action 块专用：工具调用耗时（毫秒）。后端在工具执行完后才 emit */
   durationMs?: number;
+  /** action 块专用：文件修改的前后内容（v0.7.0），用于差异视图 */
+  diff?: {
+    path: string;
+    before: string;
+    after: string;
+  };
+}
+
+/**
+ * 一条 assistant 回答的一个版本（v0.7.0）。
+ *
+ * 重新生成会产生新版本，旧版本保留在这里供切换回看。
+ */
+export interface AssistantVersion {
+  id: string;
+  blocks: Block[];
+  /** 生成时间（毫秒时间戳） */
+  createdAt: number;
 }
 
 export type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; blocks: Block[] };
+  | {
+      id: string;
+      role: "assistant";
+      /** 当前显示的版本内容 */
+      blocks: Block[];
+      /**
+       * 历史版本（v0.7.0）。
+       *
+       * **切换版本只改显示，不回滚后端上下文**——上下文始终基于最新版本。
+       * 界面必须明确标注这一点，否则用户会以为后续对话是基于他正在看的
+       * 那个版本进行的。
+       */
+      versions?: AssistantVersion[];
+      /** 当前显示的是第几个版本（1-based）。缺省表示显示最新 */
+      viewingVersion?: number;
+      /**
+       * 最新版本的内容。切到历史版本时把最新那份挪到这里，
+       * 切回来时才能恢复——否则「切走再切回」会把最新版本弄丢。
+       */
+      latestBlocks?: Block[];
+    };
 
 export interface Session {
   id: string;
@@ -83,6 +132,40 @@ interface StoreValue extends State {
   cancelRename: () => void;
   renameSession: (id: string, title: string) => void;
   sendMessage: (text: string) => Promise<void>;
+  /**
+   * 回滚到第 userIndex 条用户消息并重新发送 `text`。
+   * 「重新生成」与「编辑消息并重跑」共用。
+   */
+  resendFrom: (
+    userIndex: number,
+    text: string,
+    options?: { archive?: boolean },
+  ) => Promise<void>;
+  /**
+   * 切换某条 assistant 消息显示的版本（v0.7.0）。
+   * 只改显示，不回滚后端上下文。
+   */
+  switchMessageVersion: (messageId: string, index: number) => void;
+  /**
+   * 当前是否处于「编辑某条历史消息」状态。
+   * 编辑时把原文放回输入框，用户改完直接发送——不走弹窗。
+   */
+  editingUserIndex: number | null;
+  /** 进入编辑状态时把原文放回输入框；null 表示不在编辑 */
+  editPrefill: string | null;
+  /** 待插入输入框的文本（null 表示没有） */
+  inputInsert: { text: string; id: number } | null;
+  /** 往输入框插入一段文本（拖放文件路径时用） */
+  insertIntoInput: (text: string) => void;
+  /** 进入编辑状态（把原文放回输入框） */
+  beginEdit: (userIndex: number, text: string) => void;
+  /** 退出编辑状态 */
+  cancelEdit: () => void;
+  /**
+   * 提交输入框内容。若处于编辑状态则走「回滚 + 重发」，
+   * 否则是普通发送。输入框只需调这一个入口。
+   */
+  submitMessage: (text: string) => Promise<void>;
   stop: () => Promise<void>;
   switchWorkspace: (path: string) => Promise<void>;
   newSession: () => Promise<void>;
@@ -135,6 +218,46 @@ function createSession(workspace = ""): Session {
 function deriveTitle(text: string): string {
   const t = text.trim();
   return t.length > 20 ? `${t.slice(0, 20)}…` : t;
+}
+
+/** 最后一条 assistant 消息的 id。回滚失败时要把错误挂到它上面。 */
+function lastAssistantId(messages: ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return messages[i].id;
+  }
+  return undefined;
+}
+
+/**
+ * 窗口是否在后台（用户看不到）。
+ *
+ * 用 `document.visibilityState`：窗口最小化或被其它窗口遮住时，
+ * WebView 的可见性会变成 hidden。这是浏览器里唯一可靠的判据——
+ * 没有「窗口是否被遮住」的 API，而「被遮住」恰恰是最该通知的场景。
+ */
+function isWindowInBackground(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.visibilityState === "hidden";
+}
+
+/** 取最后一条回复的摘要，用作通知正文。 */
+function summarizeReply(messages: ChatMessage[] | undefined): string {
+  if (!messages) return "任务已完成";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant") {
+      const text = m.blocks
+        .filter((b) => b.kind === "text")
+        .map((b) => (b.kind === "text" ? b.text : ""))
+        .join(" ")
+        .trim();
+      if (text) {
+        return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+      }
+      return "任务已完成";
+    }
+  }
+  return "任务已完成";
 }
 
 /**
@@ -195,6 +318,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
+
+  // 编辑状态（v0.7.0）：正在编辑第几条用户消息，以及要放回输入框的原文。
+  // 单独存一份 ref 是为了让 submitMessage 在 useCallback 依赖稳定的前提下
+  // 也能读到最新值——它被 InputArea 直接调用，闭包过期会导致
+  // 「编辑了却走普通发送」这种难查的错。
+  const [editingUserIndex, setEditingUserIndex] = useState<number | null>(null);
+  const [editPrefill, setEditPrefill] = useState<string | null>(null);
+  const editingUserIndexRef = useRef<number | null>(null);
+  editingUserIndexRef.current = editingUserIndex;
+
+  // 待插入输入框的文本（v0.7.0 拖放用）。
+  // 用自增 id 而不是纯字符串：连续插入同一段文本时要能被区分开，
+  // 否则 InputArea 的 effect 不会再次触发。
+  const [inputInsert, setInputInsert] = useState<{ text: string; id: number } | null>(
+    null,
+  );
+  const insertSeq = useRef(0);
+
+  // 待归档的历史版本（v0.7.0）：「重新生成」时先记下旧回答的 blocks，
+  // 等新消息创建时挂上去。用 ref 是因为 sendMessage 与 resendFrom 之间
+  // 隔着一次异步调用，闭包传参容易漏。
+  const pendingVersionsRef = useRef<AssistantVersion[] | undefined>(undefined);
 
   const startRename = useCallback((id: string) => setRenamingId(id), []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
@@ -318,6 +463,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ok?: boolean;
       detail?: string;
       duration_ms?: number;
+      diff?: { path: string; before: string; after: string };
     }>("agent:action", (p) => {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;
@@ -329,6 +475,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         detail: p.detail || undefined,
         // 耗时同理：旧版本事件没有这个字段，显示为「无」而非 0
         durationMs: p.duration_ms ?? undefined,
+        // diff 同理：旧版本事件没有这个字段
+        diff: p.diff ?? undefined,
       });
     });
     on<{ session_id: string; text?: string }>("agent:notice", (p) => {
@@ -607,7 +755,12 @@ let sessions = restored;
         id: crypto.randomUUID(),
         role: "assistant",
         blocks: [],
+        // 重新生成时挂上归档的旧版本（v0.7.0）
+        ...(pendingVersionsRef.current
+          ? { versions: pendingVersionsRef.current }
+          : {}),
       };
+      pendingVersionsRef.current = undefined;
       const current = stateRef.current.sessions.find((x) => x.id === sessionId);
       if (!current) {
         setState((s) => ({ ...s, busy: false }));
@@ -652,6 +805,19 @@ let sessions = restored;
         if (latest) {
           persistNow(sessionId, latest.title, latest.workspace, latest.messages);
         }
+        // v0.7.0：系统通知。
+        // **只在窗口不在前台时发**——用户正盯着屏幕时弹通知是打扰，
+        // 那是桌面软件与网页都能做到的，不构成「桌面感」。
+        // 无人值守时它才是唯一反馈渠道。
+        if (isWindowInBackground()) {
+          const failed = sawErrorRef.current;
+          void notifyApi(
+            failed ? "Aura 执行失败" : "Aura 已完成",
+            failed ? "任务出错，点击查看详情" : summarizeReply(latest?.messages),
+          ).catch(() => {
+            /* 通知失败不影响主流程 */
+          });
+        }
       }
     },
     [state.busy, state.activeId, appendBlocks, drainBuffer, persistNow],
@@ -664,6 +830,140 @@ let sessions = restored;
     } catch {
       /* 停止命令失败时维持现状 */
     }
+  }, []);
+
+  /**
+   * 回滚到第 userIndex 条用户消息，然后重新发送 `text`。
+   *
+   * 「重新生成」与「编辑消息并重跑」共用这一条路径：
+   * - 重新生成：userIndex = 该回答对应的用户消息序号，text = 原问题
+   * - 编辑重跑：userIndex = 被编辑的用户消息序号，text = 新内容
+   *
+   * 三步缺一不可：
+   * 1. **先截断后端历史**——否则模型会看到用户刚删掉的「未来内容」；
+   * 2. **再截界面消息**——删掉该用户消息及其后，那条消息由重发取代；
+   * 3. **最后重发**——把第 userIndex 条用户消息补回历史。
+   *
+   * 顺序反了会出问题：先重发再截断会把刚发的消息也截掉。
+   */
+  const resendFrom = useCallback(
+    async (
+      userIndex: number,
+      text: string,
+      options?: { archive?: boolean },
+    ) => {
+      if (stateRef.current.busy) return;
+      const sessionId = stateRef.current.activeId;
+      if (!sessionId) return;
+      const session = stateRef.current.sessions.find((x) => x.id === sessionId);
+      if (!session) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      // 1. 后端历史截断。失败就不继续——否则界面删了、后端没删，
+      //    两边对不上，模型仍会看到旧上下文。
+      try {
+        await truncateHistoryApi(sessionId, keepThroughForResend(userIndex));
+      } catch (e) {
+        appendBlocks(
+          sessionId,
+          lastAssistantId(session.messages) ?? "",
+          (b) => [...b, { kind: "error", text: `回滚失败：${String(e)}` }],
+        );
+        return;
+      }
+
+      // 2. 界面消息截断
+      const kept = sliceForResend(session.messages, userIndex);
+
+      // 3. 重新生成时把被删掉的那条回答归档，供版本切换回看。
+      //    「编辑」不归档——那不是同一轮回答的另一个版本。
+      let versions: AssistantVersion[] | undefined;
+      if (options?.archive) {
+        const removed = removedAssistant(session.messages, kept);
+        if (removed && removed.role === "assistant") {
+          const archived = archiveCurrent(removed);
+          if (archived.role === "assistant") versions = archived.versions;
+        }
+      }
+      pendingVersionsRef.current = versions;
+
+      setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((sess) =>
+          sess.id !== sessionId ? sess : { ...sess, messages: kept },
+        ),
+      }));
+      persistNow(sessionId, session.title, session.workspace, kept);
+
+      // 4. 重新发送
+      setEditingUserIndex(null);
+      await sendMessage(trimmed);
+    },
+    [appendBlocks, persistNow, sendMessage],
+  );
+
+  /**
+   * 切换某条 assistant 消息显示的版本。
+   *
+   * 只改显示，不动后端上下文——见 lib/versions.ts 的说明。
+   */
+  const switchMessageVersion = useCallback(
+    (messageId: string, index: number) => {
+      const sessionId = stateRef.current.activeId;
+      if (!sessionId) return;
+      const session = stateRef.current.sessions.find((x) => x.id === sessionId);
+      if (!session) return;
+      let changed = false;
+      const messages = session.messages.map((m) => {
+        if (m.id !== messageId) return m;
+        const next = switchVersion(m, index);
+        if (next !== m) changed = true;
+        return next;
+      });
+      if (!changed) return;
+      setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((sess) =>
+          sess.id !== sessionId ? sess : { ...sess, messages },
+        ),
+      }));
+      persistNow(sessionId, session.title, session.workspace, messages);
+    },
+    [persistNow],
+  );
+
+  /**
+   * 提交输入框内容。处于编辑状态时走「回滚 + 重发」，
+   * 否则是普通发送。输入框只认这一个入口。
+   */
+  const submitMessage = useCallback(
+    async (text: string) => {
+      const idx = editingUserIndexRef.current;
+      if (idx === null) {
+        await sendMessage(text);
+        return;
+      }
+      await resendFrom(idx, text);
+    },
+    [sendMessage, resendFrom],
+  );
+
+  /** 进入编辑状态：原文放回输入框 */
+  const beginEdit = useCallback((userIndex: number, text: string) => {
+    setEditingUserIndex(userIndex);
+    setEditPrefill(text);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingUserIndex(null);
+    setEditPrefill(null);
+  }, []);
+
+  /** 往输入框插入一段文本（拖放文件路径时用） */
+  const insertIntoInput = useCallback((text: string) => {
+    insertSeq.current += 1;
+    setInputInsert({ text, id: insertSeq.current });
   }, []);
 
 /**
@@ -795,6 +1095,15 @@ setState((s) => {
       cancelRename,
       renameSession,
       sendMessage,
+      resendFrom,
+      switchMessageVersion,
+      editingUserIndex,
+      editPrefill,
+      inputInsert,
+      insertIntoInput,
+      beginEdit,
+      cancelEdit,
+      submitMessage,
       stop,
       switchWorkspace,
       newSession,
@@ -817,6 +1126,15 @@ setState((s) => {
       cancelRename,
       renameSession,
       sendMessage,
+      resendFrom,
+      switchMessageVersion,
+      editingUserIndex,
+      editPrefill,
+      inputInsert,
+      insertIntoInput,
+      beginEdit,
+      cancelEdit,
+      submitMessage,
       stop,
       switchWorkspace,
     newSession,

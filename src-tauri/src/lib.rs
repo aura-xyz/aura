@@ -3,24 +3,29 @@ pub mod api;
 pub mod audit;
 pub mod commands;
 pub mod db;
+pub mod history;
 pub mod market;
 pub mod paths;
 pub mod providers;
 pub mod secure;
 pub mod timeline;
 pub mod tools;
+pub mod updater;
 
 use commands::{
     add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
     get_provider_statuses, get_providers, get_selected_model, get_workspace,
     inspect_market_skill, install_market_skill, list_allowlist_paths, list_market_providers,
+    list_workspace_files,
     list_market_skills, list_skill_sources, list_skills, list_timeline, load_sessions,
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    set_skill_enabled, set_workspace, stop_message, AppState,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
+    AppState,
 };
+use updater::{check_update, download_update};
 use tauri::Manager;
 
 #[cfg(windows)]
@@ -112,6 +117,9 @@ pub fn run() {
         // 放在 setup 之前：插件要在窗口创建时挂上监听，晚了就记不到首次状态。
         // 首次启动没有历史状态，仍按下方 inner_size + maximized 走。
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        // v0.7.0：系统原生通知。无人值守场景下这是关键能力——
+        // 任务跑完时人不在电脑前，系统通知是唯一的反馈渠道。
+        .plugin(tauri_plugin_notification::init())
         // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
         // relaunch 负责重启应用；perms 授予 updater 默认权限集
         .plugin(tauri_plugin_process::init())
@@ -119,6 +127,15 @@ pub fn run() {
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+
+            // v0.7.0：技能目录必须**真实存在**。
+            //
+            // 白名单的内置默认项指向 `skills/local`，目录不存在时：
+            // 设置页会挂「目录不存在」的角标，模型也往里写不了东西
+            // （用户实测反馈）。所以这里先把 market/local 都建出来。
+            let skills_dir = dir.join("skills");
+            let _ = std::fs::create_dir_all(&skills_dir.join("market"));
+            let _ = std::fs::create_dir_all(&skills_dir.join("local"));
 
             // v0.6.0：登记技能根目录。内置技能随安装包分发（只读）；
             // 市场/本地技能放应用数据目录，避开安装目录的 UAC 权限问题，
@@ -193,14 +210,83 @@ pub fn run() {
             }
             let _ = &window;
 
+            // v0.7.0：系统托盘。
+            //
+            // 托盘的意义是「应用可以常驻后台」：关掉窗口不等于退出，
+            // 用户从托盘图标能找回窗口。这正是网页做不到的桌面能力。
+            //
+            // 菜单项：显示主窗口 / 退出。关闭窗口不退出（见下面的
+            // on_window_event），退出只能从这里走。
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(app, "quit", "退出 Aura", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+                let mut builder = TrayIconBuilder::with_id("main-tray")
+                    .menu(&menu)
+                    .tooltip("Aura")
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        // 左键单击：显示/唤起主窗口
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            if let Some(w) = tray.app_handle().get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    });
+
+                if let Some(icon) = app.default_window_icon() {
+                    builder = builder.icon(icon.clone());
+                }
+                let _ = builder.build(app)?;
+            }
+
             app.manage(AppState::new(api_key, db));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // v0.7.0：关闭按钮 = 隐藏到托盘，不是退出。
+            //
+            // 常驻后台是桌面软件的关键能力（长任务跑完还能收到系统通知）。
+            // 但「关了就找不回来」也是真实的困惑，所以托盘必须有，
+            // 且托盘左键单击能唤回窗口。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(w) = window.get_webview_window("main") {
+                    let _ = w.hide();
+                    api.prevent_close();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             greet,
             send_message,
             stop_message,
             remove_session,
+            truncate_history,
+            notify,
+            quit_app,
+            check_update,
+            download_update,
             load_sessions,
             save_session,
             save_todos,
@@ -232,6 +318,7 @@ pub fn run() {
             add_skill_source,
             remove_skill_source,
             list_allowlist_paths,
+            list_workspace_files,
             check_allowlist_path,
             add_allowlist_path,
             remove_allowlist_path,
@@ -256,28 +343,36 @@ mod command_registry_tests {
     fn every_tauri_command_is_registered() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
-        // 1) 扫出 commands.rs 里所有 #[tauri::command] 标注的函数名
-        let commands_src =
-            std::fs::read_to_string(format!("{manifest_dir}/src/commands.rs")).expect("读 commands.rs");
+        // 1) 扫出**所有**源文件里 #[tauri::command] 标注的函数名。
+        //    只扫 commands.rs 是不够的：命令函数可以放在任何模块里
+        //    （v0.7.0 的 check_update / download_update 就在 updater.rs），
+        //    漏扫等于漏保护。
+        let src_root = std::path::Path::new(manifest_dir).join("src");
+        let mut sources: Vec<(String, String)> = Vec::new();
+        collect_rs_files(&src_root, &mut sources);
+        assert!(!sources.is_empty(), "应至少扫到一个源文件");
+
         let mut declared: Vec<String> = Vec::new();
-        let lines: Vec<&str> = commands_src.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim() != "#[tauri::command]" {
-                continue;
-            }
-            // 属性之后（跳过其它属性与文档注释）的第一个 `pub fn` 就是命令函数
-            for l in &lines[i + 1..] {
-                let t = l.trim_start();
-                if let Some(rest) = t.strip_prefix("pub fn ") {
-                    if let Some(name) = rest.split('(').next() {
-                        declared.push(name.trim().to_string());
+        for (_path, src) in &sources {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim() != "#[tauri::command]" {
+                    continue;
+                }
+                // 属性之后（跳过其它属性与文档注释）的第一个 `pub fn` 就是命令函数
+                for l in &lines[i + 1..] {
+                    let t = l.trim_start();
+                    if let Some(rest) = t.strip_prefix("pub fn ") {
+                        if let Some(name) = rest.split('(').next() {
+                            declared.push(name.trim().to_string());
+                        }
+                        break;
+                    }
+                    if t.starts_with("#[") || t.starts_with("///") || t.is_empty() {
+                        continue;
                     }
                     break;
                 }
-                if t.starts_with("#[") || t.starts_with("///") || t.is_empty() {
-                    continue;
-                }
-                break;
             }
         }
         assert!(!declared.is_empty(), "应至少扫到一个命令");
@@ -305,6 +400,24 @@ mod command_registry_tests {
             "这些 #[tauri::command] 函数没注册进 invoke_handler，前端调用会报 \
              `Command <name> not found`：{missing:?}"
         );
+    }
+
+    /// 递归收集 src 下的所有 `.rs` 文件。
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    out.push((path.to_string_lossy().to_string(), src));
+                }
+            }
+        }
     }
 }
 

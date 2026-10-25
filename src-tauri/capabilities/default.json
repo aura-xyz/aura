@@ -17,6 +17,7 @@
     "core:window:allow-start-dragging",
     "updater:default",
     "process:allow-restart",
-    "window-state:default"
+    "window-state:default",
+    "notification:default"
   ]
 }

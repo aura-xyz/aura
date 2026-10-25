@@ -1,12 +1,12 @@
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
+import {
+  checkUpdate,
+  downloadUpdate,
+  type UpdateInfoView,
+} from "./api";
 
-export interface UpdateInfo {
-  version: string;
-  currentVersion: string;
-  notes?: string;
-  date?: string;
-}
+export type UpdateInfo = UpdateInfoView;
 
 /**
  * 检查更新的结局。失败细分为两类，UI 给的提示完全不同：
@@ -18,12 +18,10 @@ export interface UpdateInfo {
 export type UpdateCheckResult =
   | { kind: "up-to-date" }
   /**
-   * 带上插件返回的 `Update` 句柄：**安装必须复用它**。
-   * 已经查到的更新如果丢了、安装时再 `check()` 一次，就多了一次网络请求，
-   * 也把自己多暴露在一个失败点上前提——v0.6.1 就栽在这里：第一次检查成功、
-   * 点「下载并安装」后第二次 check 超时，用户看到的是「安装失败」。
+   * 有新版本。**不带句柄**：安装时后端会复用检查阶段存下的那个 `Update`，
+   * 前端不需要（也不应该）持有它。
    */
-  | { kind: "available"; info: UpdateInfo; update: Update }
+  | { kind: "available"; info: UpdateInfo }
   | { kind: "unavailable" }
   | { kind: "failed"; reason: string };
 
@@ -81,24 +79,13 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * 而 404 窗口期与真实网络故障需要给用户不同的提示（见
  * {@link UpdateCheckResult}）。
  */
-export async function checkForUpdate(
-  currentVersion: string,
-): Promise<UpdateCheckResult> {
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
   try {
-    const update = await withTimeout(check(), CHECK_TIMEOUT_MS);
-    if (!update) {
+    const info = await withTimeout(checkUpdate(), CHECK_TIMEOUT_MS);
+    if (!info) {
       return { kind: "up-to-date" };
     }
-    return {
-      kind: "available",
-      info: {
-        version: update.version,
-        currentVersion,
-        notes: update.body ?? undefined,
-        date: update.date ?? undefined,
-      },
-      update,
-    };
+    return { kind: "available", info };
   } catch (error) {
     return categorizeCheckError(error) === "unavailable"
       ? { kind: "unavailable" }
@@ -109,43 +96,37 @@ export async function checkForUpdate(
 /**
  * 下载并安装更新。
  *
- * 必须传入**检查阶段拿到的那个 `Update` 句柄**，不要在这里重新 `check()`：
- * 重新检查等于再请求一次清单端点，既不必要，也把安装成功率绑在了第二次
- * 网络上（`latest.json` 与安装包是两个不同的地址，前者失败时用户会看到
- * 「安装失败：error sending request for ... latest.json」，指向的还是清单）。
+ * 后端会**并发探测**各下载源的真实速度，挑最快的那个再下载——
+ * GitHub Release 资产在境内只有约 0.05 MB/s（42.9MB 要 14 分钟），
+ * 镜像能到 0.37 MB/s。签名校验与安装仍由 updater 插件负责，镜像改不了内容。
  *
- * Tauri 的安装分两步：先 `downloadAndInstall` 把包下载并解压到
- * 暂存区，再 `relaunch` 重启应用让新版本生效。
- *
- * 调用方需自行展示下载进度——大文件下载可能持续数十秒。
+ * 进度由后端经 `update:progress` 事件推送。
  */
 export async function downloadAndInstall(
-  update: Update,
-  onProgress?: (downloaded: number, total: number | null) => void,
+  onProgress?: (
+    downloaded: number,
+    total: number | null,
+    source?: string,
+  ) => void,
 ): Promise<void> {
-  let downloaded = 0;
-  let total: number | null = null;
-  await update.downloadAndInstall((event) => {
-    switch (event.event) {
-      case "Started":
-        total = event.data.contentLength ?? null;
-        onProgress?.(0, total);
-        break;
-      case "Progress":
-        downloaded += event.data.chunkLength;
-        onProgress?.(downloaded, total);
-        break;
-      case "Finished":
-        onProgress?.(total ?? downloaded, total);
-        break;
-    }
+  const unlisten = await listen<{
+    downloaded: number;
+    total: number | null;
+    source: string;
+  }>("update:progress", (e) => {
+    onProgress?.(e.payload.downloaded, e.payload.total, e.payload.source);
   });
+  try {
+    await downloadUpdate();
+  } finally {
+    unlisten();
+  }
 }
 
 /**
  * 把安装阶段的错误翻成人话。
  *
- * 插件抛的是 reqwest 的原始错误（`error sending request for url (...)`），
+ * 抛出来的可能是 reqwest 的原始错误（`error sending request for ...`），
  * 对用户没有信息量；而「下载失败」和「签名校验失败」的处置完全不同——
  * 前者重试或走浏览器入口，后者只能重新下载。
  */
@@ -153,6 +134,12 @@ export function describeInstallError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   if (/signature|签名/i.test(raw)) {
     return "安装包签名校验未通过，已中止。请从发布页重新下载安装包。";
+  }
+  if (/没有可用的下载源|no available/i.test(raw)) {
+    return "所有下载源都连不上。请检查网络后重试，或用下面的浏览器入口手动安装。";
+  }
+  if (/没有待安装的更新/i.test(raw)) {
+    return "更新信息已失效，请重新检查更新。";
   }
   if (/error sending request|dns|connect|timed out|timeout|network/i.test(raw)) {
     return "下载安装包时网络中断。可以重试，或用下面的浏览器入口手动安装。";

@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.7.0-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,6 +49,20 @@
 
 > **行为变更提醒**
 >
+- v0.7.0：
+  - 消息支持「重新生成」与「编辑后重跑」：两者都会回滚上下文重发，不会残留旧内容
+  - 重新生成会保留旧版本，可左右切换回看（切换只影响显示，后续对话仍基于最新版本）
+  - 正文右键可复制全文；代码块支持一键复制
+  - 文件修改可展开差异视图，逐行标出增删
+  - 超过 20 行的代码默认折叠
+  - 拖入文件即把路径附加到输入框；系统与密钥目录会拒绝，需授权的目录会提示
+  - 窗口可最小化到系统托盘常驻后台，任务跑完收到系统通知（仅在窗口不在前台时）
+  - Ctrl+F 呼出应用内会话搜索
+  - 空状态新增示例卡片，点击即把引导语填入输入框
+  - 关闭窗口改为最小化到托盘；完全退出请用关于页的「退出 Aura」
+  - 自动更新改为多源下载：自动挑最快的下载源，避免 GitHub 在境内下载极慢
+  - 输入框打 `@` 弹出工作区文件列表（支持相对路径，如 `@app` 列出 app 下的文件与文件夹），选中即插入路径；打 `/` 弹出已启用的技能列表，选中即插入技能名
+  - 开始界面重排：图标标题 → 输入框 → 示例内容，整体居中一块
 > - v0.6.3：
 >   - 界面视觉重构：新增成功/警告/品牌语义色，暗色模式对比度全部达到无障碍标准（4.5:1）
 >   - 你的消息改用品牌蓝底色，与 AI 回复一眼区分；侧边栏当前会话也有品牌色标识

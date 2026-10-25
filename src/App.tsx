@@ -1,11 +1,23 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { TriangleAlert } from "lucide-react";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
 import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
+import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
+import { useDropZone } from "./hooks/useDropZone";
+import { checkAllowlistPath } from "./lib/api";
+import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
 import {
   codeBlockMenuItems,
   findCodeBlockTarget,
@@ -16,6 +28,7 @@ import {
 import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
+import SessionSearch from "./components/SessionSearch";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -61,8 +74,14 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const {
     busy,
     sendMessage,
+    submitMessage,
+    cancelEdit,
+    editingUserIndex,
+    editPrefill,
+    insertIntoInput,
     stop,
     activeSession,
+    sessions,
     models,
     selectedModel,
     setModel,
@@ -70,6 +89,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     setMode: changeMode,
     workspace,
     newSession,
+    openSession,
     setSessionWorkspace,
     startRename,
     deleteSession,
@@ -80,7 +100,59 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * v0.7.0：拖入文件 → 把路径附加到输入框。
+   *
+   * 为什么不直接把文件内容塞进消息：模型的工具沙盒只允许工作区与
+   * 路径白名单内的目录，让模型自己去读才是正确做法。这里负责的是
+   * **把路径告诉用户自己**（用户在输入框里能看到、能改、能删）。
+   *
+   * 路径的可达性由后端判定（`check_allowlist_path`）：
+   * - allow → 直接附加
+   * - confirm → 附加，但提示「该目录需要先授权」
+   * - reject → 不附加（系统目录、密钥目录）
+   */
+  const onDropPaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+
+      // 逐个判定。**自身与父目录都判，取更严的那档**：
+      // 拖入的可能是文件也可能是目录，字符串上看不出来，
+      // 只判父目录会漏掉「名为 Desktop 的目录」这类情况。
+      const verdicts: DropVerdict[] = [];
+      for (const p of paths) {
+        try {
+          const own = await checkAllowlistPath(p);
+          const parent = await checkAllowlistPath(parentDir(p));
+          verdicts.push(stricter(own.level, parent.level));
+        } catch {
+          // 判定失败时不擅自丢弃用户的拖入：先附加，
+          // 真正的可达性由模型侧的沙盒把关
+          verdicts.push("unknown");
+        }
+      }
+
+      const decision = decideDrop(paths, verdicts);
+      if (decision.attach) {
+        insertIntoInput(
+          formatAttachment(paths.filter((_, i) => verdicts[i] !== "reject")),
+        );
+      }
+      setDropNotice(decision.notice);
+    },
+    [insertIntoInput],
+  );
+
+  useDropZone({
+    onDrop: (paths) => {
+      void onDropPaths(paths);
+    },
+    onCancel: () => setDropNotice(null),
+  });
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -98,14 +170,41 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
   // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
   // 本次只拦截不映射行为，留待后续按需定义应用内语义。
+  //
+  // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+        return;
+      }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
       e.preventDefault();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // 搜索数据：把会话里的消息转成纯文本
+  const searchable = useMemo(
+    () =>
+      sessions.map((sess) => ({
+        id: sess.id,
+        title: sess.title,
+        messages: sess.messages.map((m) => ({
+          role: m.role,
+          text:
+            m.role === "user"
+              ? m.content
+              : m.blocks
+                  .filter((b) => b.kind === "text")
+                  .map((b) => (b.kind === "text" ? b.text : ""))
+                  .join("\n"),
+        })),
+      })),
+    [sessions],
+  );
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
@@ -187,6 +286,55 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     e.preventDefault();
   }
 
+  /**
+   * 输入框的 props。开始界面与普通对话区用的是同一个输入框，
+   * 只是外边距不同（`variant`），所以 props 抽成一份。
+   */
+  const inputProps = {
+    busy,
+    onSend: sendMessage,
+    onStop: stop,
+    models,
+    selectedModel,
+    onModelChange: setModel,
+    mode,
+    onModeChange: changeMode,
+    workspace: activeSession?.workspace ?? "",
+    onWorkspaceChange: setSessionWorkspace,
+    workspaceLocked: activeSession ? activeSession.messages.length > 0 : false,
+    sessionId: activeSession?.id ?? "",
+    lastUserMessage: lastUserMessageOf(activeSession),
+    editPrefill,
+    editing: editingUserIndex !== null,
+    onCancelEdit: cancelEdit,
+    onSubmit: submitMessage,
+  };
+
+  /** 没有消息（或没有会话）→ 走开始界面 */
+  const isEmptySession = (activeSession?.messages.length ?? 0) === 0;
+
+  /**
+   * 拖放提示：有些路径没被附加，或附加了但需要授权。
+   * 这类信息必须说出来——用户看到路径进了输入框就以为
+   * 模型一定能读，实际可能读不到。
+   */
+  const dropBanner = dropNotice ? (
+    <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+      <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
+        <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
+        <span className="min-w-0 flex-1">{dropNotice}</span>
+        <button
+          type="button"
+          onClick={() => setDropNotice(null)}
+          aria-label="关闭提示"
+          className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle transition-colors hover:border-brand"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
@@ -229,6 +377,16 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TimelinePage onClose={() => setView("chat")} />
             </div>
+          ) : isEmptySession ? (
+            /* 开始界面（v0.7.0）：图标 + 标题 → 输入框 → 示例内容，
+               整体居中成一块。此前标题在消息区、输入框钉在窗口最底，
+               两块离得很远，看着像两个不相干的区域。 */
+            <>
+              {dropBanner}
+              <StartScreen onPick={(prompt) => insertIntoInput(prompt)}>
+                <InputArea {...inputProps} variant="inline" />
+              </StartScreen>
+            </>
           ) : (
             <>
               {/* relative 让回到底部按钮以滚动区为定位基准 */}
@@ -241,21 +399,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
                   messagesLength={activeSession?.messages.length ?? 0}
                 />
               </div>
-<InputArea
-      busy={busy}
-   onSend={sendMessage}
-  onStop={stop}
-       models={models}
-   selectedModel={selectedModel}
-       onModelChange={setModel}
-  mode={mode}
-     onModeChange={changeMode}
-              workspace={activeSession?.workspace ?? ""}
-      onWorkspaceChange={setSessionWorkspace}
-      workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
-      sessionId={activeSession?.id ?? ""}
-      lastUserMessage={lastUserMessageOf(activeSession)}
-    />
+              {dropBanner}
+              <InputArea {...inputProps} />
             </>
           )}
         </main>
@@ -264,6 +409,17 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
+
+      {searchOpen && (
+        <SessionSearch
+          sessions={searchable}
+          onClose={() => setSearchOpen(false)}
+          onOpenSession={(sessionId) => {
+            void openSession(sessionId);
+            setSearchOpen(false);
+          }}
+        />
+      )}
 
       {confirmWs && (
         <div

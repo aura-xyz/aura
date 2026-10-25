@@ -49,7 +49,8 @@ pub fn list_files(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     Ok(ToolOutput {
         label: format!("Read {}", shown),
         result: serde_json::json!({ "files": files }).to_string(),
-    })
+    
+        diff: None,})
 }
 
 pub fn read_file(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String> {
@@ -119,7 +120,7 @@ pub fn read_file(scope: &AccessScope, args: &Value) -> Result<ToolOutput, String
             format!("Read {} L{} - L{}", display_path(path), start, end_num)
         }
     };
-    Ok(ToolOutput { label, result: out })
+    Ok(ToolOutput { label, result: out, diff: None })
 }
 
 #[cfg(test)]

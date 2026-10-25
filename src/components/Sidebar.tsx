@@ -138,9 +138,12 @@ function toggleExpand(w: string) {
         </button>
       </header>
 
-{/* 顶部导航：新建对话 / Skills / MCP。平铺，不加卡片边框——
-          折叠态下边框会在 56px 宽里挤成一条窄条，图标也就跟着偏了。 */}
-      <nav className="shrink-0 px-3">
+      {/* 顶部导航：新建对话 / Skills / MCP / 轨迹。平铺，不加卡片边框——
+          折叠态下边框会在 56px 宽里挤成一条窄条，图标也就跟着偏了。
+
+          pb-3 是刻意留的：此前 nav 与下方会话列表之间一点空隙都没有，
+          「轨迹」的下边缘几乎贴着第一条会话，视觉上像挤在一起（实测反馈）。 */}
+      <nav className="shrink-0 px-3 pb-3">
         {(
    [
             { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },

@@ -49,6 +49,20 @@ The checklist clears automatically once all steps are complete, and is saved wit
 
 > **Behavior change notices**
 >
+- v0.7.0:
+  - Messages support "regenerate" and "edit & resend": both roll the context back before resending, so nothing stale is left behind
+  - Regenerating keeps the old version, and you can switch between them (switching only changes the display; later turns still build on the newest version)
+  - Right-click the message area to copy a whole reply; code blocks get a one-click copy button
+  - File edits can be expanded into a diff view that marks added and removed lines
+  - Code blocks over 20 lines are collapsed by default
+  - Dropping a file into the window attaches its path to the input; system and key directories are refused, and directories needing authorization are called out
+  - The window can live in the system tray and keep running in the background, with a system notification when a task finishes (only while the window is not in front)
+  - Ctrl+F opens in-app session search
+  - The empty state now shows example cards that fill a starter prompt into the input
+  - Closing the window now minimizes it to the tray; use "Quit Aura" in the about page to exit fully
+  - Updates now download from multiple sources and pick the fastest one automatically (GitHub downloads are extremely slow in mainland China)
+  - Type `@` in the input to pop up the workspace file list (relative paths work: `@app` lists the files and folders under app); type `/` to pop up the enabled skills list. Picking one inserts it into the input
+  - The start screen is now one centered block: icon and title, then the input, then the examples
 > - v0.6.3:
 >   - Visual refresh: new success / warning / brand semantic colors, and every dark-mode contrast ratio now meets the 4.5:1 accessibility standard.
 >   - Your messages use a brand-blue background so they stand out from AI replies; the current sidebar session is brand-marked too.

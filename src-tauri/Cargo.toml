@@ -1,6 +1,6 @@
 [package]
 name = "aura"
-version = "0.6.3"
+version = "0.7.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -18,12 +18,21 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon: v0.7.0 的系统托盘（常驻后台、关闭按钮只隐藏到托盘）
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-fs = "2"
-reqwest = { version = "0.13.5", features = ["stream", "json"] }
+# reqwest 0.13 的默认 TLS 是 rustls + rustls-platform-verifier（Windows 平台验证器）。
+# 它会做证书吊销检查（CRL/OCSP），而 GitHub 证书的吊销服务器在境内不可达，
+# 于是**每个新建连接都要多等约 10 秒**才软失败。更新检查与下载各自新建一次
+# 客户端，用户看到的就是「45 秒才找到新版本」「证书检测 60 秒超时」。
+#
+# 改用 native-tls（Windows 上即 schannel）：走系统证书库，吊销检查软失败，
+# 建连秒级；顺带能识别企业代理装的根证书（rustls 的 webpki 根证书集不认）。
+# 注意：Linux 上 native-tls 依赖 OpenSSL，本项目目前只支持 Windows 构建。
+reqwest = { version = "0.13.5", features = ["stream", "json", "native-tls"] }
 futures-util = "0.3.34"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 bytes = "1.12.1"
@@ -33,7 +42,9 @@ encoding_rs = "0.8"
 tauri-plugin-dialog = "2.8.1"
 regex = "1.10"
 # v0.5.0：自动更新。Tauri v2 已内建包校验，无需额外 feature
-tauri-plugin-updater = "2"
+# 关闭默认的 rustls-tls，改走 native-tls（schannel）——理由同上：
+# rustls-platform-verifier 的吊销检查在境内不可达，会拖慢每一次更新检查与下载。
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy", "zip"] }
 # v0.6.3：窗口位置/大小/最大化状态记忆。无边框窗口更需要它——
 # 启动即强制最大化且不记位置，是「用起来像网页」的典型泄漏点
 tauri-plugin-window-state = "2"
@@ -50,6 +61,10 @@ async-trait = "0.1.92"
 # 顺着 GitHub Contents API 取清单时，文件内容被 base64 包在 JSON 里。
 # 0.22.1 已在 Tauri 的依赖树中，声明为直接依赖不会新增编译。
 base64 = "0.22"
+tauri-plugin-notification = "2.7.0"
+# url：构造 updater 的下载地址（Update::download_url 是 url::Url）。
+# 0.2.1 已在依赖树中（updater 插件带入），声明为直接依赖不增加编译量。
+url = "2"
 
 [features]
 # 生产构建启用；tauri dev 由 CLI 以 --no-default-features 关闭以使用 devUrl

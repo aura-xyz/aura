@@ -208,6 +208,32 @@ export function listSkills(): Promise<SkillView[]> {
   return invoke("list_skills");
 }
 
+/** 一个候选路径（`@` 引用面板用）。文件与目录都在内。 */
+export interface FileCandidate {
+  /** 插入输入框的路径。**目录以 `/` 结尾** */
+  path: string;
+  /** 文件名（目录则是目录名） */
+  name: string;
+  /** 所在目录 */
+  dir: string;
+  /** 是目录吗 */
+  is_dir: boolean;
+}
+
+/**
+ * 列出工作区里匹配的文件（`@` 引用面板用）。
+ *
+ * 搜的是**会话自己的工作区**加用户授权的目录——授权目录里的文件
+ * 模型也能读，所以也该能被引用。
+ */
+export function listWorkspaceFiles(
+  sessionId: string,
+  query: string,
+  limit?: number,
+): Promise<FileCandidate[]> {
+  return invoke("list_workspace_files", { sessionId, query, limit });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });
@@ -407,6 +433,33 @@ export function exportTimeline(
   return invoke("export_timeline", { sessionId, title: title ?? null });
 }
 
+// ── 历史截断（v0.7.0）─────────────────────────────────────────────
+/** 截断结果。 */
+export interface TruncateHistoryResult {
+  /** 截断后保留的 history entry 数 */
+  keep_entries: number;
+  /** 截断后仍然存在的真实用户消息条数 */
+  keep_user_messages: number;
+  /** 是否因请求条数超过实际数量而被截到末尾 */
+  clamped: boolean;
+}
+
+/**
+ * 把会话的 agent 历史回滚到「保留到第 N 条真实用户消息为止」。
+ *
+ * 语义（与后端一致）：
+ * - `keepThroughUser = k` → 保留第 1..=k 条用户消息，**删掉第 k 条触发的回答**
+ *   及其后的一切。用于「重新生成第 k 条回答」。
+ * - `keepThroughUser = k - 1` → 连第 k 条用户消息本身也删掉。
+ *   用于「编辑第 k 条用户消息并重跑」。
+ */
+export function truncateHistory(
+  sessionId: string,
+  keepThroughUser: number,
+): Promise<TruncateHistoryResult> {
+  return invoke("truncate_history", { sessionId, keepThroughUser });
+}
+
 // ── 路径白名单（v0.6.2）─────────────────────────────────────────
 
 /** 一个白名单条目。 */
@@ -482,4 +535,64 @@ export function installMarketSkill(
   update: boolean,
 ): Promise<InstallSummary> {
   return invoke("install_market_skill", { id, acceptRisky, update });
+}
+
+// ── 系统通知（v0.7.0）─────────────────────────────────────────────
+
+/**
+ * 发一条系统通知。
+ *
+ * 只在窗口不在前台时调用——用户正盯着屏幕时弹通知是打扰。
+ * 通知失败不视为错误，由后端吞掉。
+ */
+export function notify(title: string, body: string): Promise<void> {
+  return invoke("notify", { title, body });
+}
+
+/**
+ * 退出应用（v0.7.0）。
+ *
+ * 关闭窗口是「隐藏到托盘」（常驻后台），所以必须有一条明确的退出路径。
+ */
+export function quitApp(): Promise<void> {
+  return invoke("quit_app");
+}
+
+// ── 自动更新（v0.7.0：多源下载）────────────────────────────────────
+
+/** 一个候选下载源。后端会实测各源速度后挑一个。 */
+export interface DownloadSource {
+  /** 展示名，如「GitHub 直连」「ghfast」 */
+  label: string;
+  /** 完整 URL */
+  url: string;
+}
+
+/** 检查更新的结果。`null` 表示已是最新版本。 */
+export interface UpdateInfoView {
+  version: string;
+  notes?: string;
+  date?: string;
+  /** 候选下载源 */
+  sources: DownloadSource[];
+}
+
+/**
+ * 检查是否有新版本。
+ *
+ * 后端负责取清单（插件配了三个端点、会自动回退）并把下载句柄存起来，
+ * 安装阶段直接复用——不再让前端持有一个会过期的句柄。
+ */
+export function checkUpdate(): Promise<UpdateInfoView | null> {
+  return invoke("check_update");
+}
+
+/**
+ * 下载并安装更新。
+ *
+ * 后端会并发探测各下载源、挑最快的那个，再交给 updater 插件做签名校验与安装。
+ * 进度通过 `update:progress` 事件推送。
+ */
+export function downloadUpdate(): Promise<void> {
+  return invoke("download_update");
 }

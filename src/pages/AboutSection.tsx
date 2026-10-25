@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -8,6 +7,7 @@ import {
   Check,
   ExternalLink,
   Globe,
+  Power,
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
@@ -18,6 +18,7 @@ import {
   restartApp,
   type UpdateCheckResult,
 } from "../lib/updater";
+import { quitApp } from "../lib/api";
 
 const REPO_URL = "https://github.com/aura-xyz/aura";
 const SITE_URL = "https://aura-xyz.github.io/";
@@ -27,7 +28,13 @@ type CheckState =
   | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "checked"; result: UpdateCheckResult }
-  | { kind: "downloading"; downloaded: number; total: number | null }
+  | {
+      kind: "downloading";
+      downloaded: number;
+      total: number | null;
+      /** 实际使用的下载源 */
+      source?: string;
+    }
   | { kind: "installed" }
   | { kind: "error"; message: string };
 
@@ -96,20 +103,20 @@ export default function AboutSection() {
   async function handleCheck() {
     if (!version) return;
     setState({ kind: "checking" });
-    const result = await checkForUpdate(version);
+    const result = await checkForUpdate();
     // 三种成功结局 + 两种失败结局，UI 分别提示，见 lib/updater.ts
     setState({ kind: "checked", result });
   }
 
   /**
-   * 安装。传入的必须是检查阶段拿到的那个 `Update` 句柄——不要再 check 一次，
-   * 那会多请求一遍清单端点，也就多一个让「安装」平白失败的理由。
+   * 安装。后端会复用检查阶段存下的那个 `Update`——前端不持句柄，
+   * 也就不会出现「句柄过期 / 重新检查多一次网络往返」这类失败理由。
    */
-  async function handleInstall(update: Update) {
+  async function handleInstall() {
     setState({ kind: "downloading", downloaded: 0, total: null });
     try {
-      await downloadAndInstall(update, (downloaded, total) => {
-        setState({ kind: "downloading", downloaded, total });
+      await downloadAndInstall((downloaded, total, source) => {
+        setState({ kind: "downloading", downloaded, total, source });
       });
       setState({ kind: "installed" });
       await restartApp();
@@ -125,8 +132,8 @@ export default function AboutSection() {
 
   /**
    * 提前收窄：安装按钮的 onClick 是个闭包，在 JSX 里判断 `state.result.kind`
-   * 无法把类型带进闭包（TS 会认为 `update` 可能不存在）。先取出来，
-   * 既能安全调用，也保证「安装的就是检查到的那一个」。
+   * 无法把类型带进闭包（TS 会认为 info 可能不存在）。先取出来，既能安全调用，
+   * 也保证「安装的就是检查到的那一个」。
    */
   const available =
     state.kind === "checked" && state.result.kind === "available"
@@ -192,7 +199,7 @@ export default function AboutSection() {
               <p className="text-sm">
                 发现新版本 {available.info.version}
                 <span className="ml-2 text-xs text-subtle">
-                  当前 {available.info.currentVersion}
+                  当前 {version || "—"}
                 </span>
               </p>
               {available.info.notes && (
@@ -202,7 +209,7 @@ export default function AboutSection() {
               )}
               <button
                 type="button"
-                onClick={() => handleInstall(available.update)}
+                onClick={() => handleInstall()}
                 disabled={busy}
                 className="mt-1 flex items-center justify-center gap-1.5 rounded-md border border-line bg-bubble py-2 text-sm transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
               >
@@ -247,6 +254,7 @@ export default function AboutSection() {
               <p className="text-sm text-subtle">
                 正在下载更新…
                 {state.total ? ` ${fmtSize(state.downloaded)} / ${fmtSize(state.total)}` : ""}
+                {state.source ? ` · 来源 ${state.source}` : ""}
               </p>
               <div className="h-1 overflow-hidden rounded-full bg-line">
                 <div
@@ -291,6 +299,28 @@ export default function AboutSection() {
           >
             <RefreshCw size={14} className={state.kind === "checking" ? "animate-spin" : ""} />
             {state.kind === "checking" ? "检查中…" : "检查更新"}
+          </button>
+        </div>
+      </section>
+
+      {/* v0.7.0：退出入口。
+          关闭窗口现在是「隐藏到托盘」（常驻后台），所以必须有一条
+          明确的退出路径——否则用户会以为应用关不掉。 */}
+      <section>
+        <h3 className="mb-3 text-sm font-medium">应用</h3>
+        <div className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
+          <p className="text-xs leading-relaxed text-subtle">
+            关闭窗口只是最小化到系统托盘，Aura 会在后台继续运行
+            （长任务跑完仍能收到系统通知）。要完全退出请用下面的按钮，
+            或在托盘图标上右键选择「退出 Aura」。
+          </p>
+          <button
+            type="button"
+            onClick={() => void quitApp()}
+            className="flex items-center justify-center gap-1.5 rounded-md border border-line py-2 text-sm transition-colors hover:border-danger hover:text-danger"
+          >
+            <Power size={14} />
+            退出 Aura
           </button>
         </div>
       </section>

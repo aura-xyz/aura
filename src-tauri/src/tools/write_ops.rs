@@ -70,11 +70,21 @@ pub fn write_file(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
         super::ensure_allowed(scope, &target)?;
     }
 
+    // diff 捕获修改前的内容：文件原本不存在时是空串（新增文件）
+    let before = if target.exists() {
+        std::fs::read_to_string(&target).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     atomic_write(&target, content)?;
-    Ok(ToolOutput {
+    let mut out = ToolOutput {
         label: format!("Write {}", shown),
         result: write_summary(&shown, content),
-    })
+
+        diff: None,};
+    out.diff = super::make_diff(&shown, &before, content);
+    Ok(out)
 }
 
 /// `string_replace`：基于字符串匹配的精准替换，最省 Token 的改法。
@@ -125,7 +135,7 @@ pub fn string_replace(scope: &AccessScope, args: &Value) -> Result<ToolOutput, S
     }
     atomic_write(&target, &updated)?;
     let times = if replace_all { hits } else { 1 };
-    Ok(ToolOutput {
+    let mut out = ToolOutput {
         label: format!("Edit {}", shown),
         result: format!(
             "已在 {} 中完成 {} 处替换（{} → {} 行，{}）",
@@ -135,7 +145,10 @@ pub fn string_replace(scope: &AccessScope, args: &Value) -> Result<ToolOutput, S
             updated.lines().count().max(1),
             if replace_all { "全部匹配" } else { "唯一匹配" }
         ),
-    })
+
+        diff: None,};
+    out.diff = super::make_diff(&shown, &content, &updated);
+    Ok(out)
 }
 
 /// `replace_lines`：按行号区间整段替换，替换内容是**该区间的完整新文本**。
@@ -190,9 +203,10 @@ pub fn replace_lines(scope: &AccessScope, args: &Value) -> Result<ToolOutput, St
 
     let joined = lines.join("\n");
     let trailing = if content.ends_with('\n') { "\n" } else { "" };
-    atomic_write(&target, &format!("{}{}", joined, trailing))?;
+    let updated = format!("{}{}", joined, trailing);
+    atomic_write(&target, &updated)?;
 
-    Ok(ToolOutput {
+    let mut out = ToolOutput {
         label: format!("Edit {} L{} - L{}", shown, start, end_clamped),
         result: format!(
             "已替换 {} 的 L{} - L{}（文件现 {} 行）",
@@ -201,7 +215,10 @@ pub fn replace_lines(scope: &AccessScope, args: &Value) -> Result<ToolOutput, St
             end_clamped,
             lines.len()
         ),
-    })
+
+        diff: None,};
+    out.diff = super::make_diff(&shown, &content, &updated);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -230,6 +247,75 @@ mod tests {
         // 覆写
         write_file(&test_scope(ws.clone()), &serde_json::json!({ "path": "a.txt", "content": "第二版" })).unwrap();
         assert_eq!(fs::read_to_string(ws.join("a.txt")).unwrap(), "第二版");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// v0.7.0：写工具要带上前后内容，供前端的差异视图使用。
+    ///
+    /// 两条约束：
+    /// 1. diff 里的内容**不能**出现在 `result` 里——result 会回填给模型，
+    ///    是摘要不是正文；
+    /// 2. 新建文件时 before 是空串（不是"文件不存在"这种描述）。
+    #[test]
+    fn write_file_carries_diff_with_before_and_after() {
+        let (ws, base) = ws_fixture("diff");
+        // 先建一个文件，再改它，这样 before 有内容
+        write_file(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "path": "a.txt", "content": "旧内容\n第二行" }),
+        )
+        .unwrap();
+
+        let out = write_file(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "path": "a.txt", "content": "新内容\n第二行" }),
+        )
+        .unwrap();
+
+        let d = out.diff.expect("写工具应带 diff");
+        assert_eq!(d.path, "a.txt");
+        assert!(d.before.contains("旧内容"));
+        assert!(d.after.contains("新内容"));
+        // 前后的内容不能泄漏进 result（它会回填给模型）
+        assert!(!out.result.contains("旧内容"));
+        assert!(!out.result.contains("新内容"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_file_diff_before_is_empty_for_new_file() {
+        let (ws, base) = ws_fixture("diff-new");
+        let out = write_file(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "path": "new.txt", "content": "内容" }),
+        )
+        .unwrap();
+        let d = out.diff.expect("写工具应带 diff");
+        assert_eq!(d.before, "", "新文件的 before 应为空串");
+        assert_eq!(d.after, "内容");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// 字符串替换也要带 diff，且 before/after 是完整文件内容。
+    #[test]
+    fn string_replace_carries_diff() {
+        let (ws, base) = ws_fixture("diff-replace");
+        write_file(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "path": "a.txt", "content": "hello world" }),
+        )
+        .unwrap();
+
+        let out = string_replace(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "path": "a.txt", "old_string": "world", "new_string": "aura" }),
+        )
+        .unwrap();
+
+        let d = out.diff.expect("替换应带 diff");
+        assert!(d.before.contains("hello world"));
+        assert!(d.after.contains("hello aura"));
+        assert!(!out.result.contains("hello aura"));
         let _ = fs::remove_dir_all(&base);
     }
 

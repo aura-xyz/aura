@@ -16,6 +16,58 @@ pub use scope::AccessScope;
 pub struct ToolOutput {
     pub label: String,
     pub result: String,
+    /// 文件修改前后的内容（v0.7.0）。
+    ///
+    /// **不走 `result`**：`result` 会回填给模型看，受 `MAX_OUTPUT` 截断，
+    /// 而且它是摘要不是正文。diff 是给**用户**看的完整前后内容，
+    /// 走独立字段，不占模型上下文。
+    pub diff: Option<FileDiff>,
+}
+
+/// 一次文件修改的前后对比。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileDiff {
+    /// 展示用的路径
+    pub path: String,
+    /// 修改前的内容（文件原本不存在时为空串）
+    pub before: String,
+    /// 修改后的内容
+    pub after: String,
+}
+
+/// diff 内容的大小上限（单侧，字节）。
+///
+/// 差异视图是给用户看的，完整内容会占内存；超过这个量就退化成
+/// 「只给提示，不给内容」——总比把内存吃光好。
+pub const DIFF_MAX_BYTES: usize = 64 * 1024;
+
+/// 构造 diff。内容过大时返回 None（不截断——半截的 diff 会误导人）。
+pub fn make_diff(path: &str, before: &str, after: &str) -> Option<FileDiff> {
+    if before.len() > DIFF_MAX_BYTES || after.len() > DIFF_MAX_BYTES {
+        return None;
+    }
+    Some(FileDiff {
+        path: path.to_string(),
+        before: before.to_string(),
+        after: after.to_string(),
+    })
+}
+
+impl ToolOutput {
+    /// 构造一个不带 diff 的输出。
+    pub fn new(label: impl Into<String>, result: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            result: result.into(),
+            diff: None,
+        }
+    }
+
+    /// 附上文件 diff。
+    pub fn with_diff(mut self, diff: FileDiff) -> Self {
+        self.diff = Some(diff);
+        self
+    }
 }
 
 #[derive(Debug)]
