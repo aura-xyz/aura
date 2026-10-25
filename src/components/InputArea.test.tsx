@@ -184,3 +184,93 @@ describe("InputArea", () => {
     expect(screen.getByText("约 5 tokens")).toBeInTheDocument();
   });
 });
+
+/**
+ * @ 文件引用 / / 技能调用（v0.7.0）。
+ *
+ * 关键契约：**浮层开着时回车是「选中」，不是「发送」**。
+ * 弄错这一步的后果很直接：用户想选个文件，结果把半句话发出去了。
+ */
+describe("InputArea 的 @ / 触发", () => {
+  const { filesMock, skillsMock } = vi.hoisted(() => ({
+    filesMock: vi.fn(async () => [
+      { path: "src/store.tsx", name: "store.tsx", dir: "src" },
+    ]),
+    skillsMock: vi.fn(async () => [
+      {
+        name: "docx",
+        description: "处理 Word 文档",
+        version: "1",
+        source: "builtin" as const,
+        allowed_tools: [],
+        enabled: true,
+        dir: "",
+        path: "",
+      },
+    ]),
+  }));
+  vi.mock("../lib/api", async () => {
+    const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+    return {
+      ...actual,
+      listWorkspaceFiles: filesMock,
+      listSkills: skillsMock,
+    };
+  });
+
+  beforeEach(() => {
+    filesMock.mockClear();
+    skillsMock.mockClear();
+  });
+
+  it("打 @ 后浮层出现在输入框上方并列出文件", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+
+    expect(await screen.findByText("store.tsx")).toBeInTheDocument();
+    // 浮层在输入卡片之前（DOM 顺序上「上方」）
+    const menu = screen.getByRole("listbox", { name: "文件引用" });
+    const card = box.closest("div.rounded-card");
+    expect(
+      menu.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("选中文件后把路径插入输入框", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    await userEvent.click(await screen.findByText("store.tsx"));
+    expect(box).toHaveValue("@<src/store.tsx> ");
+  });
+
+  it("浮层开着时回车是选中而不是发送", async () => {
+    const { props } = mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    await screen.findByText("store.tsx");
+    await userEvent.type(box, "{Enter}");
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("@<src/store.tsx> ");
+  });
+
+  it("打 / 列出已启用的技能并插入技能名", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/doc");
+    expect(await screen.findByText("docx")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("docx"));
+    expect(box).toHaveValue("/docx ");
+  });
+
+  it("Esc 关闭浮层，不影响已输入的文字", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    await screen.findByText("store.tsx");
+    await userEvent.type(box, "{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(box).toHaveValue("@");
+  });
+});

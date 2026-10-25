@@ -1073,10 +1073,92 @@ pub fn export_timeline(
     ))
 }
 
+/// 一个候选文件（`@` 引用面板用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileCandidate {
+    /// 插入输入框的路径：工作区内的用**相对路径**，授权目录用绝对路径
+    pub path: String,
+    /// 文件名（展示用）
+    pub name: String,
+    /// 所在目录（展示用）
+    pub dir: String,
+}
+
+/// 列出工作区里匹配的文件（`@` 引用面板用）。
+///
+/// 搜的是**会话自己的工作区**（不是全局单值——见不变量 20），
+/// 外加用户授权的白名单目录（授权目录里的文件模型也能读）。
+/// 工作区内的文件给相对路径，授权目录里的给绝对路径。
+#[tauri::command]
+pub fn list_workspace_files(
+    state: State<'_, AppState>,
+    session_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<FileCandidate>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+
+    // 会话自己的工作区；查不到（内存新建、尚未落库）才回落全局。
+    let workspace = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    };
+    let workspace = match workspace {
+        Some(w) => PathBuf::from(w),
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let allowlist = {
+        let db = state.db.lock().map_err(lock_err)?;
+        allowlist_paths(&db)
+    };
+    let scope = crate::tools::AccessScope::new(workspace.clone(), allowlist)
+        .map_err(|e| format!("{e}"))?;
+
+    let mut out: Vec<FileCandidate> = Vec::new();
+    let roots = scope.roots().to_vec();
+    for (idx, root) in roots.iter().enumerate() {
+        // 第 0 个根是工作区，其余是授权目录。
+        let is_workspace = idx == 0;
+        let hits = crate::tools::search::list_paths(root, &query, limit);
+        for rel in hits {
+            let (path, dir) = if is_workspace {
+                let dir = match rel.rfind('/') {
+                    Some(p) => rel[..p].to_string(),
+                    None => String::new(),
+                };
+                (rel.clone(), dir)
+            } else {
+                let abs = root.join(&rel);
+                let abs = crate::paths::display(&abs);
+                let dir = match abs.rfind('/') {
+                    Some(p) => abs[..p].to_string(),
+                    None => String::new(),
+                };
+                (abs, dir)
+            };
+            let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+            out.push(FileCandidate { path, name, dir });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// 列出全部白名单条目（内置 + 用户添加）。
 #[tauri::command]
-pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {
-    let db = state.db.lock().map_err(lock_err)?;
+pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {    let db = state.db.lock().map_err(lock_err)?;
     let rows = db::load_allowlist(&db).map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()

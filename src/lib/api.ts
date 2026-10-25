@@ -208,6 +208,30 @@ export function listSkills(): Promise<SkillView[]> {
   return invoke("list_skills");
 }
 
+/** 一个候选文件（`@` 引用面板用）。 */
+export interface FileCandidate {
+  /** 插入输入框的路径 */
+  path: string;
+  /** 文件名 */
+  name: string;
+  /** 所在目录 */
+  dir: string;
+}
+
+/**
+ * 列出工作区里匹配的文件（`@` 引用面板用）。
+ *
+ * 搜的是**会话自己的工作区**加用户授权的目录——授权目录里的文件
+ * 模型也能读，所以也该能被引用。
+ */
+export function listWorkspaceFiles(
+  sessionId: string,
+  query: string,
+  limit?: number,
+): Promise<FileCandidate[]> {
+  return invoke("list_workspace_files", { sessionId, query, limit });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });
