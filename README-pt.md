@@ -49,6 +49,17 @@ A lista de tarefas é limpa automaticamente quando todos os passos são concluí
 
 > **Avisos de mudanças de comportamento**
 >
+- v0.7.0 (em desenvolvimento, ainda não publicado):
+  - As mensagens aceitam «regenerar» e «editar e reenviar»: ambos rebobinam o contexto antes de reenviar, então nada obsoleto fica para trás
+  - Ao regenerar, a versão anterior é mantida e você pode alternar entre elas (alternar só muda a exibição; os turnos seguintes seguem com a versão mais recente)
+  - Clique com o botão direito na área de mensagens para copiar uma resposta inteira; blocos de código ganham botão de cópia
+  - Edições de arquivo podem ser abertas em uma visão de diferenças que marca as linhas adicionadas e removidas
+  - Blocos de código com mais de 20 linhas começam recolhidos
+  - Soltar um arquivo anexa o caminho à caixa de entrada; diretórios do sistema e de chaves são recusados, e os que exigem autorização são sinalizados
+  - A janela pode ficar na bandeja do sistema e continuar em segundo plano, com notificação do sistema quando uma tarefa termina (só enquanto a janela não está em frente)
+  - Ctrl+F abre a busca de sessões dentro do app
+  - O estado vazio mostra cartões de exemplo que preenchem um prompt inicial na caixa de entrada
+  - Fechar a janela agora a minimiza para a bandeja; use «Sair do Aura» na página sobre para sair de vez
 > - v0.6.3:
 >   - Renovação visual: novas cores semânticas de sucesso, aviso e marca, e todos os contrastes do modo escuro passam a atingir o padrão de acessibilidade 4.5:1.
 >   - Suas mensagens usam um fundo azul da marca, para se destacar das respostas da IA; a sessão atual da barra lateral também recebe a marca.
