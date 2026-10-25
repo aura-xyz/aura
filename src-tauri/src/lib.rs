@@ -270,9 +270,33 @@ pub fn run() {
             // 常驻后台是桌面软件的关键能力（长任务跑完还能收到系统通知）。
             // 但「关了就找不回来」也是真实的困惑，所以托盘必须有，
             // 且托盘左键单击能唤回窗口。
+            // v0.7.1：首次关闭时发托盘提示通知，避免用户困惑。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(w) = window.get_webview_window("main") {
                     let _ = w.hide();
+                    // v0.7.1：首次关闭发托盘提示
+                    let app_handle = window.app_handle().clone();
+                    tokio::spawn(async move {
+                        let shown = {
+                            let state = app_handle.state::<AppState>();
+                            let db = state.db.lock().ok();
+                            db.and_then(|conn| db::get_setting(&conn, "tray_hint_shown").ok())
+                                .flatten()
+                        };
+                        if shown.is_none() {
+                            // 发送托盘提示通知
+                            use tauri_plugin_notification::NotificationExt;
+                            let _ = app_handle
+                                .notification()
+                                .builder()
+                                .title("Aura")
+                                .body("Aura 已最小化到托盘，点击图标可唤回窗口")
+                                .show();
+                            // 标记已显示
+                            let state = app_handle.state::<AppState>();
+                            let _ = state.db.lock().ok().and_then(|conn| db::set_setting(&conn, "tray_hint_shown", "true").ok());
+                        }
+                    });
                     api.prevent_close();
                 }
             }
