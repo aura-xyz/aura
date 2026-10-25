@@ -11,7 +11,9 @@ export default function TitleBar() {
   useEffect(() => {
     getVersion()
       .then((v) => setVersion(v))
-      .catch(() => setVersion("0.6.2"));
+      // 兜底字面量：只在拿不到版本时短暂显示。升版本号时记得同步这里，
+      // 否则发布当天标题栏会显示上一个版本
+      .catch(() => setVersion("0.6.3"));
   }, []);
 
   return (
