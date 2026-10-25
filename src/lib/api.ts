@@ -531,3 +531,42 @@ export function notify(title: string, body: string): Promise<void> {
 export function quitApp(): Promise<void> {
   return invoke("quit_app");
 }
+
+// ── 自动更新（v0.7.0：多源下载）────────────────────────────────────
+
+/** 一个候选下载源。后端会实测各源速度后挑一个。 */
+export interface DownloadSource {
+  /** 展示名，如「GitHub 直连」「ghfast」 */
+  label: string;
+  /** 完整 URL */
+  url: string;
+}
+
+/** 检查更新的结果。`null` 表示已是最新版本。 */
+export interface UpdateInfoView {
+  version: string;
+  notes?: string;
+  date?: string;
+  /** 候选下载源 */
+  sources: DownloadSource[];
+}
+
+/**
+ * 检查是否有新版本。
+ *
+ * 后端负责取清单（插件配了三个端点、会自动回退）并把下载句柄存起来，
+ * 安装阶段直接复用——不再让前端持有一个会过期的句柄。
+ */
+export function checkUpdate(): Promise<UpdateInfoView | null> {
+  return invoke("check_update");
+}
+
+/**
+ * 下载并安装更新。
+ *
+ * 后端会并发探测各下载源、挑最快的那个，再交给 updater 插件做签名校验与安装。
+ * 进度通过 `update:progress` 事件推送。
+ */
+export function downloadUpdate(): Promise<void> {
+  return invoke("download_update");
+}

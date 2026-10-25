@@ -74,10 +74,9 @@ describe("AboutSection 更新", () => {
       kind: "available",
       info: {
         version: "0.7.0",
-        currentVersion: "0.6.1",
         notes: "## 更新内容\n- 修复若干问题",
+        sources: [{ label: "GitHub 直连", url: "https://github.com/x" }],
       },
-      update: { version: "0.7.0" },
     });
     render(<AboutSection />);
     await clickCheck();
@@ -87,24 +86,23 @@ describe("AboutSection 更新", () => {
     expect(screen.getByRole("button", { name: /下载并安装/ })).toBeInTheDocument();
   });
 
-  /// 回归：安装必须复用检查阶段拿到的 Update 句柄。
+  /// 回归：安装阶段**不重新检查**。
   /// 曾经在 downloadAndInstall 内部再 check() 一次，第二次请求失败就会
   /// 报「安装失败：error sending request for ... latest.json」。
-  it("点下载并安装时复用检查阶段的句柄，不重新检查", async () => {
-    const handle = { version: "0.7.0" };
+  /// v0.7.0 起句柄由后端保存，前端连句柄都不持有，更没有二次检查的机会。
+  it("点下载并安装时不重新检查", async () => {
     checkForUpdateMock.mockResolvedValue({
       kind: "available",
-      info: { version: "0.7.0", currentVersion: "0.6.1" },
-      update: handle,
+      info: {
+        version: "0.7.0",
+        sources: [{ label: "GitHub 直连", url: "https://github.com/x" }],
+      },
     });
     render(<AboutSection />);
     await clickCheck();
 
     await userEvent.click(await screen.findByRole("button", { name: /下载并安装/ }));
     expect(downloadMock).toHaveBeenCalledTimes(1);
-    // vi.fn 无参签名推不出实参类型，这里显式取第一个参数
-    const [passed] = downloadMock.mock.calls[0] as unknown as [unknown];
-    expect(passed).toBe(handle);
     // 检查只发生一次：安装阶段不再打清单端点
     expect(checkForUpdateMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/正在重启/)).toBeInTheDocument();

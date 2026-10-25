@@ -47,6 +47,9 @@ pub struct AppState {
     /// 当前正在执行的会话 id。Aura 同时只允许一个流。
     running: AsyncMutex<Option<String>>,
     pub db: Mutex<Connection>,
+    /// 自动更新的句柄。检查阶段拿到，安装阶段复用——
+    /// 重新查一次清单就多一次网络往返，也多一个让「安装」平白失败的理由。
+    pub updater: Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 /// Windows 上 `canonicalize()` 会返回 `\\?\` 扩展前缀路径，若与
@@ -115,6 +118,7 @@ impl AppState {
             cancelled: AtomicBool::new(false),
             running: AsyncMutex::new(None),
             db: Mutex::new(db),
+            updater: Mutex::new(None),
         }
     }
 }
@@ -1461,6 +1465,7 @@ mod tests {
             cancelled: AtomicBool::new(false),
             running: AsyncMutex::new(Some("sess-A".to_string())),
             db: Mutex::new(db::open(Path::new(":memory:")).unwrap()),
+            updater: Mutex::new(None),
         };
 
         // 别的会话发起停止：忽略

@@ -10,6 +10,7 @@ pub mod providers;
 pub mod secure;
 pub mod timeline;
 pub mod tools;
+pub mod updater;
 
 use commands::{
     add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
@@ -23,6 +24,7 @@ use commands::{
     notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
     AppState,
 };
+use updater::{check_update, download_update};
 use tauri::Manager;
 
 #[cfg(windows)]
@@ -273,6 +275,8 @@ pub fn run() {
             truncate_history,
             notify,
             quit_app,
+            check_update,
+            download_update,
             load_sessions,
             save_session,
             save_todos,
@@ -328,28 +332,36 @@ mod command_registry_tests {
     fn every_tauri_command_is_registered() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
-        // 1) 扫出 commands.rs 里所有 #[tauri::command] 标注的函数名
-        let commands_src =
-            std::fs::read_to_string(format!("{manifest_dir}/src/commands.rs")).expect("读 commands.rs");
+        // 1) 扫出**所有**源文件里 #[tauri::command] 标注的函数名。
+        //    只扫 commands.rs 是不够的：命令函数可以放在任何模块里
+        //    （v0.7.0 的 check_update / download_update 就在 updater.rs），
+        //    漏扫等于漏保护。
+        let src_root = std::path::Path::new(manifest_dir).join("src");
+        let mut sources: Vec<(String, String)> = Vec::new();
+        collect_rs_files(&src_root, &mut sources);
+        assert!(!sources.is_empty(), "应至少扫到一个源文件");
+
         let mut declared: Vec<String> = Vec::new();
-        let lines: Vec<&str> = commands_src.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim() != "#[tauri::command]" {
-                continue;
-            }
-            // 属性之后（跳过其它属性与文档注释）的第一个 `pub fn` 就是命令函数
-            for l in &lines[i + 1..] {
-                let t = l.trim_start();
-                if let Some(rest) = t.strip_prefix("pub fn ") {
-                    if let Some(name) = rest.split('(').next() {
-                        declared.push(name.trim().to_string());
+        for (_path, src) in &sources {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim() != "#[tauri::command]" {
+                    continue;
+                }
+                // 属性之后（跳过其它属性与文档注释）的第一个 `pub fn` 就是命令函数
+                for l in &lines[i + 1..] {
+                    let t = l.trim_start();
+                    if let Some(rest) = t.strip_prefix("pub fn ") {
+                        if let Some(name) = rest.split('(').next() {
+                            declared.push(name.trim().to_string());
+                        }
+                        break;
+                    }
+                    if t.starts_with("#[") || t.starts_with("///") || t.is_empty() {
+                        continue;
                     }
                     break;
                 }
-                if t.starts_with("#[") || t.starts_with("///") || t.is_empty() {
-                    continue;
-                }
-                break;
             }
         }
         assert!(!declared.is_empty(), "应至少扫到一个命令");
@@ -377,6 +389,24 @@ mod command_registry_tests {
             "这些 #[tauri::command] 函数没注册进 invoke_handler，前端调用会报 \
              `Command <name> not found`：{missing:?}"
         );
+    }
+
+    /// 递归收集 src 下的所有 `.rs` 文件。
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    out.push((path.to_string_lossy().to_string(), src));
+                }
+            }
+        }
     }
 }
 
