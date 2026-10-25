@@ -46,16 +46,32 @@ describe("RightPanel", () => {
     expect(screen.getByText("调研")).toBeInTheDocument();
   });
 
-  /// 对话模式是纯问答，不涉及流程，不应占用横向空间
-  it("对话模式下不显示", async () => {
+  /// 对话模式是纯问答，不涉及流程，**清单内容**不展示
+  it("对话模式下不展示清单内容", async () => {
     await mount({ todos: [{ id: "s1", title: "不应出现" }], mode: "chat" });
     expect(screen.queryByText("不应出现")).toBeNull();
   });
 
-  it("无清单时整体不渲染，不留空面板", async () => {
+  /// v0.6.3 用户实测反馈「右侧边栏没有显示」。
+  /// 对话模式（最常见场景）下右侧整块消失＝用户以为应用没有右栏。
+  /// 现在右侧**始终**留一条窄轨道。
+  it("无清单时仍渲染窄轨道，不再整块消失", async () => {
     await mount({ todos: [], mode: "build" });
-    expect(screen.queryByText(/任务面板/)).toBeNull();
-    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.getByRole("complementary", { name: "任务面板" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开任务面板" })).toBeInTheDocument();
+    expect(screen.getByText(/任务 0/)).toBeInTheDocument();
+  });
+
+  it("对话模式下同样保留窄轨道", async () => {
+    await mount({ todos: [], mode: "chat" });
+    expect(screen.getByRole("complementary", { name: "任务面板" })).toBeInTheDocument();
+  });
+
+  it("窄轨道可展开，无清单时给出空状态说明", async () => {
+    await mount({ todos: [], mode: "build" });
+    await userEvent.click(screen.getByRole("button", { name: "展开任务面板" }));
+    expect(screen.getByText("当前会话没有任务清单")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起任务面板" })).toBeInTheDocument();
   });
 
   it("可收起为窄条，收起后仍能看到步骤数", async () => {
