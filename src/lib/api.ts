@@ -460,6 +460,30 @@ export function truncateHistory(
   return invoke("truncate_history", { sessionId, keepThroughUser });
 }
 
+// ── 侧作用检查（v0.7.1）─────────────────────────────────────────────
+/** 侧作用检查结果。 */
+export interface SideEffectsResult {
+  /** 写类工具调用次数（write_file/string_replace/replace_lines） */
+  writes: number;
+  /** 执行类工具调用次数（run_script） */
+  execs: number;
+  /** 受影响的目标路径（去重）。run_script 用命令首行。 */
+  targets: string[];
+}
+
+/**
+ * 检查会话历史中即将被截断部分的侧作用（写/执行工具）。
+ *
+ * 用于「重新生成/编辑重跑」前预检：前端据此决定是否弹确认框。
+ * 只读 DB，不修改内存态。
+ */
+export function inspectSideEffects(
+  sessionId: string,
+  keepThroughUser: number,
+): Promise<SideEffectsResult> {
+  return invoke("inspect_side_effects", { sessionId, keepThroughUser });
+}
+
 // ── 路径白名单（v0.6.2）─────────────────────────────────────────
 
 /** 一个白名单条目。 */

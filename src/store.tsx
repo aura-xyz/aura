@@ -13,6 +13,7 @@ import {
   getModels,
   getSelectedModel,
   getWorkspace,
+  inspectSideEffects,
   loadSessions,
   notify as notifyApi,
   removeSession,
@@ -125,6 +126,14 @@ interface State {
   selectedModel: string;
   /** 当前会话模式，每次发送时随消息带上 */
   mode: Mode;
+  /** 侧作用确认弹窗状态（v0.7.1） */
+  sideEffectPrompt: {
+    userIndex: number;
+    text: string;
+    archive: boolean;
+    targets: string[];
+    execs: number;
+  } | null;
 }
 
 interface StoreValue extends State {
@@ -137,11 +146,15 @@ interface StoreValue extends State {
   /**
    * 回滚到第 userIndex 条用户消息并重新发送 `text`。
    * 「重新生成」与「编辑消息并重跑」共用。
+   *
+   * options:
+   * - archive: 重新生成时归档旧版本，编辑重跑不归档
+   * - force: 跳过副作用确认（用户点「仍然重做」）
    */
   resendFrom: (
     userIndex: number,
     text: string,
-    options?: { archive?: boolean },
+    options?: { archive?: boolean; force?: boolean },
   ) => Promise<void>;
   /**
    * 切换某条 assistant 消息显示的版本（v0.7.0）。
@@ -182,6 +195,22 @@ interface StoreValue extends State {
   addTodoStep: (title: string) => void;
   setTodoStatus: (id: string, status: TodoStatus) => void;
   refreshModels: () => Promise<void>;
+  /** 侧作用确认弹窗状态（v0.7.1） */
+  sideEffectPrompt: {
+    userIndex: number;
+    text: string;
+    archive: boolean;
+    targets: string[];
+    execs: number;
+  } | null;
+  /** 设置侧作用确认弹窗状态 */
+  setSideEffectPrompt: (prompt: {
+    userIndex: number;
+    text: string;
+    archive: boolean;
+    targets: string[];
+    execs: number;
+  } | null) => void;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -314,6 +343,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     models: [],
     selectedModel: "",
     mode: "chat",
+    sideEffectPrompt: null,
   });
 
   const stateRef = useRef(state);
@@ -342,6 +372,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // 等新消息创建时挂上去。用 ref 是因为 sendMessage 与 resendFrom 之间
   // 隔着一次异步调用，闭包传参容易漏。
   const pendingVersionsRef = useRef<AssistantVersion[] | undefined>(undefined);
+
+  // 侧作用确认弹窗状态（v0.7.1）：重做/编辑重跑前检查到写/执行工具时弹出
+  // 状态通过 store 的 setState 管理，这里只提供 setter
+  const setSideEffectPrompt = useCallback(
+    (prompt: {
+      userIndex: number;
+      text: string;
+      archive: boolean;
+      targets: string[];
+      execs: number;
+    } | null) => {
+      setState((s) => ({ ...s, sideEffectPrompt: prompt }));
+    },
+    [],
+  );
 
   const startRename = useCallback((id: string) => setRenamingId(id), []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
@@ -847,12 +892,15 @@ let sessions = restored;
    * 3. **最后重发**——把第 userIndex 条用户消息补回历史。
    *
    * 顺序反了会出问题：先重发再截断会把刚发的消息也截掉。
+   *
+   * v0.7.1：新增副作用预检。若即将被截断的历史包含写/执行工具，
+   * 弹 ConfirmDialog 让用户二次确认；用户点「仍然重做」则 force=true 绕过检查。
    */
   const resendFrom = useCallback(
     async (
       userIndex: number,
       text: string,
-      options?: { archive?: boolean },
+      options?: { archive?: boolean; force?: boolean },
     ) => {
       if (stateRef.current.busy) return;
       const sessionId = stateRef.current.activeId;
@@ -861,6 +909,30 @@ let sessions = restored;
       if (!session) return;
       const trimmed = text.trim();
       if (!trimmed) return;
+
+      // v0.7.1：副作用预检（除非 force=true 跳过）
+      if (!options?.force) {
+        try {
+          const effects = await inspectSideEffects(sessionId, keepThroughForResend(userIndex));
+          if (effects.writes > 0 || effects.execs > 0) {
+            // 有写/执行工具：弹确认框，用户确认后再走 force=true 分支
+            setSideEffectPrompt({
+              userIndex,
+              text: trimmed,
+              archive: options?.archive ?? false,
+              targets: effects.targets,
+              execs: effects.execs,
+            });
+            return;
+          }
+        } catch (e) {
+          // 预检失败不阻塞主流程，直接继续
+          console.warn("[resendFrom] inspectSideEffects failed:", e);
+        }
+      }
+
+      // 清除可能残留的预检状态
+      setSideEffectPrompt(null);
 
       // 1. 后端历史截断。失败就不继续——否则界面删了、后端没删，
       //    两边对不上，模型仍会看到旧上下文。
@@ -1120,6 +1192,8 @@ setState((s) => {
       addTodoStep,
       setTodoStatus,
       refreshModels,
+      sideEffectPrompt: state.sideEffectPrompt,
+      setSideEffectPrompt,
     }),
     [
       state,
@@ -1151,6 +1225,7 @@ setState((s) => {
       addTodoStep,
       setTodoStatus,
       refreshModels,
+      setSideEffectPrompt,
     ],
   );
 

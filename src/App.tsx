@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { TriangleAlert } from "lucide-react";
+import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
@@ -94,6 +95,9 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     startRename,
     deleteSession,
     removeWorkspace,
+    sideEffectPrompt,
+    setSideEffectPrompt,
+    resendFrom,
   } = useStore();
   const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp" | "timeline">(
     "chat",
@@ -458,6 +462,44 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
             </div>
           </div>
         </div>
+      )}
+
+      {sideEffectPrompt && (
+        <ConfirmDialog
+          title="确认重做？"
+          confirmText="仍然重做"
+          danger
+          busy={busy}
+          onCancel={() => setSideEffectPrompt(null)}
+          onConfirm={() => {
+            const { userIndex, text, archive } = sideEffectPrompt;
+            setSideEffectPrompt(null);
+            void resendFrom(userIndex, text, { archive, force: true });
+          }}
+        >
+          <div className="flex flex-col gap-3">
+            <p className="text-sm leading-relaxed text-subtle">
+              即将丢弃的内容包含写入或执行操作，重做可能会：
+            </p>
+            <ul className="ml-4 flex flex-col gap-1.5 text-sm">
+              {sideEffectPrompt.targets.map((t, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <span className="font-mono text-[12px]">{t}</span>
+                  <span className="text-subtle">（写入）</span>
+                </li>
+              ))}
+              {sideEffectPrompt.execs > 0 && (
+                <li className="flex items-center gap-2">
+                  <span className="font-mono text-[12px]">{sideEffectPrompt.execs} 条命令</span>
+                  <span className="text-subtle">（执行）</span>
+                </li>
+              )}
+            </ul>
+            <p className="text-xs text-subtle">
+              点击「仍然重做」将忽略副作用强制重发；点击「取消」保留当前状态。
+            </p>
+          </div>
+        </ConfirmDialog>
       )}
     </div>
   );
