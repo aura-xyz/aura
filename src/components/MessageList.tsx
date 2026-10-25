@@ -6,6 +6,7 @@ import { originalQuestion, userIndexForAssistant } from "../lib/history";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
+import VersionSwitcher from "./VersionSwitcher";
 
 // 以下两个组件必须 memo：store 的打字机每 30ms 触发一次 setState，
 // 消息流里的每一条都会跟着重新 render。而 store 的 appendBlocks
@@ -78,6 +79,8 @@ const AssistantMessage = memo(function AssistantMessage({
   userIndex,
   question,
   onRegenerate,
+  messageId,
+  versions,
 }: {
   blocks: Block[];
   pending: boolean;
@@ -93,11 +96,25 @@ const AssistantMessage = memo(function AssistantMessage({
    * memo 就白做了（MessageList.test.tsx 专门钉这条）。
    */
   onRegenerate: (userIndex: number, question: string) => void;
+  /** 消息 id，供版本切换定位 */
+  messageId?: string;
+  /** 完整消息对象（含版本信息），供版本切换器渲染 */
+  versions?: ChatMessage;
 }) {
+  const { switchMessageVersion } = useStore();
+
   const handleRegenerate = useCallback(() => {
     if (userIndex === undefined || question === undefined) return;
     onRegenerate(userIndex, question);
   }, [onRegenerate, userIndex, question]);
+
+  const handleSwitch = useCallback(
+    (index: number) => {
+      if (!messageId) return;
+      switchMessageVersion(messageId, index);
+    },
+    [messageId, switchMessageVersion],
+  );
 
   if (blocks.length === 0) {
     // 仅等待首字期间显示呼吸光标；历史空消息不渲染
@@ -112,7 +129,10 @@ const AssistantMessage = memo(function AssistantMessage({
     <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(blocks)}>
       {blocks.map(renderBlock)}
       {/* 悬停才出现的操作条。放最后一行之下，不占用正文流 */}
-      <MessageActions blocks={blocks} onRegenerate={handleRegenerate} />
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {versions && <VersionSwitcher message={versions} onSwitch={handleSwitch} />}
+        <MessageActions blocks={blocks} onRegenerate={handleRegenerate} />
+      </div>
     </div>
   );
 });
@@ -147,7 +167,8 @@ export default function MessageList() {
    */
   const regenerate = useCallback(
     (userIndex: number, question: string) => {
-      void resendFrom(userIndex, question);
+      // archive: 旧回答归档为历史版本，用户可以切回去看
+      void resendFrom(userIndex, question, { archive: true });
     },
     [resendFrom],
   );
@@ -186,6 +207,8 @@ export default function MessageList() {
               userIndex={srcUserIndex ?? undefined}
               question={question}
               onRegenerate={regenerate}
+              messageId={m.id}
+              versions={m}
             />
           </div>
         );

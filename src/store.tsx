@@ -32,6 +32,11 @@ import {
   sliceForResend,
 } from "./lib/history";
 import {
+  archiveCurrent,
+  removedAssistant,
+  switchVersion,
+} from "./lib/versions";
+import {
   applyAutoClear,
   isTodoStatus,
   normalizeTodos,
@@ -63,9 +68,41 @@ export interface Block {
   };
 }
 
+/**
+ * 一条 assistant 回答的一个版本（v0.7.0）。
+ *
+ * 重新生成会产生新版本，旧版本保留在这里供切换回看。
+ */
+export interface AssistantVersion {
+  id: string;
+  blocks: Block[];
+  /** 生成时间（毫秒时间戳） */
+  createdAt: number;
+}
+
 export type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; blocks: Block[] };
+  | {
+      id: string;
+      role: "assistant";
+      /** 当前显示的版本内容 */
+      blocks: Block[];
+      /**
+       * 历史版本（v0.7.0）。
+       *
+       * **切换版本只改显示，不回滚后端上下文**——上下文始终基于最新版本。
+       * 界面必须明确标注这一点，否则用户会以为后续对话是基于他正在看的
+       * 那个版本进行的。
+       */
+      versions?: AssistantVersion[];
+      /** 当前显示的是第几个版本（1-based）。缺省表示显示最新 */
+      viewingVersion?: number;
+      /**
+       * 最新版本的内容。切到历史版本时把最新那份挪到这里，
+       * 切回来时才能恢复——否则「切走再切回」会把最新版本弄丢。
+       */
+      latestBlocks?: Block[];
+    };
 
 export interface Session {
   id: string;
@@ -99,7 +136,16 @@ interface StoreValue extends State {
    * 回滚到第 userIndex 条用户消息并重新发送 `text`。
    * 「重新生成」与「编辑消息并重跑」共用。
    */
-  resendFrom: (userIndex: number, text: string) => Promise<void>;
+  resendFrom: (
+    userIndex: number,
+    text: string,
+    options?: { archive?: boolean },
+  ) => Promise<void>;
+  /**
+   * 切换某条 assistant 消息显示的版本（v0.7.0）。
+   * 只改显示，不回滚后端上下文。
+   */
+  switchMessageVersion: (messageId: string, index: number) => void;
   /**
    * 当前是否处于「编辑某条历史消息」状态。
    * 编辑时把原文放回输入框，用户改完直接发送——不走弹窗。
@@ -289,6 +335,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     null,
   );
   const insertSeq = useRef(0);
+
+  // 待归档的历史版本（v0.7.0）：「重新生成」时先记下旧回答的 blocks，
+  // 等新消息创建时挂上去。用 ref 是因为 sendMessage 与 resendFrom 之间
+  // 隔着一次异步调用，闭包传参容易漏。
+  const pendingVersionsRef = useRef<AssistantVersion[] | undefined>(undefined);
 
   const startRename = useCallback((id: string) => setRenamingId(id), []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
@@ -704,7 +755,12 @@ let sessions = restored;
         id: crypto.randomUUID(),
         role: "assistant",
         blocks: [],
+        // 重新生成时挂上归档的旧版本（v0.7.0）
+        ...(pendingVersionsRef.current
+          ? { versions: pendingVersionsRef.current }
+          : {}),
       };
+      pendingVersionsRef.current = undefined;
       const current = stateRef.current.sessions.find((x) => x.id === sessionId);
       if (!current) {
         setState((s) => ({ ...s, busy: false }));
@@ -791,7 +847,11 @@ let sessions = restored;
    * 顺序反了会出问题：先重发再截断会把刚发的消息也截掉。
    */
   const resendFrom = useCallback(
-    async (userIndex: number, text: string) => {
+    async (
+      userIndex: number,
+      text: string,
+      options?: { archive?: boolean },
+    ) => {
       if (stateRef.current.busy) return;
       const sessionId = stateRef.current.activeId;
       if (!sessionId) return;
@@ -815,6 +875,19 @@ let sessions = restored;
 
       // 2. 界面消息截断
       const kept = sliceForResend(session.messages, userIndex);
+
+      // 3. 重新生成时把被删掉的那条回答归档，供版本切换回看。
+      //    「编辑」不归档——那不是同一轮回答的另一个版本。
+      let versions: AssistantVersion[] | undefined;
+      if (options?.archive) {
+        const removed = removedAssistant(session.messages, kept);
+        if (removed && removed.role === "assistant") {
+          const archived = archiveCurrent(removed);
+          if (archived.role === "assistant") versions = archived.versions;
+        }
+      }
+      pendingVersionsRef.current = versions;
+
       setState((s) => ({
         ...s,
         sessions: s.sessions.map((sess) =>
@@ -823,11 +896,41 @@ let sessions = restored;
       }));
       persistNow(sessionId, session.title, session.workspace, kept);
 
-      // 3. 重新发送
+      // 4. 重新发送
       setEditingUserIndex(null);
       await sendMessage(trimmed);
     },
     [appendBlocks, persistNow, sendMessage],
+  );
+
+  /**
+   * 切换某条 assistant 消息显示的版本。
+   *
+   * 只改显示，不动后端上下文——见 lib/versions.ts 的说明。
+   */
+  const switchMessageVersion = useCallback(
+    (messageId: string, index: number) => {
+      const sessionId = stateRef.current.activeId;
+      if (!sessionId) return;
+      const session = stateRef.current.sessions.find((x) => x.id === sessionId);
+      if (!session) return;
+      let changed = false;
+      const messages = session.messages.map((m) => {
+        if (m.id !== messageId) return m;
+        const next = switchVersion(m, index);
+        if (next !== m) changed = true;
+        return next;
+      });
+      if (!changed) return;
+      setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((sess) =>
+          sess.id !== sessionId ? sess : { ...sess, messages },
+        ),
+      }));
+      persistNow(sessionId, session.title, session.workspace, messages);
+    },
+    [persistNow],
   );
 
   /**
@@ -993,6 +1096,7 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      switchMessageVersion,
       editingUserIndex,
       editPrefill,
       inputInsert,
@@ -1023,6 +1127,7 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      switchMessageVersion,
       editingUserIndex,
       editPrefill,
       inputInsert,

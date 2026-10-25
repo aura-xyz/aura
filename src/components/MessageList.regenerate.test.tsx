@@ -50,13 +50,14 @@ describe("MessageList 重新生成", () => {
     expect(btns).toHaveLength(2);
 
     await userEvent.click(btns[1]); // 第 2 条回答 ← u2
-    expect(resendMock).toHaveBeenCalledWith(2, "第二个问题");
+    // 第三参数是 { archive: true }：重新生成要把旧回答归档为历史版本
+    expect(resendMock).toHaveBeenCalledWith(2, "第二个问题", { archive: true });
   });
 
   it("第 1 条回答对应第 1 条用户消息", async () => {
     render(<MessageList />);
     await userEvent.click(screen.getAllByRole("button", { name: "重新生成本条回复" })[0]);
-    expect(resendMock).toHaveBeenCalledWith(1, "第一个问题");
+    expect(resendMock).toHaveBeenCalledWith(1, "第一个问题", { archive: true });
   });
 
   it("重新生成走的是「回滚 + 重发」，内容是原问题", async () => {
