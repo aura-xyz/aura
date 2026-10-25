@@ -3,6 +3,7 @@ pub mod api;
 pub mod audit;
 pub mod commands;
 pub mod db;
+pub mod history;
 pub mod market;
 pub mod paths;
 pub mod providers;
@@ -19,7 +20,7 @@ use commands::{
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    set_skill_enabled, set_workspace, stop_message, AppState,
+    set_skill_enabled, set_workspace, stop_message, truncate_history, AppState,
 };
 use tauri::Manager;
 
@@ -201,6 +202,7 @@ pub fn run() {
             send_message,
             stop_message,
             remove_session,
+            truncate_history,
             load_sessions,
             save_session,
             save_todos,

@@ -616,6 +616,46 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// v0.7.0：截断后重新 load 出来的历史必须与截断后的一致。
+    ///
+    /// 这是「内存与 DB 双写」契约的 DB 侧验证——只改内存的话，
+    /// 重启应用后 `load_history` 会把旧的完整历史读回来，用户刚删掉的
+    /// 内容又出现了。
+    #[test]
+    fn truncated_history_persists_and_reloads_consistently() {
+        let dir = std::env::temp_dir().join(format!(
+            "aura-db-test-{}-{}",
+            std::process::id(),
+            "truncate"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+
+        save_session(&conn, "s1", "标题", "E:/dev/aura", &[]).unwrap();
+        let history = vec![
+            serde_json::json!({ "role": "user", "content": "第一个问题" }),
+            serde_json::json!({ "role": "assistant", "content": "第一个回答" }),
+            serde_json::json!({ "role": "user", "content": "第二个问题" }),
+            serde_json::json!({ "role": "assistant", "content": "第二个回答" }),
+        ];
+        save_history(&conn, "s1", &history, 0).unwrap();
+
+        // 截断到第 1 条用户消息：只留 u1
+        let (kept, _) = crate::history::apply_truncation(&history, 1);
+        save_history(&conn, "s1", &kept, 0).unwrap();
+
+        let (reloaded, _) = load_history(&conn, "s1").unwrap().unwrap();
+        assert_eq!(reloaded, kept);
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0]["content"], "第一个问题");
+        // 已删掉的内容不能复活
+        assert!(!reloaded
+            .iter()
+            .any(|e| e["content"] == "第二个问题" || e["content"] == "第二个回答"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn purge_removes_empty_and_dirty_sessions_only() {
         let dir = std::env::temp_dir().join(format!(

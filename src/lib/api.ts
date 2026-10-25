@@ -407,6 +407,34 @@ export function exportTimeline(
   return invoke("export_timeline", { sessionId, title: title ?? null });
 }
 
+// ── 历史截断（v0.7.0）─────────────────────────────────────────────
+
+/** 截断结果。 */
+export interface TruncateHistoryResult {
+  /** 截断后保留的 history entry 数 */
+  keep_entries: number;
+  /** 截断后仍然存在的真实用户消息条数 */
+  keep_user_messages: number;
+  /** 是否因请求条数超过实际数量而被截到末尾 */
+  clamped: boolean;
+}
+
+/**
+ * 把会话的 agent 历史回滚到「保留到第 N 条真实用户消息为止」。
+ *
+ * 语义（与后端一致）：
+ * - `keepThroughUser = k` → 保留第 1..=k 条用户消息，**删掉第 k 条触发的回答**
+ *   及其后的一切。用于「重新生成第 k 条回答」。
+ * - `keepThroughUser = k - 1` → 连第 k 条用户消息本身也删掉。
+ *   用于「编辑第 k 条用户消息并重跑」。
+ */
+export function truncateHistory(
+  sessionId: string,
+  keepThroughUser: number,
+): Promise<TruncateHistoryResult> {
+  return invoke("truncate_history", { sessionId, keepThroughUser });
+}
+
 // ── 路径白名单（v0.6.2）─────────────────────────────────────────
 
 /** 一个白名单条目。 */

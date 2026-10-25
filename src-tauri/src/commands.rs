@@ -287,6 +287,64 @@ pub async fn remove_session(state: State<'_, AppState>, session_id: String) -> R
     db::delete_session(&db, &session_id).map_err(|e| e.to_string())
 }
 
+/// 截断结果（回给前端）。
+#[derive(serde::Serialize)]
+pub struct TruncateResult {
+    /// 截断后保留的 history entry 数。
+    pub keep_entries: usize,
+    /// 截断后仍然存在的真实用户消息条数。
+    pub keep_user_messages: usize,
+    /// 是否因为请求条数超过实际数量而被截到末尾。
+    pub clamped: bool,
+}
+
+/// 把会话的 agent 历史回滚到「保留到第 N 条真实用户消息为止」。
+///
+/// **内存与 DB 必须同时改**。只改一处会出问题：
+/// - 只改内存 → 重启应用后 `load_history` 又把旧的完整历史读回来；
+/// - 只改 DB → 当前进程里的 `session.history` 仍是旧的，模型会看到
+///   用户刚刚删掉的「未来内容」，生成结果必然错乱。
+///
+/// v0.7.0 的「重新生成」与「编辑消息并重跑」都依赖本命令。
+#[tauri::command]
+pub async fn truncate_history(
+    state: State<'_, AppState>,
+    session_id: String,
+    keep_through_user: usize,
+) -> Result<TruncateResult, String> {
+    // 与 send_message 用同一把锁：它在整个 run_turn 期间持锁，
+    // 所以本命令会等到当前这轮跑完再执行，不会与运行中的流打架。
+    let mut sessions = state.sessions.lock().await;
+
+    // 会话不在内存里（可能从未发过消息，或已被移除）：无事可做。
+    // 不能因此报错——前端可能对空会话点了重新生成。
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return Ok(TruncateResult {
+            keep_entries: 0,
+            keep_user_messages: 0,
+            clamped: keep_through_user > 0,
+        });
+    };
+
+    let (kept, plan) = crate::history::apply_truncation(&session.history, keep_through_user);
+    session.history = kept;
+
+    // DB 侧：save_history 是「只 UPDATE、覆盖写」，正好用来落盘截断结果。
+    // 会话行由前端 save_session 创建；若行不存在，UPDATE 影响 0 行，
+    // 不算错误（内存已同步）。
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::save_history(&db, &session_id, &session.history, session.model_idx)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(TruncateResult {
+        keep_entries: plan.keep_entries,
+        keep_user_messages: plan.keep_user_messages,
+        clamped: plan.keep_user_messages < keep_through_user,
+    })
+}
+
 #[derive(serde::Serialize)]
 pub struct SessionSnapshot {
     pub id: String,
