@@ -8,6 +8,7 @@ import {
   Check,
   ExternalLink,
   Globe,
+  Power,
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
   restartApp,
   type UpdateCheckResult,
 } from "../lib/updater";
+import { quitApp } from "../lib/api";
 
 const REPO_URL = "https://github.com/aura-xyz/aura";
 const SITE_URL = "https://aura-xyz.github.io/";
@@ -291,6 +293,28 @@ export default function AboutSection() {
           >
             <RefreshCw size={14} className={state.kind === "checking" ? "animate-spin" : ""} />
             {state.kind === "checking" ? "检查中…" : "检查更新"}
+          </button>
+        </div>
+      </section>
+
+      {/* v0.7.0：退出入口。
+          关闭窗口现在是「隐藏到托盘」（常驻后台），所以必须有一条
+          明确的退出路径——否则用户会以为应用关不掉。 */}
+      <section>
+        <h3 className="mb-3 text-sm font-medium">应用</h3>
+        <div className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
+          <p className="text-xs leading-relaxed text-subtle">
+            关闭窗口只是最小化到系统托盘，Aura 会在后台继续运行
+            （长任务跑完仍能收到系统通知）。要完全退出请用下面的按钮，
+            或在托盘图标上右键选择「退出 Aura」。
+          </p>
+          <button
+            type="button"
+            onClick={() => void quitApp()}
+            className="flex items-center justify-center gap-1.5 rounded-md border border-line py-2 text-sm transition-colors hover:border-danger hover:text-danger"
+          >
+            <Power size={14} />
+            退出 Aura
           </button>
         </div>
       </section>

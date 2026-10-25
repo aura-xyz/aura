@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { TriangleAlert } from "lucide-react";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
@@ -20,6 +27,7 @@ import {
 import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
+import SessionSearch from "./components/SessionSearch";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -72,6 +80,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     insertIntoInput,
     stop,
     activeSession,
+    sessions,
     models,
     selectedModel,
     setModel,
@@ -79,6 +88,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     setMode: changeMode,
     workspace,
     newSession,
+    openSession,
     setSessionWorkspace,
     startRename,
     deleteSession,
@@ -90,6 +100,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -158,14 +169,41 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
   // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
   // 本次只拦截不映射行为，留待后续按需定义应用内语义。
+  //
+  // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+        return;
+      }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
       e.preventDefault();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // 搜索数据：把会话里的消息转成纯文本
+  const searchable = useMemo(
+    () =>
+      sessions.map((sess) => ({
+        id: sess.id,
+        title: sess.title,
+        messages: sess.messages.map((m) => ({
+          role: m.role,
+          text:
+            m.role === "user"
+              ? m.content
+              : m.blocks
+                  .filter((b) => b.kind === "text")
+                  .map((b) => (b.kind === "text" ? b.text : ""))
+                  .join("\n"),
+        })),
+      })),
+    [sessions],
+  );
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
@@ -347,6 +385,17 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
+
+      {searchOpen && (
+        <SessionSearch
+          sessions={searchable}
+          onClose={() => setSearchOpen(false)}
+          onOpenSession={(sessionId) => {
+            void openSession(sessionId);
+            setSearchOpen(false);
+          }}
+        />
+      )}
 
       {confirmWs && (
         <div

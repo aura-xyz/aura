@@ -287,6 +287,15 @@ pub async fn remove_session(state: State<'_, AppState>, session_id: String) -> R
     db::delete_session(&db, &session_id).map_err(|e| e.to_string())
 }
 
+/// 退出应用（v0.7.0）。
+///
+/// 关闭窗口现在只是**隐藏到托盘**（桌面软件的常驻行为），
+/// 所以必须有一条明确的退出路径，否则用户会以为「关不掉」。
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// 发一条系统通知（v0.7.0）。
 ///
 /// 前端只在「窗口不在前台」时调用——用户正盯着屏幕时弹通知是打扰。

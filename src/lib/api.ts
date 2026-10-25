@@ -522,3 +522,12 @@ export function installMarketSkill(
 export function notify(title: string, body: string): Promise<void> {
   return invoke("notify", { title, body });
 }
+
+/**
+ * 退出应用（v0.7.0）。
+ *
+ * 关闭窗口是「隐藏到托盘」（常驻后台），所以必须有一条明确的退出路径。
+ */
+export function quitApp(): Promise<void> {
+  return invoke("quit_app");
+}

@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { Pencil } from "lucide-react";
 import { useStore, type Block, type ChatMessage } from "../store";
 import { plainTextOf } from "../lib/messageText";
@@ -6,6 +6,8 @@ import { originalQuestion, userIndexForAssistant } from "../lib/history";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
+import { buildExampleCards, type ExampleCard } from "../lib/exampleCards";
+import { listSkills } from "../lib/api";
 import VersionSwitcher from "./VersionSwitcher";
 
 // 以下两个组件必须 memo：store 的打字机每 30ms 触发一次 setState，
@@ -137,10 +139,18 @@ const AssistantMessage = memo(function AssistantMessage({
   );
 });
 
-function EmptyState() {
+function EmptyState({
+  cards,
+  onPick,
+}: {
+  /** 示例卡片（v0.7.0）。为空则只显示极简欢迎语 */
+  cards: ExampleCard[];
+  /** 点卡片：把引导语填进输入框 */
+  onPick: (prompt: string) => void;
+}) {
   return (
-    <div className="flex min-h-full items-center justify-center">
-      <div className="text-center">
+    <div className="flex min-h-full items-center justify-center px-6">
+      <div className="w-full max-w-2xl text-center">
         <img
           src="/logo.png"
           alt="Aura"
@@ -151,14 +161,54 @@ function EmptyState() {
         <p className="mt-2 text-sm text-subtle">
           Minimal surface. Maximum logic.
         </p>
+
+        {/* v0.7.0：示例卡片。极简宣言说的是「视觉噪音少」，
+            不是「没有内容」——空状态给几条能直接用的起点，
+            比一句标语有用。卡片同时是技能入口。 */}
+        {cards.length > 0 && (
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            {cards.map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                onClick={() => onPick(c.prompt)}
+                className="group flex max-w-[16rem] flex-col items-start gap-0.5 rounded-card border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-brand"
+              >
+                <span className="text-sm font-medium transition-colors group-hover:text-brand">
+                  {c.title}
+                </span>
+                <span className="line-clamp-2 text-xs text-subtle">
+                  {c.subtitle}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export default function MessageList() {
-  const { activeSession, busy, resendFrom } = useStore();
+  const { activeSession, busy, resendFrom, insertIntoInput } = useStore();
   const messages = activeSession?.messages ?? [];
+
+  // v0.7.0：空状态的示例卡片。内容从内置技能动态生成，
+  // 后续加新技能卡片自动跟着变。
+  const [cards, setCards] = useState<ExampleCard[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listSkills()
+      .then((skills) => {
+        if (!cancelled) setCards(buildExampleCards(skills));
+      })
+      .catch(() => {
+        // 拿不到技能就只显示欢迎语，不报错——空状态不该有失败态
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /**
    * 重新生成的动作入口。所有 assistant 消息**共用这一个**——
@@ -174,7 +224,12 @@ export default function MessageList() {
   );
 
   if (messages.length === 0) {
-    return <EmptyState />;
+    return (
+      <EmptyState
+        cards={cards}
+        onPick={(prompt) => insertIntoInput(prompt)}
+      />
+    );
   }
 
   const lastIndex = messages.length - 1;

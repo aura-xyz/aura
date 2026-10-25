@@ -20,7 +20,8 @@ use commands::{
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    notify, set_skill_enabled, set_workspace, stop_message, truncate_history, AppState,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
+    AppState,
 };
 use tauri::Manager;
 
@@ -197,8 +198,72 @@ pub fn run() {
             }
             let _ = &window;
 
+            // v0.7.0：系统托盘。
+            //
+            // 托盘的意义是「应用可以常驻后台」：关掉窗口不等于退出，
+            // 用户从托盘图标能找回窗口。这正是网页做不到的桌面能力。
+            //
+            // 菜单项：显示主窗口 / 退出。关闭窗口不退出（见下面的
+            // on_window_event），退出只能从这里走。
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(app, "quit", "退出 Aura", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+                let mut builder = TrayIconBuilder::with_id("main-tray")
+                    .menu(&menu)
+                    .tooltip("Aura")
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        // 左键单击：显示/唤起主窗口
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            if let Some(w) = tray.app_handle().get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    });
+
+                if let Some(icon) = app.default_window_icon() {
+                    builder = builder.icon(icon.clone());
+                }
+                let _ = builder.build(app)?;
+            }
+
             app.manage(AppState::new(api_key, db));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // v0.7.0：关闭按钮 = 隐藏到托盘，不是退出。
+            //
+            // 常驻后台是桌面软件的关键能力（长任务跑完还能收到系统通知）。
+            // 但「关了就找不回来」也是真实的困惑，所以托盘必须有，
+            // 且托盘左键单击能唤回窗口。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let Some(w) = window.get_webview_window("main") {
+                    let _ = w.hide();
+                    api.prevent_close();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -207,6 +272,7 @@ pub fn run() {
             remove_session,
             truncate_history,
             notify,
+            quit_app,
             load_sessions,
             save_session,
             save_todos,
