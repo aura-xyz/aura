@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,6 +49,18 @@ A lista de tarefas é limpa automaticamente quando todos os passos são concluí
 
 > **Avisos de mudanças de comportamento**
 >
+> - v0.6.3:
+>   - Renovação visual: novas cores semânticas de sucesso, aviso e marca, e todos os contrastes do modo escuro passam a atingir o padrão de acessibilidade 4.5:1.
+>   - Suas mensagens usam um fundo azul da marca, para se destacar das respostas da IA; a sessão atual da barra lateral também recebe a marca.
+>   - As linhas de ferramentas mostram um ponto colorido de resultado e o tempo decorrido, com um girador da marca durante a execução.
+>   - Cópia com um clique para mensagens e blocos de código (aparece ao passar o mouse), com confirmação visível.
+>   - O clique com o botão direito na área de mensagens deixou de ser um beco sem saída: copie uma mensagem inteira ou um bloco de código.
+>   - Barras de rolagem mais finas: a interface não parece mais uma página web.
+>   - A posição e o tamanho da janela são lembrados e restaurados ao reabrir o app.
+>   - F5 / Ctrl+R são interceptados, sem mais tela branca piscando.
+>   - Os rascunhos de entrada são mantidos por conversa, trocar de sessão não os perde; pressione Seta para Cima em uma caixa vazia para chamar sua última mensagem.
+>   - Contagem de tokens ao vivo no canto inferior direito da caixa de entrada.
+>   - A barra lateral ganha a entrada «Linha do tempo», e a seção de permissões de caminhos usa cores de aviso (as telas da v0.6.2 entram na mesma linguagem visual).
 > - v0.6.2:
 >   - Lista de permissões de caminhos: autoriza outros diretórios para o modelo ler e gravar. Diretórios do sistema e de chaves são recusados; pastas com dados pessoais exigem confirmação
 >   - O mercado passa a aceitar várias fontes com filtro por fonte, e se conecta à biblioteca de terceiros SkillHub
