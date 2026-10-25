@@ -18,17 +18,20 @@ import {
 } from "../lib/api";
 import { useStore } from "../store";
 
-/** 类型 → 图标与配色。 */
+/** 类型 → 图标与配色。失败由渲染层的 ok 判断覆盖为 text-danger。 */
 const KIND_META: Record<
   TimelineKind,
   { icon: typeof Terminal; cls: string }
 > = {
   user: { icon: CircleCheck, cls: "text-brand" },
   assistant: { icon: CircleCheck, cls: "text-foreground" },
-  tool: { icon: Terminal, cls: "text-subtle" },
+  // v0.6.3：工具执行成功由灰转绿。此前成功态与进行中同色，
+  // 「哪些工具跑成了」只能靠读标题，扫一眼看不出来。
+  tool: { icon: Terminal, cls: "text-success" },
   denied: { icon: CircleAlert, cls: "text-danger" },
   context: { icon: History, cls: "text-subtle" },
-  todo: { icon: CircleCheck, cls: "text-subtle" },
+  // 清单推进是完成语义，同样走 success
+  todo: { icon: CircleCheck, cls: "text-success" },
   error: { icon: CircleAlert, cls: "text-danger" },
   notice: { icon: CircleCheck, cls: "text-subtle" },
 };

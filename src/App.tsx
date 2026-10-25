@@ -6,7 +6,16 @@ import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
 import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
+import {
+  codeBlockMenuItems,
+  findCodeBlockTarget,
+  findMessageTarget,
+  messageMenuItems,
+  textMenuItems,
+} from "./lib/contextMenuItems";
+import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
+import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -16,6 +25,18 @@ import { StoreProvider, useStore } from "./store";
 function basename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? p;
+}
+
+/** 最近一条用户消息，供输入框上方向键召回 */
+function lastUserMessageOf(
+  session: { messages: Array<{ role: string; content?: string }> } | undefined,
+): string | undefined {
+  if (!session) return undefined;
+  for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+    const m = session.messages[i];
+    if (m.role === "user" && m.content) return m.content;
+  }
+  return undefined;
 }
 
 // 右键目标保留原生菜单：可编辑区域（复制粘贴/输入建议），
@@ -64,11 +85,27 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   useEffect(() => {
     const el = scrollRef.current;
     if (view !== "chat" || !el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    // 阈值与 ScrollToBottom 共用：两处不一致会出现「按钮还挂着却已经在
+    // 自动跟随」这类割裂
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     if (nearBottom) {
       el.scrollTop = el.scrollHeight;
     }
   }, [activeSession?.messages, view]);
+
+  // v0.6.3：拦截刷新快捷键。
+  // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
+  // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
+  // 本次只拦截不映射行为，留待后续按需定义应用内语义。
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
+      e.preventDefault();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
@@ -102,7 +139,51 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       return;
     }
 
-    // 其余区域统一用原生菜单
+    // v0.6.3：消息气泡与代码块补自绘菜单。在此之前这一支是
+    // preventDefault 却不弹菜单，正文右键什么都不发生。
+    const msgEl = findMessageTarget(target);
+    if (msgEl) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: messageMenuItems({
+          onCopy: () => void copyText(msgEl.dataset.ctxMessage ?? ""),
+        }),
+      });
+      return;
+    }
+
+    const codeEl = findCodeBlockTarget(target);
+    if (codeEl) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: codeBlockMenuItems({
+          onCopy: () => void copyText(codeEl.dataset.ctxCodeblock ?? ""),
+        }),
+      });
+      return;
+    }
+
+    // 普通正文：提供「复制」。仅当确有选中文本时才给——
+    // 空选区复制是无意义的空操作，不如直接禁掉。
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      e.preventDefault();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: textMenuItems({
+          onCopy: () => document.execCommand("copy"),
+        }),
+      });
+      return;
+    }
+
+    // 既无自绘条目、也无选中内容：禁掉 WebView 原生菜单。
+    // 此前此处注释写「统一用原生菜单」与实际代码相反，已修正。
     e.preventDefault();
   }
 
@@ -150,8 +231,15 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
             </div>
           ) : (
             <>
-              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-                <MessageList />
+              {/* relative 让回到底部按钮以滚动区为定位基准 */}
+              <div className="relative min-h-0 flex-1">
+                <div ref={scrollRef} className="h-full overflow-y-auto">
+                  <MessageList />
+                </div>
+                <ScrollToBottom
+                  scrollRef={scrollRef}
+                  messagesLength={activeSession?.messages.length ?? 0}
+                />
               </div>
 <InputArea
       busy={busy}
@@ -165,6 +253,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               workspace={activeSession?.workspace ?? ""}
       onWorkspaceChange={setSessionWorkspace}
       workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
+      sessionId={activeSession?.id ?? ""}
+      lastUserMessage={lastUserMessageOf(activeSession)}
     />
             </>
           )}

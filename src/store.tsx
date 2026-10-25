@@ -47,6 +47,8 @@ export interface Block {
   ok?: boolean;
   /** action 块专用：可折叠的详细输出（命令 stdout/stderr、失败原因） */
   detail?: string;
+  /** action 块专用：工具调用耗时（毫秒）。后端在工具执行完后才 emit */
+  durationMs?: number;
 }
 
 export type ChatMessage =
@@ -310,20 +312,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!stream || stream.sessionId !== p.session_id) return;
       bufferRef.current += p.text ?? "";
     });
-    on<{ session_id: string; text?: string; ok?: boolean; detail?: string }>(
-      "agent:action",
-      (p) => {
-        const stream = streamRef.current;
-        if (!stream || stream.sessionId !== p.session_id) return;
-        insertTailBlock(stream, {
-          // ok 由后端给出；旧版本事件无此字段时按成功处理
-          kind: "action",
-          text: p.text ?? "",
-          ok: p.ok !== false,
-          detail: p.detail || undefined,
-        });
-      },
-    );
+    on<{
+      session_id: string;
+      text?: string;
+      ok?: boolean;
+      detail?: string;
+      duration_ms?: number;
+    }>("agent:action", (p) => {
+      const stream = streamRef.current;
+      if (!stream || stream.sessionId !== p.session_id) return;
+      insertTailBlock(stream, {
+        // ok 由后端给出；旧版本事件无此字段时按成功处理
+        kind: "action",
+        text: p.text ?? "",
+        ok: p.ok !== false,
+        detail: p.detail || undefined,
+        // 耗时同理：旧版本事件没有这个字段，显示为「无」而非 0
+        durationMs: p.duration_ms ?? undefined,
+      });
+    });
     on<{ session_id: string; text?: string }>("agent:notice", (p) => {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;

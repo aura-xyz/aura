@@ -120,6 +120,20 @@
   --danger: #d70015;
   /* 正文链接色：亮色下用品牌蓝 */
   --link: #0066cc;
+
+  /* v0.6.3 语义色扩展：此前只有 danger 一个功能色，
+     成功态没有令牌，工具执行成功、安装完成这类信息只能借灰阶表达。 */
+  --success: #2f6b4a;
+  /* 审批等待、配额提示、市场源告警 */
+  --warning: #b25000;
+  /* 品牌色。亮色与 --link 同值，但语义不同：link 管可点击，
+     brand 管品牌锚点（发送按钮、进行中指示、选中态）。 */
+  --brand: #0066cc;
+  /* 用户消息气泡底：品牌蓝 20% tint。
+     AI 侧仍用 --bubble 灰底，对话归属一眼可辨。
+     注：方案文档建议 8%，实测 8% 与灰底对比度仅 1.03:1，肉眼
+     分辨不出（等于没改）；contrast.test.ts 把这条钉在了 1.2 以上。 */
+  --bubble-user: #cce0f5;
 }
 
 .dark {
@@ -134,6 +148,15 @@
   --danger: #ff453a;
   /* 暗色下品牌蓝对比度不足（3.4:1），链接改用更亮的蓝（7.6:1） */
   --link: #4da3ff;
+
+  /* v0.6.3：success 的暗色值。此前根本没有 --success 令牌，
+     暗色下的成功提示只能借用灰阶。 */
+  --success: #30d158;
+  --warning: #ff9f0a;
+  /* 与 --link 暗色值同源：品牌蓝在暗色下必须提亮才能达到 AA。 */
+  --brand: #4da3ff;
+  /* 暗色底（#1c1c1e）混入 15% 品牌蓝 */
+  --bubble-user: #233040;
 }
 
 @theme inline {
@@ -145,6 +168,10 @@
   --color-bubble: var(--bubble);
   --color-danger: var(--danger);
   --color-link: var(--link);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-brand: var(--brand);
+  --color-bubble-user: var(--bubble-user);
 }
 
 /* ---------------------------------------------------------------
@@ -180,11 +207,41 @@
 }
 
 /* ---------------------------------------------------------------
-   Scrollbar (opt-in hidden variant)
+   Scrollbar
    --------------------------------------------------------------- */
 
+@layer base {
+  /* 全局细滚动条：约 4px、透明轨道、悬停加深。
+     此前没有任何全局滚动条样式，WebView2 的默认条宽约 15px 且灰白刺眼，
+     是「用起来像网页」最直接的泄漏点之一。 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--line);
+    border-radius: 9999px;
+  }
+
+  /* 悬停整片可滚动区域时加深，比「必须精确悬停在 4px 条上」好用得多 */
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: var(--subtle);
+  }
+}
+
 @layer components {
-  /* 隐藏滚动条但保留滚轮滚动能力 */
+  /* 隐藏滚动条但保留滚轮滚动能力。
+     放在 base 之后，使本类的 display:none 能压过上面的全局规则。 */
   .scrollbar-hidden {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -361,6 +418,23 @@
     color: var(--subtle);
     pointer-events: none;
     user-select: none;
+  }
+
+  /* 复制按钮：右上角，悬停整块才渐现。
+     与语言标签同在顶部，靠 padding-top 让位，不压首行代码。 */
+  .md .md-code-copy {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    background-color: var(--surface);
+  }
+
+  .md .md-code:hover .md-code-copy,
+  .md .md-code-copy:focus-visible {
+    opacity: 1;
   }
 
   .md pre {

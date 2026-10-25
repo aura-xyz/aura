@@ -5,6 +5,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { common } from "lowlight";
+import CopyButton from "./CopyButton";
 // common 集之外补充的语言。highlight.js 不随包发布这些子模块的类型，
 // 声明在 src/vite-env.d.ts。注意两点：
 // - TOML 没有独立语法文件，highlight.js 用 ini 语法覆盖（ini 的别名含
@@ -118,18 +119,39 @@ function pickLang(children: React.ReactNode): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * 从 `<pre>` 的 children 里取出纯代码文本，供右键「复制代码」使用。
+ *
+ * 高亮后结构是 `<code>` 下挂多个 span，纯靠 DOM 文本提取比重建高亮树可靠。
+ */
+function extractCodeText(children: React.ReactNode): string {
+  const child = Array.isArray(children) ? children[0] : children;
+  if (!child || typeof child !== "object" || !("props" in child)) return "";
+  const props = (child as { props?: { children?: React.ReactNode } }).props;
+  const inner = props?.children;
+  if (typeof inner === "string") return inner;
+  if (Array.isArray(inner)) return inner.map((c) => (typeof c === "string" ? c : "")).join("");
+  return "";
+}
+
 const COMPONENTS = {
   a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
   ),
-  /** 代码块左上角标出语言；行内代码由 CSS 自行处理，不在此处介入 */
+  /** 代码块：左上角语言标签 + 右上角复制按钮 */
   pre: ({ children }: { children?: React.ReactNode }) => {
     const lang = pickLang(children);
+    const code = extractCodeText(children);
     return (
-      <div className="md-code">
+      <div className="md-code" data-ctx-codeblock={code}>
         {lang && <span className="md-code-lang">{langLabel(lang)}</span>}
+        <CopyButton
+          text={code}
+          className="md-code-copy"
+          label="复制代码"
+        />
         <pre>{children}</pre>
       </div>
     );

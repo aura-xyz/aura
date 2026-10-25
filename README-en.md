@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,6 +49,18 @@ The checklist clears automatically once all steps are complete, and is saved wit
 
 > **Behavior change notices**
 >
+> - v0.6.3:
+>   - Visual refresh: new success / warning / brand semantic colors, and every dark-mode contrast ratio now meets the 4.5:1 accessibility standard.
+>   - Your messages use a brand-blue background so they stand out from AI replies; the current sidebar session is brand-marked too.
+>   - Tool rows show a result color dot and elapsed time, with a brand spinner while running.
+>   - One-click copy for messages and code blocks (appears on hover), with visible copy feedback.
+>   - Right-clicking the message area is no longer a dead end: copy a whole message, or copy a code block.
+>   - Thinner scrollbars — the UI no longer looks like a web page.
+>   - Window position and size are remembered and restored on relaunch.
+>   - F5 / Ctrl+R are intercepted, no more white flash.
+>   - Input drafts are kept per conversation, so switching sessions never loses them; press Arrow Up in an empty box to recall your last message.
+>   - Live token count in the bottom-right of the input box.
+>   - The sidebar gains a Timeline entry, and the path allowlist section uses warning colors (v0.6.2 screens brought into the same visual language).
 > - v0.6.1:
 >   - The Skills page is live: see each skill's source, version and allowed tools, then enable, disable or delete it (built-in and workspace skills cannot be deleted).
 >   - New skill market: install skills from the official registry in one click; every package is verified against its sha256.

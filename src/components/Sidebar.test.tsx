@@ -216,4 +216,21 @@ describe("Sidebar", () => {
     await userEvent.click(screen.getByText("新建对话"));
     expect(onNew).toHaveBeenCalledTimes(1);
   });
+
+  /// 选中态是「激活态锚点」：v0.6.3 把侧边栏选中会话项从灰底改为品牌蓝浅底
+  /// 加左侧品牌色竖线，与页签激活线同源。此前选中与未选中的唯一区别是
+  /// 深浅不同的灰，导航当前位置不可读。
+  it("当前会话用品牌蓝浅底加竖线标出，未选中项不带", async () => {
+    const { container } = await mount();
+    const current = container.querySelector('[data-ctx-session="s1"]');
+    const other = container.querySelector('[data-ctx-session="s2"]');
+
+    expect(current?.className).toContain("bg-bubble-user");
+    expect(other?.className).not.toContain("bg-bubble-user");
+
+    // 竖线是纯装饰，不能进无障碍树
+    const bar = current?.querySelector("span");
+    expect(bar?.className).toContain("bg-brand");
+    expect(bar?.getAttribute("aria-hidden")).toBe("true");
+  });
 });

@@ -119,6 +119,25 @@ describe("路径白名单", () => {
     );
   });
 
+  /// 隐私弹窗必须与普通弹窗有视觉区分。v0.6.3 之前标题旁没有警告图标，
+  /// 整个弹窗与「确认删除」之类的普通确认长得一样，用户看不出这是在拦隐私。
+  it("隐私弹窗带警告色图标，与普通弹窗可区分", async () => {
+    openMock.mockResolvedValue("C:/Users/x/Desktop");
+    checkMock.mockResolvedValue({
+      level: "confirm",
+      reason: "`Desktop` 可能包含隐私信息（聊天记录、证件、合同等）。",
+      path: "C:/Users/x/Desktop",
+    });
+    render(<AllowlistSection />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "添加目录" }));
+    const heading = await screen.findByText("确认授权这个目录？");
+    // 图标是 heading 的前一个兄弟节点（lucide 渲染为 svg）
+    const icon = heading.previousElementSibling;
+    expect(icon?.tagName.toLowerCase()).toBe("svg");
+    expect(icon?.getAttribute("class")).toContain("text-warning");
+  });
+
   it("取消确认就不写入", async () => {
     openMock.mockResolvedValue("C:/Users/x/Desktop");
     checkMock.mockResolvedValue({

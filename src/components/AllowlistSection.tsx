@@ -152,7 +152,8 @@ export default function AllowlistSection() {
       {notice && (
         <p
           className={`mt-3 flex items-start gap-2 text-xs ${
-            notice.kind === "ok" ? "text-subtle" : "text-danger"
+            // v0.6.3：成功提示由灰转绿，与失败的红形成对称。
+            notice.kind === "ok" ? "text-success" : "text-danger"
           }`}
         >
           {notice.kind === "err" && (
@@ -166,7 +167,15 @@ export default function AllowlistSection() {
       {pending && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
           <div className="w-full max-w-md rounded-card border border-line bg-panel p-5 shadow-xl">
-            <h4 className="text-sm font-medium">确认授权这个目录？</h4>
+            {/* v0.6.3：警告走 warning 色。此前标题与正文全灰，
+                与普通确认弹窗没有区别，用户看不出这是在拦隐私目录。 */}
+            <div className="flex items-start gap-2">
+              <TriangleAlert
+                size={16}
+                className="mt-0.5 shrink-0 text-warning"
+              />
+              <h4 className="text-sm font-medium">确认授权这个目录？</h4>
+            </div>
             <p className="mt-2 text-xs leading-relaxed text-subtle">
               {pending.reason}
             </p>

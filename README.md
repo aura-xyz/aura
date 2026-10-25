@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,6 +49,18 @@
 
 > **行为变更提醒**
 >
+> - v0.6.3：
+>   - 界面视觉重构：新增成功/警告/品牌语义色，暗色模式对比度全部达到无障碍标准（4.5:1）
+>   - 你的消息改用品牌蓝底色，与 AI 回复一眼区分；侧边栏当前会话也有品牌色标识
+>   - 工具调用行显示执行结果色点与耗时，运行中有品牌色转圈指示
+>   - 消息与代码块支持一键复制（悬停消息或代码块时出现），复制成功有反馈
+>   - 正文右键不再无响应：消息可复制全文，代码块可复制代码
+>   - 滚动条改为细条样式，界面不再有网页感
+>   - 窗口位置与大小现在会被记住，重开应用自动还原
+>   - 拦截 F5 / Ctrl+R，不再闪白屏
+>   - 输入内容按对话分别保留，切换会话不丢失；空输入框按上方向键可召回上一条消息
+>   - 输入框右下角显示实时 token 计数
+>   - 侧边栏新增「轨迹」入口，路径白名单分区支持警告色提示（v0.6.2 界面纳入统一观感）
 > - v0.6.1：
 >   - Skills 页可用：列出技能来源、版本与可用工具，可启用/禁用、删除自装技能（内置与工作区技能不可删）
 >   - 新增技能市场，可从官方 registry 一键安装技能，安装包强制校验 sha256

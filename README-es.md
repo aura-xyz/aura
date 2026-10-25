@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/version-v0.6.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v0.6.3-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
   <img src="https://img.shields.io/badge/Tauri-2.0-orange.svg" alt="Tauri" />
 </p>
@@ -49,6 +49,18 @@ La lista de tareas se borra automáticamente al completarse todos los pasos, se 
 
 > **Avisos de cambios de comportamiento**
 >
+> - v0.6.3:
+>   - Renovación visual: nuevos colores semánticos de éxito, advertencia y marca, y todos los contrastes del modo oscuro alcanzan el estándar de accesibilidad 4.5:1.
+>   - Tus mensajes usan un fondo azul de marca para distinguirse de las respuestas de la IA; la sesión actual de la barra lateral también se marca con el color de marca.
+>   - Las filas de herramientas muestran un punto de color de resultado y el tiempo transcurrido, con un indicador giratorio de marca mientras se ejecutan.
+>   - Copia con un clic para mensajes y bloques de código (aparece al pasar el cursor), con confirmación visible.
+>   - El clic derecho en la zona de mensajes ya no es un callejón sin salida: copia un mensaje completo o un bloque de código.
+>   - Barras de desplazamiento más finas: la interfaz ya no parece una página web.
+>   - La posición y el tamaño de la ventana se recuerdan y se restauran al reabrir la aplicación.
+>   - F5 / Ctrl+R están interceptados, sin más destellos blancos.
+>   - Los borradores de entrada se guardan por conversación, cambiar de sesión no los pierde; pulsa Flecha Arriba en un cuadro vacío para recuperar tu último mensaje.
+>   - Contador de tokens en vivo en la esquina inferior derecha del cuadro de entrada.
+>   - La barra lateral añade la entrada «Línea de tiempo», y la sección de lista blanca de rutas usa colores de advertencia (las pantallas de v0.6.2 se integran en el mismo lenguaje visual).
 > - v0.6.2:
 >   - Lista blanca de rutas: autoriza otros directorios para que el modelo lea y escriba. Los directorios del sistema y de claves se rechazan; las carpetas con datos personales requieren confirmación
 >   - El mercado admite varias fuentes con filtrado por fuente, y se conecta a la biblioteca de terceros SkillHub
