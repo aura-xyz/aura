@@ -3,6 +3,7 @@ import { useStore, type Block } from "../store";
 import { plainTextOf } from "../lib/messageText";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
+import MessageActions from "./MessageActions";
 
 // 以下两个组件必须 memo：store 的打字机每 30ms 触发一次 setState，
 // 消息流里的每一条都会跟着重新 render。而 store 的 appendBlocks
@@ -36,6 +37,7 @@ function renderBlock(block: Block, i: number) {
           text={block.text}
           ok={block.ok}
           detail={block.detail}
+          durationMs={block.durationMs}
         />
       );
     case "notice":
@@ -64,6 +66,8 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(blocks)}>
       {blocks.map(renderBlock)}
+      {/* 悬停才出现的操作条。放最后一行之下，不占用正文流 */}
+      <MessageActions blocks={blocks} />
     </div>
   );
 });
@@ -103,11 +107,14 @@ export default function MessageList() {
         m.role === "user" ? (
           <UserBubble key={i} content={m.content} />
         ) : (
-          <AssistantMessage
-            key={i}
-            blocks={m.blocks}
-            pending={busy && i === lastIndex}
-          />
+          // group 让 MessageActions 的 group-hover 生效：指针进入这条消息
+          // 整块才显示操作条，而不是只在按钮那一行生效
+          <div key={i} className="group">
+            <AssistantMessage
+              blocks={m.blocks}
+              pending={busy && i === lastIndex}
+            />
+          </div>
         ),
       )}
     </div>

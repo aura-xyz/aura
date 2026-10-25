@@ -5,6 +5,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { common } from "lowlight";
+import CopyButton from "./CopyButton";
 // common 集之外补充的语言。highlight.js 不随包发布这些子模块的类型，
 // 声明在 src/vite-env.d.ts。注意两点：
 // - TOML 没有独立语法文件，highlight.js 用 ini 语法覆盖（ini 的别名含
@@ -139,13 +140,18 @@ const COMPONENTS = {
       {children}
     </a>
   ),
-  /** 代码块左上角标出语言；行内代码由 CSS 自行处理，不在此处介入 */
+  /** 代码块：左上角语言标签 + 右上角复制按钮 */
   pre: ({ children }: { children?: React.ReactNode }) => {
     const lang = pickLang(children);
     const code = extractCodeText(children);
     return (
       <div className="md-code" data-ctx-codeblock={code}>
         {lang && <span className="md-code-lang">{langLabel(lang)}</span>}
+        <CopyButton
+          text={code}
+          className="md-code-copy"
+          label="复制代码"
+        />
         <pre>{children}</pre>
       </div>
     );

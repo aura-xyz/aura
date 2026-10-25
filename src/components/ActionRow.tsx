@@ -77,6 +77,8 @@ export function ActionRow({
 
 /** 毫秒 → 人话。内部用，抽成模块级是为了让单测能直接覆盖 */
 export function formatMs(ms: number): string {
+  // 时钟回拨等极端情况下 elapsed 可能给出负值，显示成 "-5ms" 是错的
+  if (ms <= 0) return "0ms";
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;

@@ -272,17 +272,19 @@ fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
 }
 
 /// 工具动作事件。`ok` 区分成功与失败；`detail` 携带可折叠的详细输出
-/// （如命令执行的 stdout/stderr），过长时不应直接铺满对话流。
+/// （如命令执行的 stdout/stderr），过长时不应直接铺满对话流；
+/// `duration_ms` 是本次调用耗时，v0.6.3 起透出给前端显示。
 fn emit_action_detail(
     app: &AppHandle,
     session_id: &str,
     label: &str,
     ok: bool,
     detail: Option<String>,
+    duration_ms: Option<i64>,
 ) {
     let _ = app.emit(
         EV_ACTION,
-        json!({ "session_id": session_id, "text": label, "ok": ok, "detail": detail }),
+        json!({ "session_id": session_id, "text": label, "ok": ok, "detail": detail, "duration_ms": duration_ms }),
     );
 }
 
@@ -1021,6 +1023,8 @@ if tool_jsons.is_empty() {
                             &format!("{}（连续调用超限）", tool_label),
                             false,
                             None,
+                            // 超限是在执行前就被拦下的，没有真实耗时
+                            None,
                         );
                         "Error: 连续调用次数超限，请尝试其他工具或基于现有信息直接回复。"
                             .to_string()
@@ -1068,6 +1072,7 @@ if tool_jsons.is_empty() {
                                     &out.label,
                                     true,
                                     detail,
+                                    Some(tool_ms),
                                 );
                                 // v0.6.0：load_skill 成功后登记激活。用本轮
                                 // 扫描的快照登记而非重新扫——同轮内目录不会
@@ -1110,6 +1115,7 @@ if tool_jsons.is_empty() {
                                     &fail.label,
                                     false,
                                     Some(fail.error.clone()),
+                                    Some(tool_ms),
                                 );
                                 format!("Error: {}", fail.error)
                             }

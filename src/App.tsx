@@ -15,6 +15,7 @@ import {
 } from "./lib/contextMenuItems";
 import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
+import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -72,7 +73,10 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   useEffect(() => {
     const el = scrollRef.current;
     if (view !== "chat" || !el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    // 阈值与 ScrollToBottom 共用：两处不一致会出现「按钮还挂着却已经在
+    // 自动跟随」这类割裂
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     if (nearBottom) {
       el.scrollTop = el.scrollHeight;
     }
@@ -215,8 +219,15 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
             </div>
           ) : (
             <>
-              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-                <MessageList />
+              {/* relative 让回到底部按钮以滚动区为定位基准 */}
+              <div className="relative min-h-0 flex-1">
+                <div ref={scrollRef} className="h-full overflow-y-auto">
+                  <MessageList />
+                </div>
+                <ScrollToBottom
+                  scrollRef={scrollRef}
+                  messagesLength={activeSession?.messages.length ?? 0}
+                />
               </div>
 <InputArea
       busy={busy}

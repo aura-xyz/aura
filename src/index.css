@@ -420,6 +420,23 @@
     user-select: none;
   }
 
+  /* 复制按钮：右上角，悬停整块才渐现。
+     与语言标签同在顶部，靠 padding-top 让位，不压首行代码。 */
+  .md .md-code-copy {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    background-color: var(--surface);
+  }
+
+  .md .md-code:hover .md-code-copy,
+  .md .md-code-copy:focus-visible {
+    opacity: 1;
+  }
+
   .md pre {
     background-color: var(--surface-sunken);
     border: 1px solid var(--line);
