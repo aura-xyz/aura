@@ -61,6 +61,8 @@ The checklist clears automatically once all steps are complete, and is saved wit
   - The empty state now shows example cards that fill a starter prompt into the input
   - Closing the window now minimizes it to the tray; use "Quit Aura" in the about page to exit fully
   - Updates now download from multiple sources and pick the fastest one automatically (GitHub downloads are extremely slow in mainland China)
+  - Type `@` in the input to pop up the workspace file list; type `/` to pop up the enabled skills list. Picking one inserts it into the input
+  - The start screen is now one centered block: icon and title, then the input, then the examples
 > - v0.6.3:
 >   - Visual refresh: new success / warning / brand semantic colors, and every dark-mode contrast ratio now meets the 4.5:1 accessibility standard.
 >   - Your messages use a brand-blue background so they stand out from AI replies; the current sidebar session is brand-marked too.

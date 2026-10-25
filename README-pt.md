@@ -61,6 +61,8 @@ A lista de tarefas é limpa automaticamente quando todos os passos são concluí
   - O estado vazio mostra cartões de exemplo que preenchem um prompt inicial na caixa de entrada
   - Fechar a janela agora a minimiza para a bandeja; use «Sair do Aura» na página sobre para sair de vez
   - As atualizações agora são baixadas de várias fontes e escolhem automaticamente a mais rápida (downloads do GitHub são muito lentos na China continental)
+  - Digite `@` no campo para ver a lista de arquivos do espaço de trabalho; digite `/` para ver a lista de habilidades ativas. Escolher uma insere no campo
+  - A tela inicial agora é um bloco centralizado: ícone e título, depois o campo de entrada, depois os exemplos
 > - v0.6.3:
 >   - Renovação visual: novas cores semânticas de sucesso, aviso e marca, e todos os contrastes do modo escuro passam a atingir o padrão de acessibilidade 4.5:1.
 >   - Suas mensagens usam um fundo azul da marca, para se destacar das respostas da IA; a sessão atual da barra lateral também recebe a marca.
