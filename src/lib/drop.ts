@@ -60,7 +60,8 @@ export function formatAttachment(paths: string[]): string {
  *
  * @param verdicts 每个路径的判定（与 paths 同序）
  */
-export function decideDrop(paths: string[], verdicts: DropVerdict[]): DropDecision {  const accepted: string[] = [];
+export function decideDrop(paths: string[], verdicts: DropVerdict[]): DropDecision {
+  const accepted: string[] = [];
   let needAuth = 0;
   let rejected = 0;
 
