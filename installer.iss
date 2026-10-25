@@ -3,11 +3,11 @@
 [Setup]
 AppId={{0012DB8B-711D-4965-8935-F7E3E10A2D81}}
 AppName=Aura
-AppVersion=0.7.0
+AppVersion=0.7.1
 AppPublisher=JackSai
 AppPublisherURL=https://github.com/aura-xyz/aura
 AppSupportURL=https://github.com/aura-xyz/aura/issues
-VersionInfoVersion=0.7.0
+VersionInfoVersion=0.7.1
 DefaultDirName={autopf}\Aura
 DefaultGroupName=Aura
 DisableProgramGroupPage=yes
