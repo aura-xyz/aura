@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -82,5 +83,49 @@ describe("Markdown 高亮语言注册", () => {
   it("未注册的语言不高亮（对照组）", async () => {
     const { container } = await renderMd("```nim\nvar x = 1\n```");
     expect(container.querySelector('code [class*="hljs-"]')).toBeNull();
+  });
+});
+
+/**
+ * 代码块文本提取（v0.7.0 回归）。
+ *
+ * 高亮后 `<code>` 的子节点是「一堆 span + 夹在 span 之间的字符串」。
+ * 早先的提取只保留字符串节点，于是**所有 span 里的文字都丢了**：
+ *
+ * ```html
+ * <span class="hljs-attr">path</span> = <span class="hljs-string">"/projects"</span>
+ * ```
+ *
+ * 提取出来只剩 `" = "`。后果有两个：
+ * 折叠预览显示成 `=`、`= [ , , ]`（用户实测截图）；
+ * **「复制代码」复制到的是残缺代码**（同一个字符串）。
+ */
+describe("Markdown 代码块文本提取", () => {
+  it("折叠预览保留完整代码，不只剩 span 之间的字符串", async () => {
+    const lines = Array.from(
+      { length: 25 },
+      (_, i) => `key${i} = "value${i}"`,
+    );
+    const { container } = await renderMd("```toml\n" + lines.join("\n") + "\n```");
+
+    const collapsed = container.querySelector("pre.md-code-collapsed");
+    expect(collapsed).not.toBeNull();
+    // 第一行的完整内容必须在：键名与字符串字面量都不能丢
+    expect(collapsed?.textContent).toContain('key0 = "value0"');
+    expect(collapsed?.textContent).toContain('key1 = "value1"');
+  });
+
+  it("复制按钮复制的是完整代码，不是残缺片段", async () => {
+    const { copyMock } = vi.hoisted(() => ({ copyMock: vi.fn() }));
+    vi.doMock("../lib/clipboard", () => ({ copyText: copyMock }));
+    copyMock.mockResolvedValue(true);
+
+    await renderMd('```toml\npath = "/projects"\n```');
+    await userEvent.click(screen.getByRole("button", { name: "复制代码" }));
+
+    expect(copyMock).toHaveBeenCalledTimes(1);
+    // 代码块内容自带结尾换行，比对时去掉
+    const copied = (copyMock.mock.calls[0][0] as string).trim();
+    expect(copied).toBe('path = "/projects"');
   });
 });

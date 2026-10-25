@@ -80,14 +80,35 @@ function pickLang(children: React.ReactNode): string | null {
  *
  * 高亮后结构是 `<code>` 下挂多个 span，纯靠 DOM 文本提取比重建高亮树可靠。
  */
+/**
+ * 从 React 节点里递归提取纯文本。
+ *
+ * 高亮后 `<code>` 的结构是「一堆 span + 夹在 span 之间的字符串」：
+ *
+ * ```html
+ * <span class="hljs-attr">path</span> = <span class="hljs-string">"/projects"</span>
+ * ```
+ *
+ * 只取字符串节点会得到 `" = "`——**所有 span 里的文字都丢了**。
+ * 这不是显示问题：同一个字符串还被用作「复制代码」按钮的复制内容，
+ * 复制出来的代码是残缺的。
+ */
+function nodeText(node: React.ReactNode): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    const props = (node as { props?: { children?: React.ReactNode } }).props;
+    return nodeText(props?.children);
+  }
+  return "";
+}
+
 function extractCodeText(children: React.ReactNode): string {
   const child = Array.isArray(children) ? children[0] : children;
   if (!child || typeof child !== "object" || !("props" in child)) return "";
   const props = (child as { props?: { children?: React.ReactNode } }).props;
-  const inner = props?.children;
-  if (typeof inner === "string") return inner;
-  if (Array.isArray(inner)) return inner.map((c) => (typeof c === "string" ? c : "")).join("");
-  return "";
+  return nodeText(props?.children);
 }
 
 const COMPONENTS = {
