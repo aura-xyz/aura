@@ -408,7 +408,6 @@ export function exportTimeline(
 }
 
 // ── 历史截断（v0.7.0）─────────────────────────────────────────────
-
 /** 截断结果。 */
 export interface TruncateHistoryResult {
   /** 截断后保留的 history entry 数 */
@@ -510,4 +509,16 @@ export function installMarketSkill(
   update: boolean,
 ): Promise<InstallSummary> {
   return invoke("install_market_skill", { id, acceptRisky, update });
+}
+
+// ── 系统通知（v0.7.0）─────────────────────────────────────────────
+
+/**
+ * 发一条系统通知。
+ *
+ * 只在窗口不在前台时调用——用户正盯着屏幕时弹通知是打扰。
+ * 通知失败不视为错误，由后端吞掉。
+ */
+export function notify(title: string, body: string): Promise<void> {
+  return invoke("notify", { title, body });
 }

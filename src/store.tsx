@@ -14,6 +14,7 @@ import {
   getSelectedModel,
   getWorkspace,
   loadSessions,
+  notify as notifyApi,
   removeSession,
   removeWorkspace as removeWorkspaceApi,
   saveSession,
@@ -100,6 +101,10 @@ interface StoreValue extends State {
   editingUserIndex: number | null;
   /** 进入编辑状态时把原文放回输入框；null 表示不在编辑 */
   editPrefill: string | null;
+  /** 待插入输入框的文本（null 表示没有） */
+  inputInsert: { text: string; id: number } | null;
+  /** 往输入框插入一段文本（拖放文件路径时用） */
+  insertIntoInput: (text: string) => void;
   /** 进入编辑状态（把原文放回输入框） */
   beginEdit: (userIndex: number, text: string) => void;
   /** 退出编辑状态 */
@@ -172,6 +177,38 @@ function lastAssistantId(messages: ChatMessage[]): string | undefined {
 }
 
 /**
+ * 窗口是否在后台（用户看不到）。
+ *
+ * 用 `document.visibilityState`：窗口最小化或被其它窗口遮住时，
+ * WebView 的可见性会变成 hidden。这是浏览器里唯一可靠的判据——
+ * 没有「窗口是否被遮住」的 API，而「被遮住」恰恰是最该通知的场景。
+ */
+function isWindowInBackground(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.visibilityState === "hidden";
+}
+
+/** 取最后一条回复的摘要，用作通知正文。 */
+function summarizeReply(messages: ChatMessage[] | undefined): string {
+  if (!messages) return "任务已完成";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant") {
+      const text = m.blocks
+        .filter((b) => b.kind === "text")
+        .map((b) => (b.kind === "text" ? b.text : ""))
+        .join(" ")
+        .trim();
+      if (text) {
+        return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+      }
+      return "任务已完成";
+    }
+  }
+  return "任务已完成";
+}
+
+/**
  * 选定某工作区应激活的会话。
  *
  * 只考虑**有消息**的：空对话只是内存里的草稿，不该把用户从正在看的
@@ -238,6 +275,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [editPrefill, setEditPrefill] = useState<string | null>(null);
   const editingUserIndexRef = useRef<number | null>(null);
   editingUserIndexRef.current = editingUserIndex;
+
+  // 待插入输入框的文本（v0.7.0 拖放用）。
+  // 用自增 id 而不是纯字符串：连续插入同一段文本时要能被区分开，
+  // 否则 InputArea 的 effect 不会再次触发。
+  const [inputInsert, setInputInsert] = useState<{ text: string; id: number } | null>(
+    null,
+  );
+  const insertSeq = useRef(0);
 
   const startRename = useCallback((id: string) => setRenamingId(id), []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
@@ -695,6 +740,19 @@ let sessions = restored;
         if (latest) {
           persistNow(sessionId, latest.title, latest.workspace, latest.messages);
         }
+        // v0.7.0：系统通知。
+        // **只在窗口不在前台时发**——用户正盯着屏幕时弹通知是打扰，
+        // 那是桌面软件与网页都能做到的，不构成「桌面感」。
+        // 无人值守时它才是唯一反馈渠道。
+        if (isWindowInBackground()) {
+          const failed = sawErrorRef.current;
+          void notifyApi(
+            failed ? "Aura 执行失败" : "Aura 已完成",
+            failed ? "任务出错，点击查看详情" : summarizeReply(latest?.messages),
+          ).catch(() => {
+            /* 通知失败不影响主流程 */
+          });
+        }
       }
     },
     [state.busy, state.activeId, appendBlocks, drainBuffer, persistNow],
@@ -788,6 +846,12 @@ let sessions = restored;
   const cancelEdit = useCallback(() => {
     setEditingUserIndex(null);
     setEditPrefill(null);
+  }, []);
+
+  /** 往输入框插入一段文本（拖放文件路径时用） */
+  const insertIntoInput = useCallback((text: string) => {
+    insertSeq.current += 1;
+    setInputInsert({ text, id: insertSeq.current });
   }, []);
 
 /**
@@ -922,6 +986,8 @@ setState((s) => {
       resendFrom,
       editingUserIndex,
       editPrefill,
+      inputInsert,
+      insertIntoInput,
       beginEdit,
       cancelEdit,
       submitMessage,
@@ -950,6 +1016,8 @@ setState((s) => {
       resendFrom,
       editingUserIndex,
       editPrefill,
+      inputInsert,
+      insertIntoInput,
       beginEdit,
       cancelEdit,
       submitMessage,

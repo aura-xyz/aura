@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { TriangleAlert } from "lucide-react";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
@@ -6,6 +7,9 @@ import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
 import TitleBar from "./components/TitleBar";
 import { useTheme, type Theme } from "./hooks/useTheme";
+import { useDropZone } from "./hooks/useDropZone";
+import { checkAllowlistPath } from "./lib/api";
+import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
 import {
   codeBlockMenuItems,
   findCodeBlockTarget,
@@ -65,6 +69,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     cancelEdit,
     editingUserIndex,
     editPrefill,
+    insertIntoInput,
     stop,
     activeSession,
     models,
@@ -84,7 +89,58 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * v0.7.0：拖入文件 → 把路径附加到输入框。
+   *
+   * 为什么不直接把文件内容塞进消息：模型的工具沙盒只允许工作区与
+   * 路径白名单内的目录，让模型自己去读才是正确做法。这里负责的是
+   * **把路径告诉用户自己**（用户在输入框里能看到、能改、能删）。
+   *
+   * 路径的可达性由后端判定（`check_allowlist_path`）：
+   * - allow → 直接附加
+   * - confirm → 附加，但提示「该目录需要先授权」
+   * - reject → 不附加（系统目录、密钥目录）
+   */
+  const onDropPaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+
+      // 逐个判定。**自身与父目录都判，取更严的那档**：
+      // 拖入的可能是文件也可能是目录，字符串上看不出来，
+      // 只判父目录会漏掉「名为 Desktop 的目录」这类情况。
+      const verdicts: DropVerdict[] = [];
+      for (const p of paths) {
+        try {
+          const own = await checkAllowlistPath(p);
+          const parent = await checkAllowlistPath(parentDir(p));
+          verdicts.push(stricter(own.level, parent.level));
+        } catch {
+          // 判定失败时不擅自丢弃用户的拖入：先附加，
+          // 真正的可达性由模型侧的沙盒把关
+          verdicts.push("unknown");
+        }
+      }
+
+      const decision = decideDrop(paths, verdicts);
+      if (decision.attach) {
+        insertIntoInput(
+          formatAttachment(paths.filter((_, i) => verdicts[i] !== "reject")),
+        );
+      }
+      setDropNotice(decision.notice);
+    },
+    [insertIntoInput],
+  );
+
+  useDropZone({
+    onDrop: (paths) => {
+      void onDropPaths(paths);
+    },
+    onCancel: () => setDropNotice(null),
+  });
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -245,6 +301,25 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
                   messagesLength={activeSession?.messages.length ?? 0}
                 />
               </div>
+              {/* 拖放提示：有些路径没被附加，或附加了但需要授权。
+                  这类信息必须说出来——用户看到路径进了输入框就以为
+                  模型一定能读，实际可能读不到。 */}
+              {dropNotice && (
+                <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+                  <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
+                    <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
+                    <span className="min-w-0 flex-1">{dropNotice}</span>
+                    <button
+                      type="button"
+                      onClick={() => setDropNotice(null)}
+                      aria-label="关闭提示"
+                      className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                </div>
+              )}
 <InputArea
       busy={busy}
    onSend={sendMessage}

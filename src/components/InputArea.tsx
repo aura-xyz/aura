@@ -28,6 +28,11 @@ interface Props {
   lastUserMessage?: string;
   /** 编辑历史消息时要把原文放回输入框；null 表示不在编辑 */
   editPrefill?: string | null;
+  /**
+   * 待插入的文本（拖放文件路径时由外部塞进来）。
+   * 用 id 区分先后——连续插入同一段文本也要能被区分开。
+   */
+  inputInsert?: { text: string; id: number } | null;
   /** 正在编辑：输入框展示提示条，发送走「回滚 + 重发」 */
   editing?: boolean;
   /** 取消编辑 */
@@ -54,6 +59,7 @@ export default function InputArea({
   sessionId,
   lastUserMessage,
   editPrefill = null,
+  inputInsert = null,
   editing = false,
   onCancelEdit,
   onSubmit,
@@ -78,6 +84,13 @@ export default function InputArea({
     if (editPrefill === null) return;
     setValue(editPrefill);
   }, [editPrefill]);
+
+  // 拖放插入的路径：追加到当前内容末尾。
+  // 用 id 做依赖，连续插入同一段文本也能被区分开。
+  useEffect(() => {
+    if (!inputInsert) return;
+    setValue((v) => (v.trim() ? `${v} ${inputInsert.text}` : inputInsert.text));
+  }, [inputInsert?.id]);
 
   // 每次输入即存。不节流：localStorage 同步写，输入频率下量级可接受
   useEffect(() => {

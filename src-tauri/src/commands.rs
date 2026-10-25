@@ -287,6 +287,30 @@ pub async fn remove_session(state: State<'_, AppState>, session_id: String) -> R
     db::delete_session(&db, &session_id).map_err(|e| e.to_string())
 }
 
+/// 发一条系统通知（v0.7.0）。
+///
+/// 前端只在「窗口不在前台」时调用——用户正盯着屏幕时弹通知是打扰。
+/// 通知失败不视为错误：它是锦上添花，不该让调用方（生成流程）失败。
+#[tauri::command]
+pub fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    let result = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show();
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // 通知失败（系统未授权、专注助手等）不该影响主流程
+            eprintln!("[notify] 发送系统通知失败: {}", e);
+            Ok(())
+        }
+    }
+}
+
 /// 截断结果（回给前端）。
 #[derive(serde::Serialize)]
 pub struct TruncateResult {

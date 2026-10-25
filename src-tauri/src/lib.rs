@@ -20,7 +20,7 @@ use commands::{
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    set_skill_enabled, set_workspace, stop_message, truncate_history, AppState,
+    notify, set_skill_enabled, set_workspace, stop_message, truncate_history, AppState,
 };
 use tauri::Manager;
 
@@ -113,6 +113,9 @@ pub fn run() {
         // 放在 setup 之前：插件要在窗口创建时挂上监听，晚了就记不到首次状态。
         // 首次启动没有历史状态，仍按下方 inner_size + maximized 走。
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        // v0.7.0：系统原生通知。无人值守场景下这是关键能力——
+        // 任务跑完时人不在电脑前，系统通知是唯一的反馈渠道。
+        .plugin(tauri_plugin_notification::init())
         // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
         // relaunch 负责重启应用；perms 授予 updater 默认权限集
         .plugin(tauri_plugin_process::init())
@@ -203,6 +206,7 @@ pub fn run() {
             stop_message,
             remove_session,
             truncate_history,
+            notify,
             load_sessions,
             save_session,
             save_todos,
