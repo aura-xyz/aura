@@ -26,6 +26,17 @@ interface Props {
   sessionId: string;
   /** 最近一条用户消息，供上方向键召回 */
   lastUserMessage?: string;
+  /** 编辑历史消息时要把原文放回输入框；null 表示不在编辑 */
+  editPrefill?: string | null;
+  /** 正在编辑：输入框展示提示条，发送走「回滚 + 重发」 */
+  editing?: boolean;
+  /** 取消编辑 */
+  onCancelEdit?: () => void;
+  /**
+   * 提交入口。普通发送与「编辑后重发」由 store 内部区分，
+   * 输入框只调这一个。
+   */
+  onSubmit?: (text: string) => void;
 }
 
 export default function InputArea({
@@ -42,6 +53,10 @@ export default function InputArea({
   workspaceLocked = false,
   sessionId,
   lastUserMessage,
+  editPrefill = null,
+  editing = false,
+  onCancelEdit,
+  onSubmit,
 }: Props) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -55,6 +70,14 @@ export default function InputArea({
     loadedForRef.current = sessionId;
     setValue(loadInputDraft(sessionId));
   }, [sessionId]);
+
+  // 编辑历史消息：原文放回输入框。
+  // 刻意不写进草稿——草稿是「用户正在写的东西」，编辑态的原文是
+  // 系统填的，存进去会在下次切会话时莫名其妙冒出来。
+  useEffect(() => {
+    if (editPrefill === null) return;
+    setValue(editPrefill);
+  }, [editPrefill]);
 
   // 每次输入即存。不节流：localStorage 同步写，输入频率下量级可接受
   useEffect(() => {
@@ -76,7 +99,11 @@ export default function InputArea({
     // 没定工作区就发不出去：后端拿不到执行目录，工具会落到默认目录。
     // 发送键同时置灰，这里拦住 Enter 快捷键那条路径。
     if (!workspace) return;
-    onSend(text);
+    if (onSubmit) {
+      onSubmit(text);
+    } else {
+      onSend(text);
+    }
     setValue("");
     saveInputDraft(sessionId, "");
   }
@@ -98,6 +125,22 @@ export default function InputArea({
 
   return (
     <div className="px-6 pb-5 pt-3">
+      {/* 编辑历史消息时的提示条。放在卡片上方，说明「这次发送会替换哪一条」——
+          没有它用户不知道发出去会发生什么。 */}
+      {editing && (
+        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs">
+          <span className="text-foreground">正在编辑之前的消息，发送后将替换它</span>
+          {onCancelEdit && (
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
+            >
+              取消
+            </button>
+          )}
+        </div>
+      )}
       {/* 参考图版式：一个圆角卡片两段式——上半部输入区（最小两行高，
           单行时也保持舒展的留白），下半部工具行收入卡内；卡片外只放
           次级控件（工作区/模式/快捷键提示）。token 不变：圆角、细边框、

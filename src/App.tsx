@@ -61,6 +61,10 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const {
     busy,
     sendMessage,
+    submitMessage,
+    cancelEdit,
+    editingUserIndex,
+    editPrefill,
     stop,
     activeSession,
     models,
@@ -255,6 +259,10 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
       sessionId={activeSession?.id ?? ""}
       lastUserMessage={lastUserMessageOf(activeSession)}
+      editPrefill={editPrefill}
+      editing={editingUserIndex !== null}
+      onCancelEdit={cancelEdit}
+      onSubmit={submitMessage}
     />
             </>
           )}

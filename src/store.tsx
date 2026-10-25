@@ -22,9 +22,14 @@ import {
   setSelectedModel as setSelectedModelApi,
   setWorkspace,
   stopMessage as stopMessageApi,
+  truncateHistory as truncateHistoryApi,
   type ModelInfo,
 } from "./lib/api";
 import { type Mode } from "./lib/mode";
+import {
+  keepThroughForResend,
+  sliceForResend,
+} from "./lib/history";
 import {
   applyAutoClear,
   isTodoStatus,
@@ -83,6 +88,27 @@ interface StoreValue extends State {
   cancelRename: () => void;
   renameSession: (id: string, title: string) => void;
   sendMessage: (text: string) => Promise<void>;
+  /**
+   * 回滚到第 userIndex 条用户消息并重新发送 `text`。
+   * 「重新生成」与「编辑消息并重跑」共用。
+   */
+  resendFrom: (userIndex: number, text: string) => Promise<void>;
+  /**
+   * 当前是否处于「编辑某条历史消息」状态。
+   * 编辑时把原文放回输入框，用户改完直接发送——不走弹窗。
+   */
+  editingUserIndex: number | null;
+  /** 进入编辑状态时把原文放回输入框；null 表示不在编辑 */
+  editPrefill: string | null;
+  /** 进入编辑状态（把原文放回输入框） */
+  beginEdit: (userIndex: number, text: string) => void;
+  /** 退出编辑状态 */
+  cancelEdit: () => void;
+  /**
+   * 提交输入框内容。若处于编辑状态则走「回滚 + 重发」，
+   * 否则是普通发送。输入框只需调这一个入口。
+   */
+  submitMessage: (text: string) => Promise<void>;
   stop: () => Promise<void>;
   switchWorkspace: (path: string) => Promise<void>;
   newSession: () => Promise<void>;
@@ -135,6 +161,14 @@ function createSession(workspace = ""): Session {
 function deriveTitle(text: string): string {
   const t = text.trim();
   return t.length > 20 ? `${t.slice(0, 20)}…` : t;
+}
+
+/** 最后一条 assistant 消息的 id。回滚失败时要把错误挂到它上面。 */
+function lastAssistantId(messages: ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant") return messages[i].id;
+  }
+  return undefined;
 }
 
 /**
@@ -195,6 +229,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
+
+  // 编辑状态（v0.7.0）：正在编辑第几条用户消息，以及要放回输入框的原文。
+  // 单独存一份 ref 是为了让 submitMessage 在 useCallback 依赖稳定的前提下
+  // 也能读到最新值——它被 InputArea 直接调用，闭包过期会导致
+  // 「编辑了却走普通发送」这种难查的错。
+  const [editingUserIndex, setEditingUserIndex] = useState<number | null>(null);
+  const [editPrefill, setEditPrefill] = useState<string | null>(null);
+  const editingUserIndexRef = useRef<number | null>(null);
+  editingUserIndexRef.current = editingUserIndex;
 
   const startRename = useCallback((id: string) => setRenamingId(id), []);
   const cancelRename = useCallback(() => setRenamingId(null), []);
@@ -666,6 +709,87 @@ let sessions = restored;
     }
   }, []);
 
+  /**
+   * 回滚到第 userIndex 条用户消息，然后重新发送 `text`。
+   *
+   * 「重新生成」与「编辑消息并重跑」共用这一条路径：
+   * - 重新生成：userIndex = 该回答对应的用户消息序号，text = 原问题
+   * - 编辑重跑：userIndex = 被编辑的用户消息序号，text = 新内容
+   *
+   * 三步缺一不可：
+   * 1. **先截断后端历史**——否则模型会看到用户刚删掉的「未来内容」；
+   * 2. **再截界面消息**——删掉该用户消息及其后，那条消息由重发取代；
+   * 3. **最后重发**——把第 userIndex 条用户消息补回历史。
+   *
+   * 顺序反了会出问题：先重发再截断会把刚发的消息也截掉。
+   */
+  const resendFrom = useCallback(
+    async (userIndex: number, text: string) => {
+      if (stateRef.current.busy) return;
+      const sessionId = stateRef.current.activeId;
+      if (!sessionId) return;
+      const session = stateRef.current.sessions.find((x) => x.id === sessionId);
+      if (!session) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      // 1. 后端历史截断。失败就不继续——否则界面删了、后端没删，
+      //    两边对不上，模型仍会看到旧上下文。
+      try {
+        await truncateHistoryApi(sessionId, keepThroughForResend(userIndex));
+      } catch (e) {
+        appendBlocks(
+          sessionId,
+          lastAssistantId(session.messages) ?? "",
+          (b) => [...b, { kind: "error", text: `回滚失败：${String(e)}` }],
+        );
+        return;
+      }
+
+      // 2. 界面消息截断
+      const kept = sliceForResend(session.messages, userIndex);
+      setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((sess) =>
+          sess.id !== sessionId ? sess : { ...sess, messages: kept },
+        ),
+      }));
+      persistNow(sessionId, session.title, session.workspace, kept);
+
+      // 3. 重新发送
+      setEditingUserIndex(null);
+      await sendMessage(trimmed);
+    },
+    [appendBlocks, persistNow, sendMessage],
+  );
+
+  /**
+   * 提交输入框内容。处于编辑状态时走「回滚 + 重发」，
+   * 否则是普通发送。输入框只认这一个入口。
+   */
+  const submitMessage = useCallback(
+    async (text: string) => {
+      const idx = editingUserIndexRef.current;
+      if (idx === null) {
+        await sendMessage(text);
+        return;
+      }
+      await resendFrom(idx, text);
+    },
+    [sendMessage, resendFrom],
+  );
+
+  /** 进入编辑状态：原文放回输入框 */
+  const beginEdit = useCallback((userIndex: number, text: string) => {
+    setEditingUserIndex(userIndex);
+    setEditPrefill(text);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingUserIndex(null);
+    setEditPrefill(null);
+  }, []);
+
 /**
    * 切到某个已有工作区的最近一个对话。
    *
@@ -795,6 +919,12 @@ setState((s) => {
       cancelRename,
       renameSession,
       sendMessage,
+      resendFrom,
+      editingUserIndex,
+      editPrefill,
+      beginEdit,
+      cancelEdit,
+      submitMessage,
       stop,
       switchWorkspace,
       newSession,
@@ -817,6 +947,12 @@ setState((s) => {
       cancelRename,
       renameSession,
       sendMessage,
+      resendFrom,
+      editingUserIndex,
+      editPrefill,
+      beginEdit,
+      cancelEdit,
+      submitMessage,
       stop,
       switchWorkspace,
     newSession,

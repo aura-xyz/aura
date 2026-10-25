@@ -12,111 +12,73 @@ import type { ChatMessage } from "../store";
  * 所以前端算不出 history 下标，只能表达「保留到第几条用户消息为止」
  * 这个语义，由后端翻译成下标（见 `truncate_history` 命令）。
  *
- * ## 两个用途
+ * ## 一个关键简化
  *
- * - **重新生成第 k 条回答**（k 是 assistant 消息序号，1-based）：
- *   保留产生它的那个用户问题，删掉回答及其后。
- *   → `keepThroughUser` = 第 k 条回答之前的用户问题条数。
- * - **编辑第 k 条用户消息并重跑**：
- *   删掉该问题本身及其后。
- *   → `keepThroughUser` = k - 1。
+ * 「重新生成第 k 条回答」与「编辑第 k 条用户消息并重跑」**后端截断点完全相同**：
+ * 都是「保留到第 k-1 条用户消息」，即删掉第 k 条用户消息及其后的一切。
+ * 之后两者都通过重新发送一次消息，把第 k 条用户消息补回去。
+ *
+ * 区别只在**重新发送的内容**：重新生成用原问题，编辑用新内容。
  */
 
 /**
- * 数出「第 index 条 assistant 消息之前」有多少条用户消息。
+ * 找出第 assistantIndex 条 assistant 回答是由第几条用户消息触发的。
  *
- * @param messages 界面上按顺序排列的消息
  * @param assistantIndex assistant 消息的 1-based 序号
- * @returns 该回答之前用户消息的条数；找不到则返回 0
+ * @returns 对应的用户消息序号（1-based）；找不到返回 null
  */
-export function userMessagesBeforeAssistant(
+export function userIndexForAssistant(
   messages: ChatMessage[],
   assistantIndex: number,
-): number {
+): number | null {
+  if (assistantIndex < 1) return null;
   let assistantSeen = 0;
   let userCount = 0;
   for (const m of messages) {
     if (m.role === "assistant") {
       assistantSeen += 1;
-      if (assistantSeen === assistantIndex) return userCount;
+      if (assistantSeen === assistantIndex) {
+        // 该回答之前至少要有一个用户问题，否则是异常数据
+        return userCount > 0 ? userCount : null;
+      }
     } else {
       userCount += 1;
-    }
-  }
-  return 0;
-}
-
-/**
- * 计算「重新生成第 assistantIndex 条回答」该传给后端的 keepThroughUser。
- *
- * @returns 保留到第几条用户消息；找不到对应回答时返回 null（不发起截断）
- */
-export function keepThroughForRegenerate(
-  messages: ChatMessage[],
-  assistantIndex: number,
-): number | null {
-  if (assistantIndex < 1) return null;
-  // 该回答之前的用户问题条数 = 保留到第几条用户消息
-  const n = userMessagesBeforeAssistant(messages, assistantIndex);
-  if (n === 0) return null; // 第一条 assistant 之前没有用户问题，异常数据
-  return n;
-}
-
-/**
- * 计算「编辑第 userIndex 条用户消息并重跑」该传的 keepThroughUser。
- *
- * 删掉该问题本身及其后 → 保留到它之前的问题。
- *
- * @param userIndex 用户消息的 1-based 序号
- * @returns 保留到第几条用户消息；非法序号返回 null
- */
-export function keepThroughForEdit(
-  messages: ChatMessage[],
-  userIndex: number,
-): number | null {
-  if (userIndex < 1) return null;
-  let userSeen = 0;
-  for (const m of messages) {
-    if (m.role === "user") {
-      userSeen += 1;
-      if (userSeen === userIndex) {
-        // 该问题本身要删掉 → 保留到前一条用户问题
-        return userIndex - 1;
-      }
     }
   }
   return null;
 }
 
 /**
- * 找出某条 assistant 消息之前（含）的用户消息条数，用于前端删除对应 UI 消息。
+ * 取第 userIndex 条用户消息的原文（重新生成时作为重发的内容）。
  *
- * 「重新生成第 k 条回答」时，界面上要删掉的是：从第 k 条 assistant 开始
- * 到末尾的全部消息。
+ * @returns 原文；序号非法返回 null
  */
-export function sliceForRegenerate(
+export function originalQuestion(
   messages: ChatMessage[],
-  assistantIndex: number,
-): ChatMessage[] {
-  let assistantSeen = 0;
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role === "assistant") {
-      assistantSeen += 1;
-      if (assistantSeen === assistantIndex) return messages.slice(0, i);
+  userIndex: number,
+): string | null {
+  if (userIndex < 1) return null;
+  let userSeen = 0;
+  for (const m of messages) {
+    if (m.role === "user") {
+      userSeen += 1;
+      if (userSeen === userIndex) return m.content;
     }
   }
-  return messages;
+  return null;
 }
 
 /**
- * 找出「编辑第 userIndex 条用户消息」时界面上要保留的部分。
+ * 重新发送时，界面上要保留的部分：**删掉第 userIndex 条用户消息及其后**。
  *
- * 该用户消息本身要被新内容替换，所以保留到它之前。
+ * 那条用户消息会被新发出的消息取代，所以连它一起删掉，避免出现两条
+ * 相同的问题。
  */
-export function sliceForEdit(
+export function sliceForResend(
   messages: ChatMessage[],
   userIndex: number,
 ): ChatMessage[] {
+  if (userIndex < 1) return messages;
   let userSeen = 0;
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === "user") {
@@ -125,4 +87,14 @@ export function sliceForEdit(
     }
   }
   return messages;
+}
+
+/**
+ * 截断点：保留到第几条用户消息。
+ *
+ * 删掉第 userIndex 条用户消息本身 → 保留到它之前的第 userIndex-1 条。
+ * `userIndex = 1` 时保留 0 条，即清空历史。
+ */
+export function keepThroughForResend(userIndex: number): number {
+  return Math.max(0, userIndex - 1);
 }
