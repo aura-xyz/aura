@@ -27,6 +27,18 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+/** 最近一条用户消息，供输入框上方向键召回 */
+function lastUserMessageOf(
+  session: { messages: Array<{ role: string; content?: string }> } | undefined,
+): string | undefined {
+  if (!session) return undefined;
+  for (let i = session.messages.length - 1; i >= 0; i -= 1) {
+    const m = session.messages[i];
+    if (m.role === "user" && m.content) return m.content;
+  }
+  return undefined;
+}
+
 // 右键目标保留原生菜单：可编辑区域（复制粘贴/输入建议），
 // 或页面存在选中文本且右键点在选区内（复制/搜索）。其余一律由
 // 捕获阶段 contextmenu 监听拦截，避免 WebView 原生页面菜单漏出。
@@ -241,6 +253,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               workspace={activeSession?.workspace ?? ""}
       onWorkspaceChange={setSessionWorkspace}
       workspaceLocked={activeSession ? activeSession.messages.length > 0 : false}
+      sessionId={activeSession?.id ?? ""}
+      lastUserMessage={lastUserMessageOf(activeSession)}
     />
             </>
           )}

@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
 import InputArea from "./InputArea";
 import type { ModelInfo } from "../lib/api";
 import type { Mode } from "../lib/mode";
+import { loadInputDraft } from "../lib/draft";
 
 function mount(overrides: Partial<Record<string, unknown>> = {}) {
   const props = {
@@ -26,6 +27,8 @@ function mount(overrides: Partial<Record<string, unknown>> = {}) {
     workspace: "E:/dev/aura",
     onWorkspaceChange: vi.fn(async () => {}),
     workspaceLocked: false,
+    sessionId: "s1",
+    lastUserMessage: undefined as string | undefined,
     ...overrides,
   };
   return { props, ...render(<InputArea {...props} />) };
@@ -33,6 +36,7 @@ function mount(overrides: Partial<Record<string, unknown>> = {}) {
 
 beforeEach(() => {
   openMock.mockClear();
+  localStorage.clear();
 });
 
 describe("InputArea", () => {
@@ -118,5 +122,65 @@ describe("InputArea", () => {
     await userEvent.click(screen.getByRole("button", { name: "停止生成" }));
     expect(props.onStop).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
+  });
+
+  /// v0.6.3：输入框内容按会话隔离保存。此前是组件内 useState，
+  /// 切换对话即丢——用户在几个对话间来回切时写了一半的话一去不回。
+  it("切换会话时各自保留草稿", async () => {
+    const a = mount({ sessionId: "s1" });
+    await userEvent.type(screen.getByRole("textbox"), "给 s1 的话");
+    a.unmount();
+
+    const b = mount({ sessionId: "s2" });
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    await userEvent.type(screen.getByRole("textbox"), "给 s2 的话");
+    b.unmount();
+
+    // 回到 s1：草稿应原样还在
+    mount({ sessionId: "s1" });
+    expect(screen.getByRole("textbox")).toHaveValue("给 s1 的话");
+  });
+
+  /// 发送后清空当前会话草稿，否则下次切回来又是已发送的内容
+  it("发送后清空草稿", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "要发出去的话");
+    await userEvent.type(box, "{Enter}");
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(loadInputDraft("s1")).toBe("");
+  });
+
+  /// 上方向键召回：仅在输入框为空时生效。非空时方向键要留给光标移动，
+  /// 抢过来用户就无法编辑中间内容了。
+  it("空输入框按上方向键召回上一条消息", async () => {
+    mount({ lastUserMessage: "上次问的问题" });
+    await userEvent.type(screen.getByRole("textbox"), "{ArrowUp}");
+    expect(screen.getByRole("textbox")).toHaveValue("上次问的问题");
+  });
+
+  it("输入框非空时上方向键不抢光标", async () => {
+    mount({ lastUserMessage: "上次问的问题" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "abc");
+    await userEvent.type(box, "{ArrowUp}");
+    expect(screen.getByRole("textbox")).toHaveValue("abc");
+  });
+
+  /// 令牌计数口径必须与后端一致（lib/tokens.ts 抄的是 context.rs 的实现），
+  /// 两处数字对不上会让用户以为估算坏了。
+  it("有内容时显示 token 计数，空输入框不显示", async () => {
+    mount({ sessionId: "s1" });
+    expect(screen.queryByText(/tokens/)).toBeNull();
+
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+    // hello：5 个非 CJK 字符 → 5/4=1 + 1 = 2
+    expect(screen.getByText("约 2 tokens")).toBeInTheDocument();
+  });
+
+  it("中文按每字 1 token 计", async () => {
+    mount({ sessionId: "s1" });
+    await userEvent.type(screen.getByRole("textbox"), "你好世界");
+    expect(screen.getByText("约 5 tokens")).toBeInTheDocument();
   });
 });

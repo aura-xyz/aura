@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import type { ModelInfo } from "../lib/api";
 import type { Mode } from "../lib/mode";
+import { estimateTokens } from "../lib/tokens";
+import { loadInputDraft, saveInputDraft } from "../lib/draft";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
 import WorkspaceSelect from "./WorkspaceSelect";
@@ -20,6 +22,10 @@ interface Props {
   onWorkspaceChange: (path: string) => Promise<void>;
   /** 首条消息已发出：工作区锁定，隐藏选择按钮（一个对话唯一对应一个工作区） */
   workspaceLocked?: boolean;
+  /** 当前会话 id。草稿按会话隔离，切换对话各自保留 */
+  sessionId: string;
+  /** 最近一条用户消息，供上方向键召回 */
+  lastUserMessage?: string;
 }
 
 export default function InputArea({
@@ -34,9 +40,27 @@ export default function InputArea({
   workspace,
   onWorkspaceChange,
   workspaceLocked = false,
+  sessionId,
+  lastUserMessage,
 }: Props) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 草稿是「切换会话时换内容」，必须知道当前显示的是哪个会话的草稿，
+  // 否则会把上个会话的草稿写进新会话。
+  const loadedForRef = useRef<string | null>(null);
+
+  // 切会话：装入该会话的草稿
+  useEffect(() => {
+    if (loadedForRef.current === sessionId) return;
+    loadedForRef.current = sessionId;
+    setValue(loadInputDraft(sessionId));
+  }, [sessionId]);
+
+  // 每次输入即存。不节流：localStorage 同步写，输入频率下量级可接受
+  useEffect(() => {
+    if (loadedForRef.current !== sessionId) return;
+    saveInputDraft(sessionId, value);
+  }, [value, sessionId]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -54,10 +78,18 @@ export default function InputArea({
     if (!workspace) return;
     onSend(text);
     setValue("");
+    saveInputDraft(sessionId, "");
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.nativeEvent.isComposing) return;
+    // 上方向键召回上一条输入。仅在输入框为空时生效——
+    // 非空时方向键要留给光标移动，抢过来会让用户无法编辑中间内容。
+    if (e.key === "ArrowUp" && !value && lastUserMessage) {
+      e.preventDefault();
+      setValue(lastUserMessage);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -134,6 +166,13 @@ export default function InputArea({
         </div>
       </div>
       <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-end gap-3">
+        {/* 令牌计数：只在有内容时出现，空输入框不显示数字（0 没有信息量）。
+            口径与后端 estimate_tokens 一致，见 lib/tokens.ts。 */}
+        {value.trim() && (
+          <span className="text-xs text-subtle" title="按后端同口径估算">
+            约 {estimateTokens(value)} tokens
+          </span>
+        )}
         <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行</p>
       </div>
     </div>
