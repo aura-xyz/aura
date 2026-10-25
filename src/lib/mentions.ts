@@ -67,6 +67,24 @@ export function findTrigger(text: string, cursor: number): MentionTrigger | null
   };
 }
 /**
+ * 归一化路径查询。
+ *
+ * **反斜杠转正斜杠**——Windows 用户习惯手打 `app\src\assets`，
+ * 而内部一律用正斜杠。用户没义务知道我们内部怎么存路径。
+ *
+ * 前后端的归一化必须**一致**：前端若按原样过滤，
+ * 后端已经归一化后返回的结果会被前端全部滤掉（面板空空如也）。
+ */
+export function normalizePathQuery(query: string): string {
+  return query
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/**
  * 路径候选（文件与目录）。
  *
  * 插入格式 `@<路径>`——与拖放文件用的是同一种写法，模型看到的东西一致。
@@ -76,9 +94,15 @@ export function fileItems(
   files: Array<{ path: string; name: string; dir: string; is_dir: boolean }>,
   query: string,
 ): MentionItem[] {
-  const q = query.trim().toLowerCase();
+  const q = normalizePathQuery(query);
   return files
-    .filter((f) => !q || f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q))
+    .filter((f) => {
+      if (!q) return true;
+      const p = f.path.toLowerCase();
+      // 带路径的查询按**路径前缀**理解（与后端一致）
+      if (q.includes("/")) return p.startsWith(q);
+      return f.name.toLowerCase().includes(q) || p.includes(q);
+    })
     .map((f) => ({
       kind: "file" as const,
       label: f.name,

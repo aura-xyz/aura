@@ -333,12 +333,12 @@ fn match_score(entry: &PathEntry, q: &str) -> Option<u8> {
     }
     if q.contains('/') {
         // 带斜杠 → 按**路径前缀**理解（`app/src` → app/src/ 下的全部）。
-        // 必须按段对齐：`app/src` 不该命中 `app/srcfoo/x.rs`。
-        return if lower == q || lower.starts_with(&format!("{q}/")) {
-            Some(2)
-        } else {
-            None
-        };
+        //
+        // 用字符串前缀而不是段对齐：用户是**逐字打**的，`app/s` 这一刻
+        // 还没打完，段对齐的话这一刻什么都出不来（面板闪一下就没）。
+        // 代价是 `app/src` 也会命中 `app/srcfoo/x.rs`——那只是多列一条，
+        // 列表里能看到完整路径，用户不会选错。
+        return if lower.starts_with(q) { Some(2) } else { None };
     }
     if first == q {
         return Some(2);
@@ -358,23 +358,48 @@ fn match_score(entry: &PathEntry, q: &str) -> Option<u8> {
     None
 }
 
+/// 归一化路径查询。
+///
+/// **反斜杠一律转成正斜杠**——Windows 用户习惯手打 `app\\src\\assets`，
+/// 而内部一律用正斜杠。用户没义务知道我们内部怎么存路径。
+fn normalize_query(query: &str) -> String {
+    query
+        .trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+/// 按查询词给所有路径打分。
+fn collect_scored(all: &[PathEntry], q: &str) -> Vec<(u8, usize, PathEntry)> {
+    let mut scored: Vec<(u8, usize, PathEntry)> = Vec::new();
+    for entry in all {
+        let Some(score) = match_score(entry, q) else {
+            continue;
+        };
+        let depth = entry.path.matches('/').count();
+        scored.push((score, depth, entry.clone()));
+    }
+    scored
+}
+
 /// 按名字/路径匹配列出路径（`@` 引用用）。
 ///
 /// 同分时**浅的在前**：`@` 刚打开时（空查询）先看到目录结构，
 /// 而不是一堆深处的文件名。
 pub fn list_paths(root: &Path, query: &str, limit: usize) -> Vec<PathEntry> {
-    let q = query
-        .trim()
-        .trim_start_matches("./")
-        .replace('\\', "/")
-        .to_lowercase();
-    let mut scored: Vec<(u8, usize, PathEntry)> = Vec::new();
-    for entry in all_paths(root) {
-        let Some(score) = match_score(&entry, &q) else {
-            continue;
-        };
-        let depth = entry.path.matches('/').count();
-        scored.push((score, depth, entry));
+    let q = normalize_query(query);
+    let all = all_paths(root);
+    let mut scored = collect_scored(&all, &q);
+
+    // **兜底**：带路径的查询若一无所获，用最后一段当名字再搜一次。
+    // 用户打 `@app\\src` 但工作区里没有 app/src（可能拼错了、可能在别处），
+    // 与其给一个空面板，不如退而求其次列出名字里带 src 的文件。
+    if scored.is_empty() && q.contains('/') {
+        if let Some(last) = q.rsplit('/').next().filter(|s| !s.is_empty()) {
+            scored = collect_scored(&all, last);
+        }
     }
     // 同分时：浅的在前 → 同深度时**文件在前**（先看到能直接引用的文件，
     // 而不是一堆子目录）→ 最后按路径名稳定排序。
@@ -535,17 +560,64 @@ mod tests {
         assert!(paths.contains(&"app/src/main.rs"), "{paths:?}");
         assert!(paths.contains(&"app/src/deep/"), "{paths:?}");
         assert!(paths.contains(&"app/src/deep/x.rs"), "{paths:?}");
-        // app/src 之外的、以及**同前缀但不同段**的都不该出现
+        // app/src 之外的不该出现
         assert!(!paths.contains(&"app/top.rs"), "{paths:?}");
+        // 同前缀但不同段的**也会**出现（字符串前缀，容忍打字中间态）：
+        // 用户逐字打 `app/s` 时段对齐会一个都出不来，面板闪一下就没。
         assert!(
-            !paths.iter().any(|p| p.starts_with("app/srcfoo")),
-            "app/src 不该命中 app/srcfoo：{paths:?}"
+            paths.iter().any(|p| p.starts_with("app/srcfoo")),
+            "字符串前缀应容忍 app/srcfoo：{paths:?}"
         );
 
         // 结尾多打一个斜杠也一样
         let with_slash = list_paths(&root, "app/src/", 20);
         let with_paths: Vec<&str> = with_slash.iter().map(|h| h.path.as_str()).collect();
         assert!(with_paths.contains(&"app/src/main.rs"), "{with_paths:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **反斜杠查询**（Windows 用户手打 `app\src\assets`）必须能用。
+    #[test]
+    fn list_paths_accepts_backslash_query() {
+        let root = std::env::temp_dir().join("aura_list_paths_backslash");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("app").join("src").join("assets")).unwrap();
+        fs::write(root.join("app").join("src").join("assets").join("logo.png"), "").unwrap();
+        fs::write(root.join("app").join("src").join("main.rs"), "").unwrap();
+
+        // 正斜杠与反斜杠结果一致
+        let slash = list_paths(&root, "app/src", 20);
+        let backslash = list_paths(&root, r"app\src", 20);
+        let a: Vec<&str> = slash.iter().map(|h| h.path.as_str()).collect();
+        let b: Vec<&str> = backslash.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(a, b);
+        assert!(b.contains(&"app/src/assets/logo.png"), "{b:?}");
+
+        // 多级反斜杠
+        let deep = list_paths(&root, r"app\src\assets", 20);
+        let d: Vec<&str> = deep.iter().map(|h| h.path.as_str()).collect();
+        assert!(d.contains(&"app/src/assets/logo.png"), "{d:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **兜底**：路径查不到时，用最后一段当名字再搜一次
+    /// （用户可能拼错了目录，或者目标在别处）。
+    #[test]
+    fn list_paths_falls_back_to_last_segment_name() {
+        let root = std::env::temp_dir().join("aura_list_paths_fallback");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("somewhere")).unwrap();
+        fs::write(root.join("somewhere").join("src-utils.rs"), "").unwrap();
+
+        // 工作区里没有 app/src，但有名字带 src 的文件
+        let hits = list_paths(&root, "app/src", 20);
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert!(
+            paths.contains(&"somewhere/src-utils.rs"),
+            "路径查不到时应退而求其次按名字找：{paths:?}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

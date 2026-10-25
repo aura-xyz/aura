@@ -108,6 +108,27 @@ describe("fileItems", () => {
     expect(items[0].insert).toBe("@<src/store.tsx>");
   });
 
+  /// Windows 用户习惯手打反斜杠路径。**前后端归一化必须一致**，
+  /// 否则后端已归一化返回的结果会被前端按原样滤光（面板空空如也）。
+  it("反斜杠查询与正斜杠等价", () => {
+    const files2 = [
+      { path: "app/src/assets/logo.png", name: "logo.png", dir: "app/src/assets", is_dir: false },
+    ];
+    const slash = fileItems(files2, "app/src");
+    const backslash = fileItems(files2, "app\\src");
+    expect(backslash.map((i) => i.insert)).toEqual(slash.map((i) => i.insert));
+    expect(backslash.length).toBe(1);
+  });
+
+  it("路径查询按前缀理解（可多级）", () => {
+    const files2 = [
+      { path: "app/src/assets/logo.png", name: "logo.png", dir: "app/src/assets", is_dir: false },
+      { path: "app/top.rs", name: "top.rs", dir: "app", is_dir: false },
+    ];
+    const items = fileItems(files2, "app/src/assets");
+    expect(items.map((i) => i.label)).toEqual(["logo.png"]);
+  });
+
   it("空过滤词返回全部", () => {
     expect(fileItems(files, "").length).toBe(4);
   });
