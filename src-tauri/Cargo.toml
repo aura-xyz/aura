@@ -66,6 +66,11 @@ tauri-plugin-notification = "2.7.0"
 # 0.2.1 已在依赖树中（updater 插件带入），声明为直接依赖不增加编译量。
 url = "2"
 
+[dev-dependencies]
+# 发布校验工具用：验安装包的 minisign 签名（examples/verify_sig.rs）。
+# 0.3.0 已在依赖树中（updater 插件带入），不增加编译量。
+minisign-verify = "0.3"
+
 [features]
 # 生产构建启用；tauri dev 由 CLI 以 --no-default-features 关闭以使用 devUrl
 custom-protocol = ["tauri/custom-protocol"]

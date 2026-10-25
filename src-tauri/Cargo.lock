@@ -225,6 +225,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-util",
+ "minisign-verify",
  "regex",
  "reqwest",
  "rusqlite",
