@@ -313,6 +313,11 @@ fn match_score(entry: &PathEntry, q: &str) -> Option<u8> {
     if q.is_empty() {
         return Some(7);
     }
+    // 结尾斜杠去掉（用户可能打 `app/src/`），前缀比对时按段对齐
+    let q = q.trim_end_matches('/');
+    if q.is_empty() {
+        return Some(7);
+    }
     let lower = entry.path.to_lowercase();
     let name = entry
         .path
@@ -327,8 +332,13 @@ fn match_score(entry: &PathEntry, q: &str) -> Option<u8> {
         return Some(if entry.is_dir { 1 } else { 0 });
     }
     if q.contains('/') {
-        // 带斜杠 → 按路径前缀理解（`src/ap` → src/app/...）
-        return if lower.starts_with(q) { Some(2) } else { None };
+        // 带斜杠 → 按**路径前缀**理解（`app/src` → app/src/ 下的全部）。
+        // 必须按段对齐：`app/src` 不该命中 `app/srcfoo/x.rs`。
+        return if lower == q || lower.starts_with(&format!("{q}/")) {
+            Some(2)
+        } else {
+            None
+        };
     }
     if first == q {
         return Some(2);
@@ -502,6 +512,40 @@ mod tests {
         let sub_paths: Vec<&str> = sub.iter().map(|h| h.path.as_str()).collect();
         assert!(sub_paths.contains(&"app/lib/util.rs"), "{sub_paths:?}");
         assert!(!sub_paths.contains(&"app/main.rs"), "{sub_paths:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **嵌套目录**：`@app/src` 要列出 app/src 下的全部文件与文件夹。
+    #[test]
+    fn list_paths_supports_nested_directory_prefix() {
+        let root = std::env::temp_dir().join("aura_list_paths_nested");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("app").join("src").join("deep")).unwrap();
+        fs::create_dir_all(root.join("app").join("srcfoo")).unwrap();
+        fs::write(root.join("app").join("src").join("main.rs"), "").unwrap();
+        fs::write(root.join("app").join("src").join("deep").join("x.rs"), "").unwrap();
+        fs::write(root.join("app").join("srcfoo").join("y.rs"), "").unwrap();
+        fs::write(root.join("app").join("top.rs"), "").unwrap();
+
+        let hits = list_paths(&root, "app/src", 20);
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        // app/src 下的东西都在
+        assert!(paths.contains(&"app/src/"), "{paths:?}");
+        assert!(paths.contains(&"app/src/main.rs"), "{paths:?}");
+        assert!(paths.contains(&"app/src/deep/"), "{paths:?}");
+        assert!(paths.contains(&"app/src/deep/x.rs"), "{paths:?}");
+        // app/src 之外的、以及**同前缀但不同段**的都不该出现
+        assert!(!paths.contains(&"app/top.rs"), "{paths:?}");
+        assert!(
+            !paths.iter().any(|p| p.starts_with("app/srcfoo")),
+            "app/src 不该命中 app/srcfoo：{paths:?}"
+        );
+
+        // 结尾多打一个斜杠也一样
+        let with_slash = list_paths(&root, "app/src/", 20);
+        let with_paths: Vec<&str> = with_slash.iter().map(|h| h.path.as_str()).collect();
+        assert!(with_paths.contains(&"app/src/main.rs"), "{with_paths:?}");
 
         let _ = fs::remove_dir_all(&root);
     }

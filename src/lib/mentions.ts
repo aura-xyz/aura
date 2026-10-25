@@ -39,37 +39,33 @@ export interface MentionItem {
  * 找出光标处的触发符。
  *
  * 规则（每条都有代价，别随便改）：
- * 1. 从光标往回扫「非空白」字符，遇到触发符停下——这样 `@ab` 里的
- *    `ab` 才是过滤词，而不是「光标左边必须是触发符」（那样打两个字就失效）。
- * 2. 触发符**前面**必须是行首或空白：`a@b`（邮箱）、`src/lib`（路径）
- *    都不该触发。
- * 3. 过滤词里不能有空白：一旦打了空格，这次触发就结束了。
+ * 1. 从光标往回扫到**词元开头**（前一个字符是空白，或已到文首），
+ *    再看词元的**首字符**是不是触发符。
+ *    —— 不能「往回撞见第一个 `@` 或 `/` 就停」：那样 `@app/src` 会先撞上
+ *    内层的 `/`，被当成技能触发，文件面板直接消失。词元首字符才是触发符。
+ * 2. 词元首字符必须是触发符：`a@b.com`（邮箱）、`src/lib`（路径）都不是触发。
+ * 3. 过滤词 = 词元首字符之后、光标之前的那一段（所以 `@ab` 的过滤词是 `ab`，
+ *    光标停在中间时只取到光标为止）。
  */
 export function findTrigger(text: string, cursor: number): MentionTrigger | null {
   if (cursor <= 0 || cursor > text.length) return null;
 
-  let i = cursor;
-  while (i > 0) {
-    const c = text[i - 1];
-    if (c === "@" || c === "/") break;
-    if (/\s/.test(c)) return null;
-    i -= 1;
-  }
-  if (i === 0) return null; // 扫到行首都没遇到触发符
+  // 往回扫到词元开头
+  let start = cursor;
+  while (start > 0 && !/\s/.test(text[start - 1])) start -= 1;
+  if (start === cursor) return null; // 光标左边是空白：没有词元
 
-  const char = text[i - 1];
-  const before = i >= 2 ? text[i - 2] : "";
-  if (before && !/\s/.test(before)) return null; // 邮箱 / 路径里的 @ 与 /
+  const char = text[start];
+  if (char !== "@" && char !== "/") return null;
 
   return {
     kind: char === "@" ? "file" : "skill",
-    char: char as "@" | "/",
-    start: i - 1,
+    char,
+    start,
     end: cursor,
-    query: text.slice(i, cursor),
+    query: text.slice(start + 1, cursor),
   };
 }
-
 /**
  * 路径候选（文件与目录）。
  *

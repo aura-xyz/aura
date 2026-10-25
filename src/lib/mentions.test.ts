@@ -40,6 +40,23 @@ describe("findTrigger", () => {
     expect(t?.query).toBe("doc");
   });
 
+  /// 嵌套目录：`@app/src` 仍是**文件**触发，过滤词是整段路径。
+  /// 早先的实现往回撞见第一个 `/` 就停，`@app/src` 会被当成技能触发。
+  it("嵌套目录仍是文件触发，过滤词是整段路径", () => {
+    const t = findTrigger("@app/src", 8);
+    expect(t?.kind).toBe("file");
+    expect(t?.query).toBe("app/src");
+    expect(t?.start).toBe(0);
+  });
+
+  it("嵌套目录在空白之后同样成立", () => {
+    // "看下 @app/src" → @ 在下标 3，光标在末尾（11）
+    const t = findTrigger("看下 @app/src", 11);
+    expect(t?.kind).toBe("file");
+    expect(t?.query).toBe("app/src");
+    expect(t?.start).toBe(3);
+  });
+
   it("邮箱里的 @ 不触发", () => {
     // 触发符前面不是空白 → 不是引用
     expect(findTrigger("a@b.com", 6)).toBeNull();
