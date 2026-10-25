@@ -17,6 +17,7 @@ use commands::{
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
     get_provider_statuses, get_providers, get_selected_model, get_workspace,
     inspect_market_skill, install_market_skill, list_allowlist_paths, list_market_providers,
+    list_workspace_files,
     list_market_skills, list_skill_sources, list_skills, list_timeline, load_sessions,
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
@@ -126,6 +127,15 @@ pub fn run() {
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+
+            // v0.7.0：技能目录必须**真实存在**。
+            //
+            // 白名单的内置默认项指向 `skills/local`，目录不存在时：
+            // 设置页会挂「目录不存在」的角标，模型也往里写不了东西
+            // （用户实测反馈）。所以这里先把 market/local 都建出来。
+            let skills_dir = dir.join("skills");
+            let _ = std::fs::create_dir_all(&skills_dir.join("market"));
+            let _ = std::fs::create_dir_all(&skills_dir.join("local"));
 
             // v0.6.0：登记技能根目录。内置技能随安装包分发（只读）；
             // 市场/本地技能放应用数据目录，避开安装目录的 UAC 权限问题，
@@ -308,6 +318,7 @@ pub fn run() {
             add_skill_source,
             remove_skill_source,
             list_allowlist_paths,
+            list_workspace_files,
             check_allowlist_path,
             add_allowlist_path,
             remove_allowlist_path,
