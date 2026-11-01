@@ -33,7 +33,7 @@ export default function ModeTabs({ mode, onChange, disabled }: Props) {
             className={[
               "rounded-full px-2.5 py-1 text-xs transition-colors",
               active
-                ? "bg-brand text-white"
+                ? "bg-brand text-white ring-2 ring-brand/30"
                 : "text-subtle hover:bg-bubble hover:text-foreground",
               disabled ? "cursor-not-allowed opacity-50" : "",
             ].join(" ")}

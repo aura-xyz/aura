@@ -64,7 +64,7 @@ export default function StartScreen({
                 key={c.name}
                 type="button"
                 onClick={() => onPick(c.prompt)}
-                className="group flex max-w-[16rem] flex-col items-start gap-0.5 rounded-card border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-brand"
+                className="group flex max-w-[16rem] flex-col items-start gap-0.5 rounded-card border border-line bg-surface shadow-sm px-3 py-2 text-left transition-colors hover:border-brand hover:shadow-sm"
               >
                 <span className="text-sm font-medium transition-colors group-hover:text-brand">
                   {c.title}
