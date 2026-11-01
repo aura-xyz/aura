@@ -1,11 +1,20 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.2-rc.1/Aura_0.7.2-rc.1_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjYwWUxFdjhvNEFLWGpicGMvbTZrbGtDbDNJWEFnUjgwVW9qeUJxV1A5U1RZZzM0bE5naXZrQ2g2QzBEOU5QbGpLSzlMTVI0RE44eHNCMUtmdmRTSXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTI5MTcwCWZpbGU6YXVyYV8wLjcuMi1yYy4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMi1yYy4xCjV0RTNsemdPOVNjVkVQRWtmZStNdVV6cjVKb3lRcEEydWZwNTZkTnhLYnZJTFBZMEF6MDJxa2c1SWUyS3Y0S2t6NFhQcWVoZnJWTVV0ZkwyQWNucENBPT0K"
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.2-rc.2/Aura_0.7.2-rc.2_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjk5ekZ2UXpnRWNKRDFZMXQrTFJQWHRsUjkzRmhBS2Q4cjRodml2blZFT2dXVzJLVXhkdEFkOEIrQVZSbW9VSFdjRE9wMzFRcUxHSkEzdEtJZE5MSXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTMxMjA1CWZpbGU6YXVyYV8wLjcuMi1yYy4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMi1yYy4yCjRxUlQ2UkkzY3hNd3lmcmhlZCtaOHUyV0hjSStuOWRyTkxSYVlTT2lSNktvOHFPamtsYkN3UnN6QldTNEtDZU1nLzNJUDc0djhlMC9NN0JKd0FIdEF3PT0K"
                                          }
                   },
-    "pub_date":  "2026-11-01T10:33:29Z",
-    "version":  "0.7.2-rc.1",
-    "notes":  "预发布测试版：自动更新机制实测\n\n## 更新内容\n- 更新清单改为优先走加速镜像，检查更新更快更稳\n- 下载源从 2 个扩到 7 个，自动挑当前最快的那个\n- 先单独测官方源：够快就直接用官方，不再让多个源互相抢带宽\n- 官方源慢时才并发测镜像，测速结果更准\n\n这是预发布版本，仅用于自动更新机制实测。日常使用建议停留在 0.7.1，等 0.7.2 正式版。\n"
+    "pub_date":  "2026-11-01T11:07:31Z",
+    "mirrors":  [
+                    "https://v4.gh-proxy.org/",
+                    "https://cdn.gh-proxy.org/",
+                    "https://gh-proxy.org/",
+                    "https://v6.gh-proxy.org/",
+                    "https://axisnow.gh-proxy.org/",
+                    "https://ghfast.top/",
+                    "https://gh-proxy.com/"
+                ],
+    "version":  "0.7.2-rc.2",
+    "notes":  "预发布测试版：自动更新机制实测（第二跳）\n\n## 更新内容\n- 更新过程落盘到日志文件，出问题时能查到用了哪个源、多快、为什么失败\n- 镜像地址可随更新清单下发：以后换镜像不用等新版本\n- 检查更新失败时显示真实原因，并直接给出手动下载的去路\n\n这是预发布版本，仅用于自动更新机制实测。装好 0.7.2-rc.1 后应能收到本版本的更新提示。\n"
 }
