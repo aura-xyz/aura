@@ -50,7 +50,7 @@ import {
 // 保证与 Rust 侧 canonicalize 后的键一致
 const normWs = (p: string) => p.replace(/\\/g, "/").replace(/^\/\/\?\//, "");
 
-export type BlockKind = "text" | "action" | "notice" | "error";
+export type BlockKind = "text" | "action" | "notice" | "error" | "thinking";
 
 export interface Block {
   kind: BlockKind;

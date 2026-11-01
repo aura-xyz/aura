@@ -7,6 +7,7 @@ import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
 import VersionSwitcher from "./VersionSwitcher";
+import { ReasoningRow } from "./ReasoningRow";
 
 // 以下两个组件必须 memo：store 的打字机每 30ms 触发一次 setState，
 // 消息流里的每一条都会跟着重新 render。而 store 的 appendBlocks
@@ -70,6 +71,8 @@ function renderBlock(block: Block, i: number) {
       return <NoticeRow key={i} text={block.text} />;
     case "error":
       return <ErrorRow key={i} text={block.text} />;
+    case "thinking":
+      return <ReasoningRow key={i} text={block.text} running={false} />;
   }
 }
 
