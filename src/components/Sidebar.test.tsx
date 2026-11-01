@@ -240,6 +240,35 @@ describe("Sidebar", () => {
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 
+  /// 面板类导航项（文件 / 网页）由 activePanel 决定高亮，而不看 view。
+  it("面板类导航项按 activePanel 高亮", async () => {
+    const blocks = [
+      { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: vi.fn() },
+      { id: "files", label: "文件", icon: Plug, onClick: vi.fn(), panel: "files" },
+      { id: "web", label: "网页", icon: Sparkles, onClick: vi.fn(), panel: "web" },
+    ];
+    await mount({ navBlocks: blocks, activePanel: "files" });
+    expect(screen.getByText("文件").closest("button")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByText("网页").closest("button")).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
+  /// 点击面板类导航项走它自己的 onClick（由 App 负责打开对应右侧面板）。
+  it("点击面板类导航项触发其 onClick", async () => {
+    const onFiles = vi.fn();
+    const blocks = [
+      { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: vi.fn() },
+      { id: "files", label: "文件", icon: Plug, onClick: onFiles, panel: "files" },
+    ];
+    await mount({ navBlocks: blocks });
+    await userEvent.click(screen.getByText("文件"));
+    expect(onFiles).toHaveBeenCalledTimes(1);
+  });
+
   /// 选中态是「激活态锚点」：v0.6.3 把侧边栏选中会话项从灰底改为品牌蓝浅底
   /// 加左侧品牌色竖线，与页签激活线同源。此前选中与未选中的唯一区别是
   /// 深浅不同的灰，导航当前位置不可读。

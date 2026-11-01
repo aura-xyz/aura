@@ -31,6 +31,8 @@ interface Props {
   view: View;
   /** 顶部导航区块，由外部注入，默认见 App.tsx DEFAULT_NAV_BLOCKS */
   navBlocks: NavBlock[];
+  /** 右侧面板当前内容 id（未打开时为 null），用于高亮面板类导航项 */
+  activePanel?: string | null;
   onOpenSettings: () => void;
   /** 选中会话后回调，用于从设置/Skills/MCP 页切回对话视图 */
   onNavigate?: () => void;
@@ -44,6 +46,7 @@ function basename(p: string): string {
 export default function Sidebar({
   view,
   navBlocks,
+  activePanel = null,
   onOpenSettings,
   onNavigate,
 }: Props) {
@@ -176,7 +179,9 @@ function toggleExpand(w: string) {
         className={`shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}
       >
         {navBlocks.map((block) => {
-          const active = block.id !== "new" && view === block.id;
+          const active = block.panel
+            ? activePanel === block.panel
+            : block.id !== "new" && view === block.id;
           return (
             <button
               key={block.id}

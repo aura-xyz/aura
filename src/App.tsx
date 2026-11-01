@@ -7,6 +7,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
+  FolderTree,
+  Globe,
   History,
   MessageSquarePlus,
   PanelRightClose,
@@ -113,7 +115,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp" | "timeline">(
     "chat",
   );
-  // 左侧导航默认区块，由 Shell 拥有 onClick 闭包（newSession / setView）。
+  // 左侧导航默认区块，由 Shell 拥有 onClick 闭包（newSession / setView 等）。
   const navBlocks: { id: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; panel?: string }[] = useMemo(
     () => [
       {
@@ -123,6 +125,28 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
         onClick: () => {
           newSession();
           setView("chat");
+        },
+      },
+      {
+        id: "files",
+        label: "文件",
+        icon: FolderTree,
+        panel: "files",
+        onClick: () => {
+          setView("chat");
+          setRightbarShown(true);
+          setRightbarTab("files");
+        },
+      },
+      {
+        id: "web",
+        label: "网页",
+        icon: Globe,
+        panel: "web",
+        onClick: () => {
+          setView("chat");
+          setRightbarShown(true);
+          setRightbarTab("web");
         },
       },
       {
@@ -431,6 +455,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
         <Sidebar
           view={view}
           navBlocks={navBlocks}
+          activePanel={rightbarShown ? rightbarTab : null}
           onOpenSettings={() => setView("settings")}
           onNavigate={() => setView("chat")}
         />
