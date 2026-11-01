@@ -59,7 +59,7 @@ export function ActionRow({
           />
         )}
         <span
-          className={`min-w-0 break-all ${failed ? "text-danger" : "text-subtle"}`}
+          className={`min-w-0 break-all ${failed ? "text-danger" : ok === true ? "text-success" : "text-subtle"}`}
         >
           {text}
         </span>

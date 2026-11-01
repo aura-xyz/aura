@@ -47,7 +47,7 @@ export default function ScrollToBottom({
       type="button"
       onClick={jump}
       aria-label="回到底部"
-      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-subtle shadow-md transition-colors hover:border-brand hover:text-brand"
+      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-subtle shadow-md transition-colors hover:border-brand hover:text-brand hover:shadow-lg hover:scale-105"
     >
       <ArrowDown size={12} className="shrink-0" />
       <span>回到底部</span>
