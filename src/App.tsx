@@ -506,11 +506,11 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
 }
 
 export default function App() {
-  const { theme, setTheme } = useTheme();
+  const { resolved, setTheme } = useTheme();
 
   return (
     <StoreProvider>
-      <Shell theme={theme} setTheme={setTheme} />
+      <Shell theme={resolved} setTheme={setTheme as (t: "light" | "dark") => void} />
     </StoreProvider>
   );
 }
