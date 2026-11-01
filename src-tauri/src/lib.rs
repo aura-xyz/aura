@@ -10,6 +10,7 @@ pub mod providers;
 pub mod secure;
 pub mod timeline;
 pub mod tools;
+pub mod update_log;
 pub mod updater;
 
 use commands::{
@@ -136,6 +137,10 @@ pub fn run() {
             let skills_dir = dir.join("skills");
             let _ = std::fs::create_dir_all(&skills_dir.join("market"));
             let _ = std::fs::create_dir_all(&skills_dir.join("local"));
+
+            // v0.7.2-rc.2：更新日志目录。日志写不进去不致命（`log_event`
+            // 全程静默），但目录得有个地方——先建，省得第一次写的时候再判断。
+            update_log::init(dir.join("logs"));
 
             // v0.6.0：登记技能根目录。内置技能随安装包分发（只读）；
             // 市场/本地技能放应用数据目录，避开安装目录的 UAC 权限问题，
@@ -458,31 +463,86 @@ mod manifest_tests {
     /// （更新闭环此前从未被验证过）。这条测试会当场抓住那次错误。
     #[test]
     fn release_manifest_matches_updater_schema() {
-        let raw = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../release/latest.json"
-        ))
-        .expect("release/latest.json 必须存在：兜底端点靠它");
-
+        let raw = manifest_raw();
         let inner: tauri_plugin_updater::RemoteReleaseInner =
             serde_json::from_str(&raw).expect("清单结构必须能被 updater 插件反序列化");
 
+        // 版本决定「要几个平台项」：
+        // 正式版必须 NSIS + MSI 都有（v0.6.3 起的既定形态）；
+        // rc 期 MSI 产不出来——WiX 要求 pre-release 标识纯数字，`rc.1` 不合规，
+        // 只能 `--bundles nsis`（见 §22.41）。若这里硬要求两项，rc 清单一提交
+        // 测试就红，而那是预期状态。
+        let version = serde_json::from_str::<serde_json::Value>(&raw)
+            .expect("清单必须是合法 JSON")["version"]
+            .as_str()
+            .expect("清单必须有字符串 version")
+            .to_string();
+        let is_prerelease = version.contains('-');
+
         match inner {
             tauri_plugin_updater::RemoteReleaseInner::Static { platforms } => {
-                for target in ["windows-x86_64", "windows-x86_64-msi"] {
-                    let p = platforms
-                        .get(target)
-                        .unwrap_or_else(|| panic!("缺少平台键 {target}"));
+                // NSIS 项**永远**必须有：已发布的所有客户端都是用 NSIS 装的
+                let nsis = platforms
+                    .get("windows-x86_64")
+                    .unwrap_or_else(|| panic!("缺少平台键 windows-x86_64"));
+                assert!(
+                    nsis.url.as_str().starts_with("https://"),
+                    "windows-x86_64 的 url 必须是绝对地址"
+                );
+                assert!(!nsis.signature.is_empty(), "windows-x86_64 的 signature 不能为空");
+
+                if is_prerelease {
+                    // rc 期允许缺 MSI 项，但**一旦有就必须完整**
+                    if let Some(p) = platforms.get("windows-x86_64-msi") {
+                        assert!(
+                            p.url.as_str().starts_with("https://"),
+                            "windows-x86_64-msi 的 url 必须是绝对地址"
+                        );
+                        assert!(!p.signature.is_empty(), "windows-x86_64-msi 的 signature 不能为空");
+                    }
+                } else {
+                    let msi = platforms.get("windows-x86_64-msi").unwrap_or_else(|| {
+                        panic!("正式版（{version}）必须同时提供 windows-x86_64-msi")
+                    });
                     assert!(
-                        p.url.as_str().starts_with("https://"),
-                        "{target} 的 url 必须是绝对地址"
+                        msi.url.as_str().starts_with("https://"),
+                        "windows-x86_64-msi 的 url 必须是绝对地址"
                     );
-                    assert!(!p.signature.is_empty(), "{target} 的 signature 不能为空");
+                    assert!(!msi.signature.is_empty(), "windows-x86_64-msi 的 signature 不能为空");
                 }
             }
             tauri_plugin_updater::RemoteReleaseInner::Dynamic(_) => {
                 panic!("应为 Static 格式（platforms 映射），不是单平台 Dynamic 格式")
             }
         }
+    }
+
+    /// 清单里加了 `mirrors` 这类**插件不认识**的顶层字段时，客户端仍必须能解析。
+    ///
+    /// 这条不是形式主义：`mirrors`（v0.7.2-rc.2）是给**我们自己**读的字段，
+    /// 但清单同时喂给插件的 `RemoteRelease`。插件 v2.13.3 的 `RemoteReleaseInner`
+    /// 是 `#[serde(untagged)]` 且全库无 `deny_unknown_fields`，未知字段被忽略 ——
+    /// 所以老客户端（0.7.1）不受影响。**若哪天插件改成严格模式，加了 mirrors
+    /// 的清单会让所有存量客户端检查更新直接失败**，这条测试负责提前发现。
+    #[test]
+    fn manifest_with_mirrors_still_deserializes() {
+        let mut v: serde_json::Value = serde_json::from_str(&manifest_raw()).expect("清单必须是合法 JSON");
+        v["mirrors"] = serde_json::json!([
+            "https://v4.gh-proxy.org/",
+            "https://ghfast.top/"
+        ]);
+        let parsed: Result<tauri_plugin_updater::RemoteReleaseInner, _> = serde_json::from_value(v);
+        assert!(
+            parsed.is_ok(),
+            "含 mirrors 字段的清单必须仍能被 updater 插件反序列化（否则存量客户端全部更新失败）"
+        );
+    }
+
+    fn manifest_raw() -> String {
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../release/latest.json"
+        ))
+        .expect("release/latest.json 必须存在：兜底端点靠它")
     }
 }
