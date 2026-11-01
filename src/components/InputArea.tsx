@@ -15,6 +15,8 @@ import { listSkills, listWorkspaceFiles } from "../lib/api";
 import MentionMenu from "./MentionMenu";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
+import { StatsPills } from "./StatsPills";
+import { TurnUsagePanel } from "./TurnUsagePanel";
 import WorkspaceSelect from "./WorkspaceSelect";
 
 interface Props {
@@ -353,9 +355,9 @@ export default function InputArea({
           </div>
         </div>
       </div>
-      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-end gap-3">
-        {/* 令牌计数：只在有内容时出现，空输入框不显示数字（0 没有信息量）。
-            口径与后端 estimate_tokens 一致，见 lib/tokens.ts。 */}
+      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
+        <StatsPills />
+        <TurnUsagePanel />
         {value.trim() && (
           <span className="text-xs text-subtle" title="按后端同口径估算">
             约 {estimateTokens(value)} tokens

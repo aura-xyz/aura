@@ -1,0 +1,15 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dialog {
+  width: 360px;
+  background: var(--dsw-alias-bg-base);
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  padding: 1.5rem;
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--shadow-md);
+}
