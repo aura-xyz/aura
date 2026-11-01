@@ -7,7 +7,7 @@
 import { memo, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Info, Database } from "lucide-react";
-import { useStore } from "../store";
+import { useStore, type Session } from "../store";
 import { estimateTokens } from "../lib/tokens";
 import dialogCss from "./stat-dialog.module.css";
 import css from "./TurnUsagePanel.module.css";
@@ -17,7 +17,7 @@ function formatTokens(n: number): string {
 }
 
 export const TurnUsagePanel = memo(function TurnUsagePanel() {
-  let activeSession: typeof import("../store").Session | undefined;
+  let activeSession: Session | undefined;
   try {
     activeSession = useStore().activeSession;
   } catch {
@@ -27,17 +27,21 @@ export const TurnUsagePanel = memo(function TurnUsagePanel() {
 
   const usage = useMemo(() => {
     if (!activeSession) return null;
-    const assistantMsgs = activeSession.messages.filter((m) => m.role === "assistant");
+    const assistantMsgs = activeSession.messages.filter(
+      (m: typeof activeSession.messages[number]) => m.role === "assistant",
+    );
     if (assistantMsgs.length === 0) return null;
     const last = assistantMsgs[assistantMsgs.length - 1];
     const text = last.blocks
       .filter((b) => b.kind === "text")
       .map((b) => (b.kind === "text" ? b.text : ""))
       .join("");
-    const input = estimateTokens(activeSession.messages
-      .filter((m) => m.role === "user")
-      .map((m) => m.content)
-      .join("\n"));
+    const input = estimateTokens(
+      activeSession.messages
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join("\n"),
+    );
     const output = estimateTokens(text);
     return { input, output, total: input + output };
   }, [activeSession]);

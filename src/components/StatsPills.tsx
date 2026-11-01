@@ -6,7 +6,7 @@
  */
 import { memo, useMemo } from "react";
 import { Activity, Clock } from "lucide-react";
-import { useStore, type ChatMessage } from "../store";
+import { useStore, type ChatMessage, type Session } from "../store";
 
 interface WindowStats {
   turns: number;
@@ -40,7 +40,7 @@ export function formatDuration(ms: number): string {
 }
 
 export const StatsPills = memo(function StatsPills() {
-  let activeSession: typeof import("../store").Session | undefined;
+  let activeSession: Session | undefined;
   try {
     activeSession = useStore().activeSession;
   } catch {
