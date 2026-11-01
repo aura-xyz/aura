@@ -1,15 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.1/Aura_0.7.1_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjJrMFVQOVdwNHB4dEVhcnNMbFBaL0ZWaWM1TXFPMjNWM1hlWFVvWTJXamhZckhmNEE3dTBKRUc1M2xlMzlCN1U4Y05CVDFnOUJCVVJWY0crcW5ZeWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTIxNTUzCWZpbGU6YXVyYV8wLjcuMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC43LjEKdmxPVDFGcVVZR1dpOEU2c1hIK3h1ZGtpMkg2RFdPNy9QcDFIQW80NUJDT2psV05yQzlyeFo1c0MraGxXWVl3REk5RjRlSjhjYlNuMDlDdGdTRk9IRHc9PQo="
-                                         },
-                      "windows-x86_64-msi":  {
-                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.1/Aura_0.7.1_win_x64.msi",
-                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjNsRmVLN0pBMlcvR3NKZnpWeXR0b3E3d1BPOG1ML2hkRjBBaFVNdGtSR2dTRk9seTcrUWZsRmROYUc0blJFWWVqYmQ3ZlFpQlcvbXhhQkFuZDV0M0E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTIxNTUzCWZpbGU6YXVyYV8wLjcuMV94NjRfZW4tVVMubXNpCXZlcnNpb246MC43LjEKanNSeWlRdzdPUDRsN1F3YWgyTjh2YW1hR0xuN29ILy9NVlc5MVJJQllFaWh6ZVRYSjEvV0NqQ2gyYnhNSjRRcXM4Z3g4QW9IdW9iOHhONERKR1VlQmc9PQo="
-                                             }
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.7.2-rc.1/Aura_0.7.2-rc.1_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjYwWUxFdjhvNEFLWGpicGMvbTZrbGtDbDNJWEFnUjgwVW9qeUJxV1A5U1RZZzM0bE5naXZrQ2g2QzBEOU5QbGpLSzlMTVI0RE44eHNCMUtmdmRTSXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTI5MTcwCWZpbGU6YXVyYV8wLjcuMi1yYy4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMi1yYy4xCjV0RTNsemdPOVNjVkVQRWtmZStNdVV6cjVKb3lRcEEydWZwNTZkTnhLYnZJTFBZMEF6MDJxa2c1SWUyS3Y0S2t6NFhQcWVoZnJWTVV0ZkwyQWNucENBPT0K"
+                                         }
                   },
-    "pub_date":  "2026-10-25T09:51:35Z",
-    "version":  "0.7.1",
-    "notes":  "## 更新内容\n- 重做/编辑重跑前副作用预检：有写/执行工具时弹确认框，防误操作\n- 托盘关闭首次提示通知：避免用户困惑\u0027关了去哪了\u0027\n- agent:action 事件新增 tool 字段：前端可直接识别工具类型\n- ConfirmDialog 通用确认弹窗组件：复用于技能安装与重做确认\n- 修复若干已知问题并完善测试覆盖\n"
+    "pub_date":  "2026-11-01T10:33:29Z",
+    "version":  "0.7.2-rc.1",
+    "notes":  "预发布测试版：自动更新机制实测\n\n## 更新内容\n- 更新清单改为优先走加速镜像，检查更新更快更稳\n- 下载源从 2 个扩到 7 个，自动挑当前最快的那个\n- 先单独测官方源：够快就直接用官方，不再让多个源互相抢带宽\n- 官方源慢时才并发测镜像，测速结果更准\n\n这是预发布版本，仅用于自动更新机制实测。日常使用建议停留在 0.7.1，等 0.7.2 正式版。\n"
 }
