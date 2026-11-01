@@ -260,6 +260,18 @@ export function listDirectory(
   return invoke("list_directory", { sessionId, path });
 }
 
+/**
+ * 读取文本文件内容（右侧文件浏览面板预览用）。
+ *
+ * 上限 256KB，超限或非 UTF-8 会返回可读错误（可能是二进制文件）。
+ */
+export function readFileText(
+  sessionId: string,
+  path: string,
+): Promise<string> {
+  return invoke("read_file_text", { sessionId, path });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });

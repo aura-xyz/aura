@@ -1295,6 +1295,53 @@ pub fn list_directory(
     Ok(out)
 }
 
+/// 读取文本文件内容（右侧文件浏览面板预览用，v0.8.0）。
+///
+/// 上限 256KB，超限或非 UTF-8 直接返回可读错误；访问范围同样受工作区 + 白名单约束。
+#[tauri::command]
+pub fn read_file_text(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<String, String> {
+    const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
+    let workspace = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    };
+    let workspace = match workspace {
+        Some(w) => PathBuf::from(w),
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Err("尚未选择工作区".into());
+    }
+    let allowlist = {
+        let db = state.db.lock().map_err(lock_err)?;
+        allowlist_paths(&db)
+    };
+    let scope = crate::tools::AccessScope::new(workspace, allowlist)
+        .map_err(|e| format!("{e}"))?;
+
+    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::ensure_allowed(&scope, &target)?;
+    let meta = std::fs::metadata(&target).map_err(|e| format!("文件不存在: {e}"))?;
+    if meta.is_dir() {
+        return Err("是目录，无法作为文本预览".into());
+    }
+    if meta.len() > MAX_PREVIEW_BYTES {
+        return Err(format!(
+            "文件过大（{} KB），暂不支持预览（上限 {} KB）",
+            meta.len() / 1024,
+            MAX_PREVIEW_BYTES / 1024
+        ));
+    }
+    std::fs::read_to_string(&target).map_err(|_| "无法读取为 UTF-8 文本（可能是二进制文件）".to_string())
+}
+
 /// 列出全部白名单条目（内置 + 用户添加）。
 #[tauri::command]
 pub fn list_allowlist_paths(state: State<'_, AppState>) -> Result<Vec<AllowlistPathView>, String> {    let db = state.db.lock().map_err(lock_err)?;

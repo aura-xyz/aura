@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
+import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
 import RightPanel from "./components/RightPanel";
@@ -90,6 +91,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     insertIntoInput,
     stop,
     activeSession,
+    activeId,
     sessions,
     models,
     selectedModel,
@@ -150,6 +152,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const scrollRef = useRef<HTMLDivElement>(null);
   const [rightbarShown, setRightbarShown] = useState(false);
   const [rightbarWidth, setRightbarWidth] = useState(320);
+  const [rightbarTab, setRightbarTab] = useState<"files" | "todo">("files");
   const rightbarRef = useRef<HTMLDivElement | null>(null);
 
   /**
@@ -491,15 +494,46 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               className="flex shrink-0 flex-col overflow-hidden border-l border-line transition-width duration-200 ease-in-out"
               style={{ width: rightbarShown ? `${rightbarWidth}px` : 0 }}
             >
-              <button
-                type="button"
-                onClick={() => setRightbarShown(false)}
-                className="mx-3 mt-3 mb-1 flex items-center gap-1.5 rounded-tag px-1.5 py-1 text-left text-[11px] font-medium tracking-[0.08em] text-subtle transition-colors hover:bg-bubble"
-              >
-                <PanelRightClose size={12} aria-hidden />
-                关闭面板
-              </button>
-              {view === "chat" && <RightPanel />}
+              <div className="mx-2 mt-2 mb-1 flex items-center gap-0.5">
+                {(
+                  [
+                    { id: "files", label: "文件" },
+                    { id: "todo", label: "任务" },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setRightbarTab(tab.id)}
+                    aria-current={rightbarTab === tab.id ? "page" : undefined}
+                    className={`rounded-tag px-2 py-1 text-[11px] font-medium tracking-[0.04em] transition-colors ${
+                      rightbarTab === tab.id
+                        ? "bg-bubble text-foreground"
+                        : "text-subtle hover:bg-bubble hover:text-foreground"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setRightbarShown(false)}
+                  aria-label="关闭面板"
+                  title="关闭面板"
+                  className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+                >
+                  <PanelRightClose size={13} aria-hidden />
+                </button>
+              </div>
+              {rightbarTab === "files" ? (
+                <FileBrowserPanel sessionId={activeId} />
+              ) : view === "chat" ? (
+                <RightPanel />
+              ) : (
+                <p className="px-3 py-4 text-[11px] text-subtle">
+                  任务面板只在对话视图可用
+                </p>
+              )}
             </aside>
           </>
         )}
