@@ -43,6 +43,7 @@ import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
 import TimelinePage from "./pages/TimelinePage";
+import { WebBrowserPanel } from "./components/WebBrowserPanel";
 import { StoreProvider, useStore } from "./store";
 
 function basename(p: string): string {
@@ -152,7 +153,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const scrollRef = useRef<HTMLDivElement>(null);
   const [rightbarShown, setRightbarShown] = useState(false);
   const [rightbarWidth, setRightbarWidth] = useState(320);
-  const [rightbarTab, setRightbarTab] = useState<"files" | "todo">("files");
+  const [rightbarTab, setRightbarTab] = useState<"files" | "todo" | "web">("files");
   const rightbarRef = useRef<HTMLDivElement | null>(null);
 
   /**
@@ -498,6 +499,7 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
                 {(
                   [
                     { id: "files", label: "文件" },
+                    { id: "web", label: "网页" },
                     { id: "todo", label: "任务" },
                   ] as const
                 ).map((tab) => (
@@ -527,6 +529,8 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               </div>
               {rightbarTab === "files" ? (
                 <FileBrowserPanel sessionId={activeId} />
+              ) : rightbarTab === "web" ? (
+                <WebBrowserPanel />
               ) : view === "chat" ? (
                 <RightPanel />
               ) : (
