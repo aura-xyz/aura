@@ -1,6 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  History,
+  MessageSquarePlus,
+  Plug,
+  Sparkles,
+} from "lucide-react";
 
 beforeEach(() => {
   localStorage.clear();
@@ -16,6 +22,13 @@ const SESSIONS = [
   { id: "s3", title: "别的组", workspace: "E:/dev/other", messages: [{}], todos: [] },
   // 空对话：内存草稿，不该出现在侧边栏
   { id: "s4", title: "新对话", workspace: "E:/dev/aura", messages: [], todos: [] },
+];
+
+const DEFAULT_NAV_BLOCKS = [
+  { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: vi.fn() },
+  { id: "skills", label: "Skills", icon: Sparkles, onClick: vi.fn() },
+  { id: "mcp", label: "MCP", icon: Plug, onClick: vi.fn() },
+  { id: "timeline", label: "轨迹", icon: History, onClick: vi.fn() },
 ];
 
 /**
@@ -36,17 +49,15 @@ async function mount(props: Partial<Record<string, unknown>> = {}) {
     renameSession: vi.fn(),
   };
   vi.doMock("../store", () => ({ useStore: () => store }));
+  const navBlocks = (props.navBlocks as typeof DEFAULT_NAV_BLOCKS) ?? DEFAULT_NAV_BLOCKS;
   const { default: Sidebar } = await import("./Sidebar");
   return {
     store,
     ...render(
       <Sidebar
         view="chat"
-        onNew={vi.fn()}
+        navBlocks={navBlocks}
         onOpenSettings={vi.fn()}
-    onOpenSkills={vi.fn()}
-        onOpenMcp={vi.fn()}
-        onOpenTimeline={vi.fn()}
         {...props}
       />,
     ),
@@ -70,16 +81,22 @@ describe("Sidebar", () => {
   });
 
   it("点击导航项触发对应回调", async () => {
-    const onOpenSkills = vi.fn();
-    const onOpenMcp = vi.fn();
-    const onOpenTimeline = vi.fn();
-    await mount({ onOpenSkills, onOpenMcp, onOpenTimeline });
+    const onSkills = vi.fn();
+    const onMcp = vi.fn();
+    const onTimeline = vi.fn();
+    const blocks = [
+      { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: vi.fn() },
+      { id: "skills", label: "Skills", icon: Sparkles, onClick: onSkills },
+      { id: "mcp", label: "MCP", icon: Plug, onClick: onMcp },
+      { id: "timeline", label: "轨迹", icon: History, onClick: onTimeline },
+    ];
+    await mount({ navBlocks: blocks });
     await userEvent.click(screen.getByText("Skills"));
     await userEvent.click(screen.getByText("MCP"));
     await userEvent.click(screen.getByText("轨迹"));
-    expect(onOpenSkills).toHaveBeenCalledTimes(1);
-    expect(onOpenMcp).toHaveBeenCalledTimes(1);
-    expect(onOpenTimeline).toHaveBeenCalledTimes(1);
+    expect(onSkills).toHaveBeenCalledTimes(1);
+    expect(onMcp).toHaveBeenCalledTimes(1);
+    expect(onTimeline).toHaveBeenCalledTimes(1);
   });
 
   /// 当前视图要能高亮，否则用户在 Skills 页看不出自己在哪
@@ -152,7 +169,7 @@ describe("Sidebar", () => {
   });
 
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），
-/// 合并 DOM 时漏掉任何一个，右键会静默失效
+  /// 合并 DOM 时漏掉任何一个，右键会静默失效
   it("保留右键菜单锚点属性", async () => {
     const { container } = await mount();
     expect(container.querySelector("[data-ctx-workspace]")).toBeInTheDocument();
@@ -168,7 +185,7 @@ describe("Sidebar", () => {
   });
 
   /// 折叠态里 56px 放不下「图标+文字」，曾经用卡片边框收窄，
-/// 结果图标整体偏移。导航区必须平铺无边框。
+  /// 结果图标整体偏移。导航区必须平铺无边框。
   it("导航区不带卡片边框", async () => {
     const { container } = await mount();
     const nav = container.querySelector("nav");
@@ -177,8 +194,8 @@ describe("Sidebar", () => {
   });
 
   /// 折叠后三个图标要真正居中：按钮内容用 justify-center，并**连 gap 与左右
-/// 内边距一起去掉**。文字虽 max-w-0 宽度为 0，但 gap 仍占满 10px，
-/// 会把图标连同那段空白一起左推——只断言 px-0 抓不到这个偏差。
+  /// 内边距一起去掉**。文字虽 max-w-0 宽度为 0，但 gap 仍占满 10px，
+  /// 会把图标连同那段空白一起左推——只断言 px-0 抓不到这个偏差。
   it("折叠态导航图标居中", async () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     const { container } = await mount();
@@ -212,7 +229,13 @@ describe("Sidebar", () => {
 
   it("点新建对话交给外部处理，不自己弹目录选择器", async () => {
     const onNew = vi.fn();
-    await mount({ onNew });
+    const blocks = [
+      { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },
+      { id: "skills", label: "Skills", icon: Sparkles, onClick: vi.fn() },
+      { id: "mcp", label: "MCP", icon: Plug, onClick: vi.fn() },
+      { id: "timeline", label: "轨迹", icon: History, onClick: vi.fn() },
+    ];
+    await mount({ navBlocks: blocks });
     await userEvent.click(screen.getByText("新建对话"));
     expect(onNew).toHaveBeenCalledTimes(1);
   });

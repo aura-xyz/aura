@@ -6,7 +6,15 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { PanelRightClose, PanelRightOpen, TriangleAlert } from "lucide-react";
+import {
+  History,
+  MessageSquarePlus,
+  PanelRightClose,
+  PanelRightOpen,
+  Plug,
+  Sparkles,
+  TriangleAlert,
+} from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
@@ -101,6 +109,39 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   } = useStore();
   const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp" | "timeline">(
     "chat",
+  );
+  // 左侧导航默认区块，由 Shell 拥有 onClick 闭包（newSession / setView）。
+  const navBlocks: { id: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; panel?: string }[] = useMemo(
+    () => [
+      {
+        id: "new",
+        label: "新建对话",
+        icon: MessageSquarePlus,
+        onClick: () => {
+          newSession();
+          setView("chat");
+        },
+      },
+      {
+        id: "skills",
+        label: "Skills",
+        icon: Sparkles,
+        onClick: () => setView("skills"),
+      },
+      {
+        id: "mcp",
+        label: "MCP",
+        icon: Plug,
+        onClick: () => setView("mcp"),
+      },
+      {
+        id: "timeline",
+        label: "轨迹",
+        icon: History,
+        onClick: () => setView("timeline"),
+      },
+    ],
+    [newSession, setView],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
@@ -383,18 +424,12 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
       <TitleBar />
 
       <div className="flex min-h-0 flex-1 relative">
- <Sidebar
-           view={view}
-           onNew={() => {
-    newSession();
-  setView("chat");
-           }}
-       onOpenSettings={() => setView("settings")}
-           onOpenSkills={() => setView("skills")}
-           onOpenMcp={() => setView("mcp")}
-           onOpenTimeline={() => setView("timeline")}
-   onNavigate={() => setView("chat")}
-         />
+        <Sidebar
+          view={view}
+          navBlocks={navBlocks}
+          onOpenSettings={() => setView("settings")}
+          onNavigate={() => setView("chat")}
+        />
 
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "settings" ? (

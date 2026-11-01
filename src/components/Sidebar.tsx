@@ -1,12 +1,8 @@
 import {
   ChevronRight,
-  History,
-  MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
-  Plug,
   Settings,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -19,14 +15,23 @@ const COLLAPSE_SETTLE_MS = 150;
 
 export type View = "chat" | "settings" | "skills" | "mcp" | "timeline";
 
+/** 左侧导航区块：由外部注入，Sidebar 只负责渲染与折叠动画。 */
+export interface NavBlock {
+  id: string;
+  label: string;
+  /** lucide 图标组件 */
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  onClick: () => void;
+  /** 点击后打开的右侧面板内容类型（可选，供右侧面板联动） */
+  panel?: string;
+}
+
 interface Props {
   /** 当前视图，用于高亮导航项 */
   view: View;
-  onNew: () => void;
+  /** 顶部导航区块，由外部注入，默认见 App.tsx DEFAULT_NAV_BLOCKS */
+  navBlocks: NavBlock[];
   onOpenSettings: () => void;
-  onOpenSkills: () => void;
-  onOpenMcp: () => void;
-  onOpenTimeline: () => void;
   /** 选中会话后回调，用于从设置/Skills/MCP 页切回对话视图 */
   onNavigate?: () => void;
 }
@@ -38,11 +43,8 @@ function basename(p: string): string {
 
 export default function Sidebar({
   view,
-  onNew,
+  navBlocks,
   onOpenSettings,
-  onOpenSkills,
-  onOpenMcp,
-  onOpenTimeline,
   onNavigate,
 }: Props) {
   const {
@@ -173,34 +175,30 @@ function toggleExpand(w: string) {
       <nav
         className={`shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}
       >
-        {(
-    [
-            { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },
-   { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
-            { key: "mcp", label: "MCP", icon: Plug, onClick: onOpenMcp },
-            { key: "timeline", label: "轨迹", icon: History, onClick: onOpenTimeline },
-          ] as const
-        ).map(({ key, label: text, icon: Icon, onClick }) => (
-     <button
-      key={key}
-            type="button"
-        onClick={onClick}
-   aria-current={key !== "new" && view === key ? "page" : undefined}
-            title={collapsed ? text : undefined}
-// 折叠态必须连 gap 一起去掉：文字虽然 max-w-0 宽度为 0，
-            // 但 gap 仍会占满 10px，把图标连同那 10px 一起左推。
-            className={`flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
-              collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
-            } ${
-              key !== "new" && view === key
-                ? "bg-bubble font-medium text-foreground"
-                : "text-subtle hover:bg-bubble hover:text-foreground"
-            }`}
-          >
-     <Icon size={15} className="shrink-0" />
-            <span className={`${label} ${collapsed ? labelOff : labelOn}`}>{text}</span>
-          </button>
-        ))}
+        {navBlocks.map((block) => {
+          const active = block.id !== "new" && view === block.id;
+          return (
+            <button
+              key={block.id}
+              type="button"
+              onClick={block.onClick}
+              aria-current={active ? "page" : undefined}
+              title={collapsed ? block.label : undefined}
+              className={`flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
+                collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
+              } ${
+                active
+                  ? "bg-bubble font-medium text-foreground"
+                  : "text-subtle hover:bg-bubble hover:text-foreground"
+              }`}
+            >
+              <block.icon size={15} className="shrink-0" />
+              <span className={`${label} ${collapsed ? labelOff : labelOn}`}>
+                {block.label}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* 工作区列表。折叠态是圆点指示器、展开态是可折叠分组，
