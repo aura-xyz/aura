@@ -42,16 +42,24 @@ describe("AboutSection 更新", () => {
   /// 检查失败时必须同时给出「真实原因」和「浏览器出口」：
   /// GitHub 发布资产域名在国内常不可达，应用内检查会稳定失败，
   /// 只留一句「请检查网络」等于把用户困死。
-  it("检查失败时显示原因并提供浏览器下载出口", async () => {
-    checkForUpdateMock.mockResolvedValue({
-      kind: "failed",
-      reason: "error sending request for url",
-    });
+  ///
+  /// v0.7.2-rc.2 起：结论与原始原因由**后端**拼成一句话（含手动下载引导），
+  /// 前端只负责原样显示 + 提供浏览器出口，不再自己补一句可能不准的
+  /// 「请检查网络连接」。
+  it("检查失败时原样显示后端的完整说明并提供浏览器下载出口", async () => {
+    const reason =
+      "检查更新失败：error sending request for url。可在下方「历史版本下载」手动获取安装包。";
+    checkForUpdateMock.mockResolvedValue({ kind: "failed", reason });
     render(<AboutSection />);
     await clickCheck();
 
-    expect(await screen.findByText("检查失败，请检查网络连接后重试。")).toBeInTheDocument();
-    expect(screen.getByText("error sending request for url")).toBeInTheDocument();
+    const shown = await screen.findByText(reason);
+    expect(shown).toBeInTheDocument();
+    // 原始技术原因必须还在里面（不能被前端简化掉）
+    expect(shown.textContent).toContain("error sending request for url");
+    expect(shown.textContent).toContain("历史版本下载");
+    // 不该再出现那句与后端重复的猜测性文案
+    expect(screen.queryByText("检查失败，请检查网络连接后重试。")).toBeNull();
 
     const fallback = screen.getByRole("button", { name: /在浏览器中打开下载页/ });
     await userEvent.click(fallback);

@@ -119,19 +119,119 @@ pub fn probe_speed(bytes: u64, millis: u64) -> f64 {
 ///
 /// 官方直连放在**最后**：它是最权威的源，但在境内最慢。选源时按实测速度
 /// 决定是否用镜像（见 [`choose_source`]），所以这个顺序只影响「同速时的偏好」。
-pub fn candidate_sources(download_url: &str) -> Vec<DownloadSource> {
+///
+/// `extra_mirrors` 是**清单下发的**镜像前缀（v0.7.2-rc.2），排在内置表前面：
+/// 运营想换镜像只需改一次清单，不用发版。两者按 URL 去重——同一家同时出现在
+/// 清单与内置表里时只留一条（清单的那条，标签更好认）。
+pub fn candidate_sources(download_url: &str, extra_mirrors: &[String]) -> Vec<DownloadSource> {
     let mut out: Vec<DownloadSource> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for prefix in extra_mirrors {
+        let url = format!("{prefix}{download_url}");
+        if seen.insert(url.clone()) {
+            out.push(DownloadSource {
+                label: mirror_label(prefix),
+                url,
+            });
+        }
+    }
     for (label, prefix) in MIRRORS {
-        out.push(DownloadSource {
-            label: (*label).to_string(),
-            url: format!("{prefix}{download_url}"),
-        });
+        let url = format!("{prefix}{download_url}");
+        if seen.insert(url.clone()) {
+            out.push(DownloadSource {
+                label: (*label).to_string(),
+                url,
+            });
+        }
     }
     out.push(DownloadSource {
         label: "GitHub 直连".to_string(),
         url: download_url.to_string(),
     });
     out
+}
+
+/// 镜像前缀 → 展示名。用主机名，日志里一眼能看出是哪家。
+fn mirror_label(prefix: &str) -> String {
+    prefix
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// 从清单里取 `mirrors` 下发表。抽成纯函数好测。
+///
+/// **只接受 https**：清单本身走镜像分发，一份被投毒的清单不该能把下载导向
+/// 任意地址。签名校验能挡住坏文件，但「把用户流量引到第三方」是另一回事，
+/// 多一道前缀校验成本几乎为零。
+fn parse_mirrors(text: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let arr = v.get("mirrors")?.as_array()?;
+    let out: Vec<String> = arr
+        .iter()
+        .filter_map(|m| m.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with("https://"))
+        .collect();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 拉取清单里的 `mirrors`。
+///
+/// 插件的 `RemoteRelease` 不透出自定义字段，所以只能自己再读一遍清单
+/// （2KB 级）。按端点顺序尝试，首个给出 mirrors 的即用；全失败返回空，
+/// 调用方回退内置表——**清单源全挂时不影响下载**（下载用的是 check 已拿到的句柄）。
+async fn fetch_manifest_mirrors(endpoints: &[String]) -> Vec<String> {
+    if endpoints.is_empty() {
+        return Vec::new();
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent("aura-updater-manifest")
+        .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .build()
+    else {
+        return Vec::new();
+    };
+    for url in endpoints {
+        let Ok(resp) = client.get(url).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(text) = resp.text().await else {
+            continue;
+        };
+        if let Some(list) = parse_mirrors(&text) {
+            return list;
+        }
+    }
+    Vec::new()
+}
+
+/// 从应用配置里读清单端点（`plugins.updater.endpoints`）。
+///
+/// 不在 Rust 里硬编码一份：端点顺序是「运营决策」，只应存在于
+/// `tauri.conf.json` 一处。两处各写一份迟早会漂。
+fn updater_endpoints(app: &AppHandle) -> Vec<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v.get("endpoints"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 按实测结果选源。
@@ -349,6 +449,14 @@ async fn probe_two_stage(sources: &[DownloadSource]) -> Vec<ProbeResult> {
     probe_two_stage_inner(sources, |s| async move { probe_one(&s).await }).await
 }
 
+/// 检查更新失败时给用户看的完整话术。
+///
+/// 抽成函数是为了能测：这段文案是「用户能不能自己救自己」的唯一线索——
+/// 只说「检查失败」等于把人困死，得把**原始原因**和**手动出路**一起给出来。
+fn check_failed_message(reason: &str) -> String {
+    format!("检查更新失败：{reason}。可在下方「历史版本下载」手动获取安装包。")
+}
+
 /// 检查是否有新版本。
 ///
 /// 清单仍然由插件去取（它配了三个端点、会自动回退），我们只接管**下载**。
@@ -367,16 +475,35 @@ pub async fn check_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| {
+        // 检查失败要留原始原因：用户只会说「检查失败」，而真正有用的是
+        // 「哪个端点、什么错」。同时把可操作的引导带给前端。
+        let reason = e.to_string();
+        crate::update_log::log_event("check_failed", &reason);
+        check_failed_message(&reason)
+    })?;
     let Some(update) = update else {
         return Ok(None);
     };
+
+    // v0.7.2-rc.2：清单可能下发了 mirrors。多一次 2KB 级 GET，失败就回退内置表。
+    let mirrors = fetch_manifest_mirrors(&updater_endpoints(&app)).await;
+    if !mirrors.is_empty() {
+        crate::update_log::log_event(
+            "mirrors",
+            &format!("manifest delivered {} prefix(es): {}", mirrors.len(), mirrors.join(" ")),
+        );
+    }
+    if let Ok(mut slot) = state.update_mirrors.lock() {
+        // 存下来给 download_update 用：同一次更新不该拉两遍清单
+        *slot = mirrors.clone();
+    }
 
     let info = UpdateInfo {
         version: update.version.clone(),
         notes: update.body.clone(),
         date: update.date.map(|d| d.to_string()),
-        sources: candidate_sources(update.download_url.as_str()),
+        sources: candidate_sources(update.download_url.as_str(), &mirrors),
     };
 
     // 存下句柄：安装时复用同一个 Update，不重新查清单。
@@ -410,24 +537,26 @@ pub async fn download_update(
     }
     .ok_or_else(|| "没有待安装的更新，请先检查更新".to_string())?;
 
-    let sources = candidate_sources(update.download_url.as_str());
+    // 复用 check 阶段拉到的清单 mirrors，不再多拉一次清单
+    let mirrors = state
+        .update_mirrors
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let sources = candidate_sources(update.download_url.as_str(), &mirrors);
     let probes = probe_two_stage(&sources).await;
     let chosen = choose_source(&probes).ok_or_else(|| "没有可用的下载源".to_string())?;
     let source = sources[chosen].clone();
 
-    // 探测结果落日志：装不动时能看出是「源慢」还是「源挂」
+    // 探测结果落日志：装不动时能看出是「源慢」还是「源挂」。
+    // 原来的 eprintln 在 GUI 进程里没有控制台，等于没记。
     for p in &probes {
-        if p.ok {
-            eprintln!(
-                "[aura] 更新源 {} 探测 {:.2} KB/s",
-                p.label,
-                probe_speed(p.bytes, p.millis) / 1024.0
-            );
-        } else {
-            eprintln!("[aura] 更新源 {} 探测失败", p.label);
-        }
+        crate::update_log::log_event(
+            "probe",
+            &crate::update_log::probe_line(&p.label, p.ok, p.bytes, p.millis),
+        );
     }
-    eprintln!("[aura] 选用更新源：{}", source.label);
+    crate::update_log::log_event("chosen", &format!("{} ({})", source.label, source.url));
 
     let url = Url::parse(&source.url).map_err(|e| format!("下载地址无效: {e}"))?;
     let mut update = update;
@@ -485,7 +614,7 @@ mod tests {
 
     #[test]
     fn candidates_include_official_last() {
-        let srcs = candidate_sources("https://github.com/o/r/releases/download/v1/a.exe");
+        let srcs = candidate_sources("https://github.com/o/r/releases/download/v1/a.exe", &[]);
         assert_eq!(srcs.len(), MIRRORS.len() + 1);
         assert_eq!(srcs.last().unwrap().label, "GitHub 直连");
         assert_eq!(
@@ -552,7 +681,7 @@ mod tests {
     /// 官方够快：镜像一个都不探，只有官方位置有结果。
     #[test]
     fn two_stage_official_fast_skips_mirrors() {
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let off = sources.len() - 1;
         let official = probe("GitHub 直连", true, 256 * 1024, 500); // 0.5 MB/s
 
@@ -581,7 +710,7 @@ mod tests {
     /// 官方太慢：镜像全部探测，选中最快的那个。
     #[test]
     fn two_stage_official_slow_probes_mirrors() {
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let off = sources.len() - 1;
         let official = probe("GitHub 直连", true, 256 * 1024, 20_000); // 12.8 KB/s
 
@@ -613,7 +742,7 @@ mod tests {
     /// 全挂：仍回落到官方索引，不能返回 None（那会让下载直接失败）。
     #[test]
     fn two_stage_all_fail_falls_back_official() {
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let off = sources.len() - 1;
         let official = probe("GitHub 直连", false, 0, 0);
         let mirrors: Vec<ProbeResult> = sources[..off]
@@ -634,7 +763,7 @@ mod tests {
     /// 结果必须与 sources 等长同序——错位会让「选中的源」与「实际下载的源」不一致。
     #[test]
     fn two_stage_result_aligned_with_sources() {
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let off = sources.len() - 1;
         let official = probe("GitHub 直连", true, 256 * 1024, 900);
         let official = ProbeResult {
@@ -682,7 +811,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
 
@@ -721,7 +850,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let sources = candidate_sources(ASSET);
+        let sources = candidate_sources(ASSET, &[]);
         let off = sources.len() - 1;
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
@@ -750,5 +879,91 @@ mod tests {
             "官方太慢时官方 + {off} 个镜像都该被探测"
         );
         assert_eq!(choose_source(&probes), Some(0), "应选最快的镜像（下标 0）");
+    }
+
+    // ── 清单下发的 mirrors（v0.7.2-rc.2）──────────────────────────
+
+    /// 清单下发的镜像排在内置表**前面**，官方仍在最后。
+    #[test]
+    fn manifest_mirrors_come_first_and_official_stays_last() {
+        let extra = vec!["https://new-mirror.example/".to_string()];
+        let srcs = candidate_sources(ASSET, &extra);
+
+        assert_eq!(srcs[0].label, "new-mirror.example");
+        assert!(srcs[0].url.starts_with("https://new-mirror.example/https://github.com/"));
+        assert_eq!(
+            srcs.last().unwrap().label,
+            "GitHub 直连",
+            "官方必须仍在最后——两级探测按下标认定官方"
+        );
+        // 内置表没被顶掉（并集，不是替换）
+        assert!(
+            srcs.iter().any(|s| s.label == "ghfast"),
+            "内置镜像必须保留：{:?}",
+            srcs.iter().map(|s| &s.label).collect::<Vec<_>>()
+        );
+    }
+
+    /// 同一家镜像同时出现在清单与内置表时只保留一条。
+    #[test]
+    fn manifest_mirror_identical_to_builtin_is_deduped() {
+        let extra = vec!["https://ghfast.top/".to_string()];
+        let srcs = candidate_sources(ASSET, &extra);
+
+        let hits = srcs.iter().filter(|s| s.url.contains("ghfast.top")).count();
+        assert_eq!(hits, 1, "重复镜像只该出现一次");
+        let gh = srcs.iter().find(|s| s.url.contains("ghfast.top")).unwrap();
+        assert_eq!(gh.label, "ghfast.top", "留下的是清单那条（标签是主机名）");
+    }
+
+    #[test]
+    fn parse_mirrors_reads_array() {
+        let text = r#"{"version":"1.0.0","mirrors":["https://a.example/","https://b.example/"]}"#;
+        assert_eq!(
+            parse_mirrors(text).unwrap(),
+            vec!["https://a.example/".to_string(), "https://b.example/".to_string()]
+        );
+    }
+
+    /// 非 https 的前缀一律丢弃：清单可以决定「从哪下」，不该能把流量引到明文 http。
+    #[test]
+    fn parse_mirrors_rejects_non_https() {
+        let text = r#"{"mirrors":["http://plain.example/","https://ok.example/","ftp://x/"]}"#;
+        assert_eq!(
+            parse_mirrors(text).unwrap(),
+            vec!["https://ok.example/".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_mirrors_absent_or_empty_yields_none() {
+        assert!(parse_mirrors(r#"{"version":"1.0.0"}"#).is_none());
+        assert!(parse_mirrors(r#"{"mirrors":[]}"#).is_none());
+        assert!(
+            parse_mirrors(r#"{"mirrors":["http://a/"]}"#).is_none(),
+            "全是非法前缀时等同没有"
+        );
+        assert!(parse_mirrors("not json").is_none());
+    }
+
+    /// 检查失败的文案必须同时含**原始原因**与**手动出路**。
+    #[test]
+    fn check_failed_message_keeps_reason_and_offers_manual_path() {
+        let msg = check_failed_message("error sending request for url (https://v4.gh-proxy.org/...)");
+        assert!(
+            msg.contains("error sending request for url"),
+            "原始原因不能被吞掉，否则用户/开发者都无从判断: {msg}"
+        );
+        assert!(msg.contains("历史版本下载"), "必须给出手动出路: {msg}");
+        assert!(msg.starts_with("检查更新失败："), "首句要直说结论: {msg}");
+    }
+
+    /// 清单没有 mirrors 时，候选源与只有内置表时完全一致（零行为变化）。
+    #[test]
+    fn no_manifest_mirrors_changes_nothing() {
+        let a = candidate_sources(ASSET, &[]);
+        assert_eq!(a.len(), MIRRORS.len() + 1);
+        assert_eq!(a.last().unwrap().label, "GitHub 直连");
+        assert_eq!(a[0].label, MIRRORS[0].0);
     }
 }

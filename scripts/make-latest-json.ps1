@@ -2,7 +2,11 @@
     [Parameter(Mandatory = $true)][string]$BundleDir,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Notes,
-    [Parameter(Mandatory = $true)][string]$Repo
+    [Parameter(Mandatory = $true)][string]$Repo,
+    # 可选：写进清单顶层的 mirrors（v0.7.2-rc.2 起）。
+    # 客户端读它来补下载源，改这里等于「不发版换镜像」。
+    # 必须是 https 前缀——客户端的 parse_mirrors 会丢弃非 https 项。
+    [string[]]$Mirrors = @()
 )
 
 # 从 Tauri 构建产物生成 latest.json（Tauri updater 的更新清单）。
@@ -108,6 +112,15 @@ $manifest = @{
     pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     platforms = $platforms
 }
+# mirrors 是**可选**字段：老客户端（<=0.7.1）不认识它，插件的
+# RemoteReleaseInner 是 untagged 且不 deny_unknown，未知字段被忽略，
+# 所以加上它不会影响存量客户端（lib.rs 的 manifest_with_mirrors 测试钉住这点）。
+if ($Mirrors.Count -gt 0) {
+    foreach ($m in $Mirrors) {
+        if ($m -notmatch '^https://') { throw "mirrors 必须是 https 前缀：$m" }
+    }
+    $manifest['mirrors'] = @($Mirrors)
+}
 
 $json = $manifest | ConvertTo-Json -Depth 5
 $out = Join-Path (Split-Path $BundleDir -Parent) 'latest.json'
@@ -115,4 +128,5 @@ $out = Join-Path (Split-Path $BundleDir -Parent) 'latest.json'
 Write-Host "已生成 $out"
 Write-Host "  选中安装包：$($nsis.Name)"
 if ($msi) { Write-Host "  选中 MSI ：$($msi.Name)" }
+if ($Mirrors.Count -gt 0) { Write-Host ("  mirrors 下发 " + $Mirrors.Count + " 项") }
 Write-Host "请在 Release v$Version 中上传：$releaseName、Aura_${Version}_win_x64.msi 与 latest.json"

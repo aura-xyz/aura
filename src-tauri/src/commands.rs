@@ -50,6 +50,9 @@ pub struct AppState {
     /// 自动更新的句柄。检查阶段拿到，安装阶段复用——
     /// 重新查一次清单就多一次网络往返，也多一个让「安装」平白失败的理由。
     pub updater: Mutex<Option<tauri_plugin_updater::Update>>,
+    /// 清单下发的镜像前缀（v0.7.2-rc.2）。检查更新时拉一次，下载时复用，
+    /// 避免同一次更新读两遍清单。
+    pub update_mirrors: Mutex<Vec<String>>,
 }
 
 /// Windows 上 `canonicalize()` 会返回 `\\?\` 扩展前缀路径，若与
@@ -82,7 +85,9 @@ impl AppState {
         // 且不会因历史脏行在侧边栏出现空白工作区分组
         if let Ok(n) = db::purge_empty_sessions(&db) {
             if n > 0 {
-                eprintln!("[aura] 已清理 {} 个空会话", n);
+                // 落盘而不是 eprintln：GUI 进程没有控制台，那些行没人看得到。
+                // 这是改过数据库的启动动作，值得留痕。
+                crate::update_log::log_event("cleanup", &format!("purged {n} empty sessions"));
             }
         }
         // 优先恢复上次使用的工作区；无记录（首次运行）时回退到用户主目录，
@@ -119,6 +124,7 @@ impl AppState {
             running: AsyncMutex::new(None),
             db: Mutex::new(db),
             updater: Mutex::new(None),
+            update_mirrors: Mutex::new(Vec::new()),
         }
     }
 }
@@ -317,8 +323,9 @@ pub fn notify(app: AppHandle, title: String, body: String) -> Result<(), String>
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
-            // 通知失败（系统未授权、专注助手等）不该影响主流程
-            eprintln!("[notify] 发送系统通知失败: {}", e);
+            // 通知失败（系统未授权、专注助手等）不该影响主流程，
+            // 但要留痕——用户反馈「任务跑完没提示」时这是唯一线索。
+            crate::update_log::log_event("notify", &format!("send failed: {e}"));
             Ok(())
         }
     }
@@ -1593,6 +1600,7 @@ mod tests {
             running: AsyncMutex::new(Some("sess-A".to_string())),
             db: Mutex::new(db::open(Path::new(":memory:")).unwrap()),
             updater: Mutex::new(None),
+            update_mirrors: Mutex::new(Vec::new()),
         };
 
         // 别的会话发起停止：忽略

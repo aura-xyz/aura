@@ -220,22 +220,26 @@ export default function AboutSection() {
           )}
 
           {state.kind === "checked" && state.result.kind === "unavailable" && (
-            <p className="flex items-start gap-2 text-sm text-subtle">
-              <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-              <span>
-                更新服务暂不可用（新版本可能刚发布，清单尚未上传完成），请稍后重试。
-              </span>
-            </p>
+            <div className="flex flex-col gap-1">
+              <p className="flex items-start gap-2 text-sm text-subtle">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  更新服务暂不可用（新版本可能刚发布，清单尚未上传完成），请稍后重试。
+                </span>
+              </p>
+              {/* 有个「等」以外的选择：非要现在升级就去发布页手动下。 */}
+              <BrowserFallback className="ml-6 mt-0.5" />
+            </div>
           )}
 
           {state.kind === "checked" && state.result.kind === "failed" && (
             <div className="flex flex-col gap-1">
-              <p className="flex items-start gap-2 text-sm text-subtle">
+              {/* 结论 + 原始原因都由后端拼好（`检查更新失败：…。可在下方…`）。
+                  这里不再补一句「请检查网络」——它既可能不准（证书/解析/磁盘），
+                  又会和后端那句话重复。 */}
+              <p className="flex items-start gap-2 break-all text-sm text-subtle">
                 <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-                <span>检查失败，请检查网络连接后重试。</span>
-              </p>
-              <p className="ml-6 break-all text-xs text-subtle">
-                {state.result.reason}
+                <span>{state.result.reason}</span>
               </p>
               {/* 网络受限时（如 GitHub 资产域名不可达）检查永远失败，
                   给一条到发布页的出路——浏览器往往能正常打开。 */}
