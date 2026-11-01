@@ -53,9 +53,23 @@ pub const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 ///
 /// 镜像都是第三方服务，可能随时下线或变慢——所以它们只是**候选**，
 /// 选源逻辑会实测速度，并且失败会自动回退。官方直连永远在候选里。
+///
+/// v0.7.2-rc.1 从 2 个扩到 7 个：单靠 ghfast/gh-proxy.com 两家，任一抖动
+/// 就只剩官方的 0.05 MB/s。多留几个同族镜像，两级探测会挑当前最快的那个。
+///
+/// 注：`gh-proxy.org` 与 `gh-proxy.com` 是**不同服务**，不是同一个域名的新旧写法，
+/// 两家都保留。
 const MIRRORS: &[(&str, &str)] = &[
+    // 2026-11-01 实测 v4 秒下 latest.json 与安装包
+    ("gh-proxy-v4", "https://v4.gh-proxy.org/"),
+    ("gh-proxy-cdn", "https://cdn.gh-proxy.org/"),
+    ("gh-proxy", "https://gh-proxy.org/"),
+    ("gh-proxy-v6", "https://v6.gh-proxy.org/"),
+    ("gh-proxy-axis", "https://axisnow.gh-proxy.org/"),
+    // 2026-10-25 实测 0.37 MB/s
     ("ghfast", "https://ghfast.top/"),
-    ("gh-proxy", "https://gh-proxy.com/"),
+    // 2026-10-25 实测 0.12 MB/s
+    ("gh-proxy.com", "https://gh-proxy.com/"),
 ];
 
 /// 一个候选下载源。
@@ -228,20 +242,111 @@ async fn probe_one(source: &DownloadSource) -> ProbeResult {
     }
 }
 
-/// 并发探测所有候选源。
+/// 并发探测一组候选源。
 ///
 /// 并发是必须的：串行探测的话，最坏要等 N × 8 秒。并发后总耗时≈最慢的那个。
-async fn probe_all(sources: &[DownloadSource]) -> Vec<ProbeResult> {
-    let mut handles = Vec::new();
+///
+/// 探测函数以参数注入（而不是直接调 `probe_one`），这样编排逻辑
+/// （两级探测的短路行为）能在不起网络的情况下被测试覆盖。
+async fn probe_all<F, Fut>(sources: &[DownloadSource], probe: F) -> Vec<ProbeResult>
+where
+    F: Fn(DownloadSource) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = ProbeResult> + Send + 'static,
+{
+    let mut handles = Vec::with_capacity(sources.len());
     for s in sources {
         let s = s.clone();
-        handles.push(tokio::spawn(async move { probe_one(&s).await }));
+        let p = probe.clone();
+        handles.push(tokio::spawn(async move { p(s).await }));
     }
     let mut out = Vec::with_capacity(handles.len());
     for h in handles {
         out.push(h.await.unwrap_or_else(|_| ProbeResult::failed("", "")));
     }
     out
+}
+
+/// 官方直连是否够快，够快就可以短路、完全不碰镜像。
+///
+/// 判据：拿到了数据 **且** 速度达标。`bytes == 0` 视为没拿到——
+/// 只发了个请求、一个字节都没下来，不能算「能用」。
+fn official_is_fast_enough(p: &ProbeResult) -> bool {
+    p.ok && p.bytes > 0 && probe_speed(p.bytes, p.millis) >= MIN_SPEED_BPS
+}
+
+/// 把「官方结果 + 镜像结果」装配成与 `sources` **等长同序**的结果向量。
+///
+/// # 为什么必须先对齐
+///
+/// 下载代码用 `sources[chosen]`，而 `chosen` 是 `choose_source` 在 probes 里
+/// 返回的下标。只要两个数组的顺序或长度差一点，选源就会错位——选中的是 A，
+/// 下载的却是 B，还不报错。所以这里强制：
+///
+/// - `out.len() == sources.len()`
+/// - 前 `len-1` 个位置对应 `sources[..len-1]`（镜像）
+/// - 最后一个位置固定是官方（`candidate_sources` 保证官方在末尾）
+///
+/// 没探测到的位置填 `failed`：`choose_source` 会跳过它们，不会误选。
+fn assemble_two_stage(
+    sources: &[DownloadSource],
+    official: ProbeResult,
+    mirrors: Vec<ProbeResult>,
+) -> Vec<ProbeResult> {
+    let mut out: Vec<ProbeResult> = sources
+        .iter()
+        .map(|s| ProbeResult::failed(&s.label, &s.url))
+        .collect();
+    let Some(off) = sources.len().checked_sub(1) else {
+        return out;
+    };
+    for (i, r) in mirrors.into_iter().take(off).enumerate() {
+        out[i] = r;
+    }
+    out[off] = official;
+    out
+}
+
+/// 两级探测：官方先行，达标即短路；否则再并发探测镜像。
+///
+/// # 为什么要分两级（而不是 v0.7.0 的 9 路并发）
+///
+/// 9 路并发各抢 256KB 会**互相挤占带宽**：官方本来能跑 300KB/s，被 8 个镜像
+/// 一起抢之后测出来只有 60KB/s，于是误判「官方太慢」而去用镜像——测速结果
+/// 自己被测速行为污染了。
+///
+/// 分两级后：
+/// - 官方够快（境外 / 有加速的用户）→ **一次往返**结束，镜像零流量；
+/// - 官方不够快（境内典型情况）→ 官方那一路已经退出，镜像测速不再被挤占。
+///
+/// 代价是「官方慢 + 镜像也慢」时多等一轮（官方探测最长 8s）。
+/// 这是有意的取舍：绝大多数用户属于前两种，而不是第三种。
+///
+/// 探测函数注入，见 [`probe_all`]。测试用它数「到底发了几次探测」，
+/// 才能钉住「短路时镜像零流量」这条契约。
+async fn probe_two_stage_inner<F, Fut>(
+    sources: &[DownloadSource],
+    probe: F,
+) -> Vec<ProbeResult>
+where
+    F: Fn(DownloadSource) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = ProbeResult> + Send + 'static,
+{
+    if sources.is_empty() {
+        return Vec::new();
+    }
+    let off = sources.len() - 1;
+    let official = probe(sources[off].clone()).await;
+    if official_is_fast_enough(&official) {
+        // 短路：镜像一个都不碰
+        return assemble_two_stage(sources, official, Vec::new());
+    }
+    let mirrors = probe_all(&sources[..off], probe).await;
+    assemble_two_stage(sources, official, mirrors)
+}
+
+/// 真实的两级探测：官方先行，达标短路，否则并发探测镜像。
+async fn probe_two_stage(sources: &[DownloadSource]) -> Vec<ProbeResult> {
+    probe_two_stage_inner(sources, |s| async move { probe_one(&s).await }).await
 }
 
 /// 检查是否有新版本。
@@ -306,7 +411,7 @@ pub async fn download_update(
     .ok_or_else(|| "没有待安装的更新，请先检查更新".to_string())?;
 
     let sources = candidate_sources(update.download_url.as_str());
-    let probes = probe_all(&sources).await;
+    let probes = probe_two_stage(&sources).await;
     let chosen = choose_source(&probes).ok_or_else(|| "没有可用的下载源".to_string())?;
     let source = sources[chosen].clone();
 
@@ -438,5 +543,212 @@ mod tests {
             probe("GitHub 直连", true, 256 * 1024, 30_000),
         ];
         assert_eq!(choose_source(&probes), Some(1));
+    }
+
+    // ── 两级探测（v0.7.2-rc.1）────────────────────────────────────
+
+    const ASSET: &str = "https://github.com/o/r/releases/download/v1/a.exe";
+
+    /// 官方够快：镜像一个都不探，只有官方位置有结果。
+    #[test]
+    fn two_stage_official_fast_skips_mirrors() {
+        let sources = candidate_sources(ASSET);
+        let off = sources.len() - 1;
+        let official = probe("GitHub 直连", true, 256 * 1024, 500); // 0.5 MB/s
+
+        assert!(
+            official_is_fast_enough(&official),
+            "0.5 MB/s 高于门槛，应判定为够快"
+        );
+
+        // 短路路径：mirrors 传空
+        let probes = assemble_two_stage(&sources, official, Vec::new());
+
+        assert_eq!(probes.len(), sources.len());
+        for (i, p) in probes.iter().enumerate().take(off) {
+            assert!(!p.ok, "短路时镜像 {} 不该被探测", p.label);
+            assert_eq!(p.bytes, 0, "未探测的镜像不该有字节数");
+            let _ = i;
+        }
+        assert!(probes[off].ok);
+        assert_eq!(
+            choose_source(&probes),
+            Some(off),
+            "官方够快就必须选官方，不能因为镜像位置失败而改变选择"
+        );
+    }
+
+    /// 官方太慢：镜像全部探测，选中最快的那个。
+    #[test]
+    fn two_stage_official_slow_probes_mirrors() {
+        let sources = candidate_sources(ASSET);
+        let off = sources.len() - 1;
+        let official = probe("GitHub 直连", true, 256 * 1024, 20_000); // 12.8 KB/s
+
+        assert!(
+            !official_is_fast_enough(&official),
+            "12.8 KB/s 低于门槛，应判定为不够快"
+        );
+
+        // 模拟 7 路镜像都探了；让第 2 个最快
+        let mirrors: Vec<ProbeResult> = sources[..off]
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let millis = if i == 1 { 150 } else { 400 + i as u64 * 100 };
+                probe(&s.label, true, 256 * 1024, millis)
+            })
+            .collect();
+        let probes = assemble_two_stage(&sources, official, mirrors);
+
+        assert_eq!(probes.len(), sources.len());
+        assert!(probes[..off].iter().all(|p| p.ok), "镜像应全部被探测");
+        assert_eq!(
+            choose_source(&probes),
+            Some(1),
+            "官方太慢时应选最快的镜像（下标 1）"
+        );
+    }
+
+    /// 全挂：仍回落到官方索引，不能返回 None（那会让下载直接失败）。
+    #[test]
+    fn two_stage_all_fail_falls_back_official() {
+        let sources = candidate_sources(ASSET);
+        let off = sources.len() - 1;
+        let official = probe("GitHub 直连", false, 0, 0);
+        let mirrors: Vec<ProbeResult> = sources[..off]
+            .iter()
+            .map(|s| probe(&s.label, false, 0, 0))
+            .collect();
+
+        let probes = assemble_two_stage(&sources, official, mirrors);
+
+        assert!(probes.iter().all(|p| !p.ok));
+        assert_eq!(
+            choose_source(&probes),
+            Some(off),
+            "全挂时 choose_source 必须回落到官方索引"
+        );
+    }
+
+    /// 结果必须与 sources 等长同序——错位会让「选中的源」与「实际下载的源」不一致。
+    #[test]
+    fn two_stage_result_aligned_with_sources() {
+        let sources = candidate_sources(ASSET);
+        let off = sources.len() - 1;
+        let official = probe("GitHub 直连", true, 256 * 1024, 900);
+        let official = ProbeResult {
+            url: sources[off].url.clone(),
+            ..official
+        };
+        // 按来源的真实 URL 构造，这样 URL 断言才有意义
+        let mirrors: Vec<ProbeResult> = sources[..off]
+            .iter()
+            .map(|s| ProbeResult {
+                label: s.label.clone(),
+                url: s.url.clone(),
+                ok: true,
+                bytes: 256 * 1024,
+                millis: 500,
+            })
+            .collect();
+
+        let probes = assemble_two_stage(&sources, official, mirrors);
+
+        assert_eq!(probes.len(), sources.len(), "长度必须与 sources 一致");
+        assert_eq!(off, sources.len() - 1, "官方必须在最后一个位置");
+        for (i, p) in probes.iter().enumerate() {
+            assert_eq!(
+                p.label, sources[i].label,
+                "第 {i} 个位置的标签与 sources 不一致——选源会错位"
+            );
+            assert_eq!(p.url, sources[i].url, "第 {i} 个位置的 URL 不一致");
+        }
+    }
+
+    /// 官方探测「有响应但一个字节都没下来」不算够快。
+    #[test]
+    fn zero_bytes_is_not_fast_enough() {
+        assert!(!official_is_fast_enough(&probe("GitHub 直连", true, 0, 100)));
+        assert!(!official_is_fast_enough(&probe("GitHub 直连", false, 256 * 1024, 100)));
+    }
+
+    /// **编排层**：官方够快时，探测次数必须是 1（镜像零流量）。
+    ///
+    /// 上面几个用例只覆盖纯函数；若有人把短路删掉（退化成「总是并发探测 8 路」），
+    /// 它们全都不会红。这条用「数探测次数」把短路行为本身钉住。
+    #[tokio::test]
+    async fn two_stage_short_circuits_on_fast_official() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let sources = candidate_sources(ASSET);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+
+        let probes = probe_two_stage_inner(&sources, move |s: DownloadSource| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                if s.label == "GitHub 直连" {
+                    ProbeResult {
+                        label: s.label,
+                        url: s.url,
+                        ok: true,
+                        bytes: 256 * 1024,
+                        millis: 200, // 1.25 MB/s
+                    }
+                } else {
+                    ProbeResult::failed(&s.label, &s.url)
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "官方够快时必须只探测 1 次（镜像零流量），实际探测了 {} 次",
+            calls.load(Ordering::SeqCst)
+        );
+        assert_eq!(probes.len(), sources.len());
+        assert_eq!(choose_source(&probes), Some(sources.len() - 1));
+    }
+
+    /// **编排层**：官方太慢时，镜像必须全部被探测到。
+    #[tokio::test]
+    async fn two_stage_probes_every_mirror_when_official_slow() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let sources = candidate_sources(ASSET);
+        let off = sources.len() - 1;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+
+        let probes = probe_two_stage_inner(&sources, move |s: DownloadSource| {
+            let c = c.clone();
+            async move {
+                let n = c.fetch_add(1, Ordering::SeqCst);
+                let slow = s.label == "GitHub 直连";
+                ProbeResult {
+                    label: s.label,
+                    url: s.url,
+                    ok: true,
+                    bytes: 256 * 1024,
+                    // 官方 12.8 KB/s；镜像越晚越快？不——越晚越慢，
+                    // 这样「选最快的镜像」有一个确定的答案（下标 0）
+                    millis: if slow { 20_000 } else { 200 + n as u64 * 100 },
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            sources.len(),
+            "官方太慢时官方 + {off} 个镜像都该被探测"
+        );
+        assert_eq!(choose_source(&probes), Some(0), "应选最快的镜像（下标 0）");
     }
 }
