@@ -3,6 +3,7 @@ import {
   History,
   MessageSquarePlus,
   PanelLeftClose,
+  PanelLeftOpen,
   Plug,
   Settings,
   Sparkles,
@@ -12,6 +13,9 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
+
+// 折叠后宽内容淡出的等待时间，与宽度过渡同步，避免中间重排。
+const COLLAPSE_SETTLE_MS = 150;
 
 export type View = "chat" | "settings" | "skills" | "mcp" | "timeline";
 
@@ -59,6 +63,19 @@ export default function Sidebar({
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
 
+  // 折叠动画：内容先保持宽度淡出，宽度收窄后再切到 rail 布局。
+  const [settled, setSettled] = useState(collapsed);
+  const everWide = useRef(!collapsed);
+  if (!collapsed) everWide.current = true;
+
+  useEffect(() => {
+    if (!collapsed) { setSettled(false); return }
+    const timer = window.setTimeout(() => { setSettled(true) }, COLLAPSE_SETTLE_MS)
+    return () => { window.clearTimeout(timer) }
+  }, [collapsed]);
+
+  const wide = !collapsed || !settled
+
   // 工作区列表异步加载完毕后默认全部展开一次，之后完全交给用户控制。
   // 不再像以前那样跟随「当前工作区」自动展开：工作区已不再是切换目标，
   // 只是对话的归类方式，把所有组都露出来才能看见归类结果。
@@ -103,18 +120,17 @@ function toggleExpand(w: string) {
     <aside
       className={`m-2 flex max-h-[calc(100%-1rem)] shrink-0 flex-col self-start overflow-hidden rounded-card border border-line bg-surface shadow-sm transition-[width,min-height] duration-200 ease-in-out ${
         collapsed ? "w-14 min-h-0" : "w-64 min-h-[calc(100%-1rem)]"
-      }`}
+      } ${!wide && everWide.current ? "railIn" : ""} ${collapsed && wide ? "fading" : ""}`}
+      style={wide ? { width: collapsed ? 240 : undefined } : undefined}
     >
       <header className="flex h-[49px] shrink-0 items-center gap-2 px-3">
-        {/* 折叠态下 logo 即展开入口。此前下方还有一个独立的展开按钮，
-            与 logo 功能完全重复，用户反馈两个入口让人困惑。 */}
+        {/* 折叠态下 logo 即展开入口，不再 disabled，避免用户无法展开。 */}
         <button
           type="button"
           onClick={toggleCollapsed}
-          disabled={!collapsed}
-          aria-label="展开侧边栏"
-          title="展开侧边栏"
-          className="shrink-0 rounded-tag p-1.5 text-subtle transition-colors enabled:hover:bg-bubble enabled:hover:text-foreground disabled:pointer-events-none"
+          aria-label="Aura"
+          title="Aura"
+          className="shrink-0 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
         >
           <img src="/logo.png" alt="Aura" draggable={false} className="h-5 w-5" />
         </button>
@@ -125,17 +141,28 @@ function toggleExpand(w: string) {
         >
           Aura
         </span>
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-label="收起侧边栏"
-          title="收起侧边栏"
-          className={`ml-auto shrink-0 rounded-tag p-1 text-subtle transition-[opacity] duration-200 hover:bg-bubble hover:text-foreground ${
-            collapsed ? "pointer-events-none opacity-0" : "opacity-100"
-          }`}
-        >
-          <PanelLeftClose size={14} />
-        </button>
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label="收起侧边栏"
+            title="收起侧边栏"
+            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-[opacity] duration-200 hover:bg-bubble hover:text-foreground"
+          >
+            <PanelLeftClose size={14} />
+          </button>
+        )}
+        {collapsed && everWide.current && (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label="展开侧边栏"
+            title="展开侧边栏"
+            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          >
+            <PanelLeftOpen size={14} />
+          </button>
+        )}
       </header>
 
       {/* 顶部导航：新建对话 / Skills / MCP / 轨迹。平铺，不加卡片边框——
@@ -143,9 +170,11 @@ function toggleExpand(w: string) {
 
           pb-3 是刻意留的：此前 nav 与下方会话列表之间一点空隙都没有，
           「轨迹」的下边缘几乎贴着第一条会话，视觉上像挤在一起（实测反馈）。 */}
-      <nav className="shrink-0 px-3 pb-3">
+      <nav
+        className={`shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}
+      >
         {(
-   [
+    [
             { key: "new", label: "新建对话", icon: MessageSquarePlus, onClick: onNew },
    { key: "skills", label: "Skills", icon: Sparkles, onClick: onOpenSkills },
             { key: "mcp", label: "MCP", icon: Plug, onClick: onOpenMcp },
@@ -156,7 +185,7 @@ function toggleExpand(w: string) {
       key={key}
             type="button"
         onClick={onClick}
- aria-current={key !== "new" && view === key ? "page" : undefined}
+   aria-current={key !== "new" && view === key ? "page" : undefined}
             title={collapsed ? text : undefined}
 // 折叠态必须连 gap 一起去掉：文字虽然 max-w-0 宽度为 0，
             // 但 gap 仍会占满 10px，把图标连同那 10px 一起左推。
@@ -180,7 +209,7 @@ function toggleExpand(w: string) {
       <div
         className={`scrollbar-hidden min-h-0 overflow-y-auto ${
           collapsed ? "pb-0" : "flex-1 pb-2"
-        }`}
+        } ${collapsed && wide ? "fading" : ""}`}
       >
         {collapsed ? (
           <div className="px-2 py-1">
@@ -327,7 +356,7 @@ const isOpen = expanded.has(w);
           过渡中慢慢上升——表现为「先提按钮、再收边缘」。有了 mt-auto，
           过渡中产生的自由空间被它吸收，按钮钉在底边随下边缘一起上升；
           静态两态没有自由空间，表现与此前完全一致。 */}
-      <footer className="mt-auto shrink-0 px-3 pb-3">
+      <footer className={`mt-auto shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}>
         <button
           type="button"
           onClick={onOpenSettings}

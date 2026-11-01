@@ -740,3 +740,48 @@
     color: #7ee787;
   }
 }
+
+/* ---------------------------------------------------------------
+   侧边栏折叠动画（v0.8.0）
+   --------------------------------------------------------------- */
+
+/* 折叠时内容先保持宽度、只淡出，宽度收窄由 grid/width 过渡承载，
+   避免文字在宽度骤变时换行重排。 */
+.fading > * {
+  opacity: 0;
+  transition: opacity 150ms var(--ds-ease-in-out);
+}
+
+/* 展开时内容淡入。 */
+.wide {
+  animation: wide-in 200ms var(--ds-ease-in-out);
+}
+
+@keyframes wide-in {
+  from { opacity: 0; }
+}
+
+/* 折叠后的 rail 图标从右侧滑入，与宽度收窄同步。 */
+.railIn .iconButton,
+.railIn .panelList,
+.railIn .regionArea {
+  animation: rail-in 150ms var(--ds-ease-in-out) backwards;
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(49px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fading > *,
+  .wide,
+  .railIn .iconButton,
+  .railIn .panelList,
+  .railIn .regionArea {
+    transition: none;
+    animation: none;
+  }
+}
