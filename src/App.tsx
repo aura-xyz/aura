@@ -6,7 +6,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { TriangleAlert } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, TriangleAlert } from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
@@ -107,6 +107,9 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [rightbarShown, setRightbarShown] = useState(false);
+  const [rightbarWidth, setRightbarWidth] = useState(320);
+  const rightbarRef = useRef<HTMLDivElement | null>(null);
 
   /**
    * v0.7.0：拖入文件 → 把路径附加到输入框。
@@ -339,6 +342,39 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     </div>
   ) : null;
 
+  // 右侧面板拖拽：pointer capture + rAF 节流，dx 累加到 width，clamp 到 [300, 70% 视口]
+  const rightbarDrag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const onRightbarStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = rightbarRef.current;
+    if (!el) return;
+    rightbarDrag.current = { startX: e.clientX, startWidth: el.getBoundingClientRect().width };
+  }, []);
+
+  const onRightbarMove = useCallback((e: MouseEvent) => {
+    if (!rightbarDrag.current) return;
+    const dx = e.clientX - rightbarDrag.current.startX;
+    let next = rightbarDrag.current.startWidth + dx;
+    const max = Math.floor(window.innerWidth * 0.7);
+    next = Math.min(max, Math.max(300, next));
+    setRightbarWidth(next);
+  }, []);
+
+  const onRightbarEnd = useCallback((_e?: MouseEvent) => {
+    rightbarDrag.current = null;
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => onRightbarMove(e);
+    const onUp = (e: MouseEvent) => onRightbarEnd(e);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [onRightbarMove, onRightbarEnd]);
+
   return (
     <div
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
@@ -346,19 +382,19 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     >
       <TitleBar />
 
-      <div className="flex min-h-0 flex-1">
-<Sidebar
-          view={view}
-          onNew={() => {
-   newSession();
-    setView("chat");
-          }}
-      onOpenSettings={() => setView("settings")}
-          onOpenSkills={() => setView("skills")}
-          onOpenMcp={() => setView("mcp")}
-          onOpenTimeline={() => setView("timeline")}
-  onNavigate={() => setView("chat")}
-        />
+      <div className="flex min-h-0 flex-1 relative">
+ <Sidebar
+           view={view}
+           onNew={() => {
+    newSession();
+  setView("chat");
+           }}
+       onOpenSettings={() => setView("settings")}
+           onOpenSkills={() => setView("skills")}
+           onOpenMcp={() => setView("mcp")}
+           onOpenTimeline={() => setView("timeline")}
+   onNavigate={() => setView("chat")}
+         />
 
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "settings" ? (
@@ -409,7 +445,39 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
           )}
         </main>
 
-        {view === "chat" && <RightPanel />}
+        {rightbarShown && (
+          <>
+            <div
+              ref={rightbarRef}
+              className="absolute left-[-8px] top-0 bottom-0 w-1 cursor-col-resize border-r border-brand/30 z-10"
+              onMouseDown={onRightbarStart}
+            />
+            <aside
+              className="flex shrink-0 flex-col overflow-hidden border-l border-line transition-width duration-200 ease-in-out"
+              style={{ width: rightbarShown ? `${rightbarWidth}px` : 0 }}
+            >
+              <button
+                type="button"
+                onClick={() => setRightbarShown(false)}
+                className="mx-3 mt-3 mb-1 flex items-center gap-1.5 rounded-tag px-1.5 py-1 text-left text-[11px] font-medium tracking-[0.08em] text-subtle transition-colors hover:bg-bubble"
+              >
+                <PanelRightClose size={12} aria-hidden />
+                关闭面板
+              </button>
+              {view === "chat" && <RightPanel />}
+            </aside>
+          </>
+        )}
+        {!rightbarShown && (
+          <button
+            type="button"
+            onClick={() => setRightbarShown(true)}
+            className="absolute right-0 top-1/2 -translate-y-1/2 z-10 flex items-center gap-1.5 rounded-l-md px-2 py-1.5 text-left text-[11px] font-medium tracking-[0.08em] text-subtle transition-colors hover:bg-bubble shadow-sm"
+          >
+            <PanelRightOpen size={12} aria-hidden />
+            面板
+          </button>
+        )}
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
