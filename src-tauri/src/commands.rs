@@ -1128,6 +1128,21 @@ pub struct FileCandidate {
     pub is_dir: bool,
 }
 
+/// 右侧文件浏览面板的一条目录项（v0.8.0）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DirEntryView {
+    /// 文件名（展示用）
+    pub name: String,
+    /// 绝对路径（正斜杠），可直接作为下一次 list_directory 的 `path`
+    pub path: String,
+    /// 是目录吗
+    pub is_dir: bool,
+    /// 文件大小（字节，目录为 0）
+    pub size: u64,
+    /// 修改时间（Unix 毫秒，0 表示读不到）
+    pub modified_ms: u64,
+}
+
 /// 列出工作区里匹配的文件（`@` 引用面板用）。
 ///
 /// 搜的是**会话自己的工作区**（不是全局单值——见不变量 20），
@@ -1205,6 +1220,78 @@ pub fn list_workspace_files(
             break;
         }
     }
+    Ok(out)
+}
+
+/// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
+///
+/// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
+/// 前导 `/` 是工作区根，`C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
+#[tauri::command]
+pub fn list_directory(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<Vec<DirEntryView>, String> {
+    // 会话自己的工作区；查不到（内存新建、尚未落库）才回落全局。
+    let workspace = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    };
+    let workspace = match workspace {
+        Some(w) => PathBuf::from(w),
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let allowlist = {
+        let db = state.db.lock().map_err(lock_err)?;
+        allowlist_paths(&db)
+    };
+    let scope = crate::tools::AccessScope::new(workspace, allowlist)
+        .map_err(|e| format!("{e}"))?;
+
+    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::ensure_allowed(&scope, &target)?;
+    let meta = std::fs::metadata(&target).map_err(|e| format!("目录不存在: {e}"))?;
+    if !meta.is_dir() {
+        return Err(format!("不是目录: {path}"));
+    }
+
+    let mut out: Vec<DirEntryView> = Vec::new();
+    for entry in std::fs::read_dir(&target).map_err(|e| format!("读取目录失败: {e}"))? {
+        let entry = entry.map_err(|e| format!("读取目录失败: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let entry_path = entry.path();
+        let meta = entry.metadata().ok();
+        let size = meta.as_ref().map(|m| if is_dir { 0 } else { m.len() }).unwrap_or(0);
+        let modified_ms = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        out.push(DirEntryView {
+            name,
+            path: crate::paths::display(&entry_path),
+            is_dir,
+            size,
+            modified_ms,
+        });
+    }
+
+    // 目录优先，其次按名称排序（不区分大小写更符合直觉）。
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(out)
 }
 

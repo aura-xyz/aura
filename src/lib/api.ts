@@ -234,6 +234,32 @@ export function listWorkspaceFiles(
   return invoke("list_workspace_files", { sessionId, query, limit });
 }
 
+/** 右侧文件浏览面板的一条目录项（v0.8.0）。 */
+export interface DirEntry {
+  /** 文件名（展示用） */
+  name: string;
+  /** 绝对路径（正斜杠），可直接作为下一次 listDirectory 的 path */
+  path: string;
+  is_dir: boolean;
+  /** 文件大小（字节，目录为 0） */
+  size: number;
+  /** 修改时间（Unix 毫秒，0 表示读不到） */
+  modified_ms: number;
+}
+
+/**
+ * 列出某个目录下的条目（右侧文件浏览面板用）。
+ *
+ * 路径语义与工具一致：相对路径按会话工作区解析，前导 `/` 是工作区根，
+ * `C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
+ */
+export function listDirectory(
+  sessionId: string,
+  path: string,
+): Promise<DirEntry[]> {
+  return invoke("list_directory", { sessionId, path });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });
