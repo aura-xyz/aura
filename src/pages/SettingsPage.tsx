@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft } from "lucide-react";
-import type { Theme } from "../hooks/useTheme";
+import type { useTheme } from "../hooks/useTheme";
 import { getGlobalRules } from "../lib/api";
 import AboutSection from "./AboutSection";
 import AppearanceSection from "../components/AppearanceSection";
@@ -10,8 +10,7 @@ import ModelSection from "../components/ModelSection";
 
 interface Props {
   onClose: () => void;
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
+  theme: ReturnType<typeof useTheme>;
 }
 
 const SECTIONS = [
@@ -23,7 +22,7 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-export default function SettingsPage({ onClose, theme, setTheme }: Props) {
+export default function SettingsPage({ onClose, theme }: Props) {
   const [section, setSection] = useState<SectionId>("appearance");
   const [rules, setRules] = useState("");
   const [saved, setSaved] = useState(false);
@@ -93,7 +92,7 @@ export default function SettingsPage({ onClose, theme, setTheme }: Props) {
 
           <div className="min-w-0 flex-1">
             {section === "appearance" && (
-              <AppearanceSection theme={theme} setTheme={setTheme} />
+              <AppearanceSection theme={theme} />
             )}
             {section === "model" && <ModelSection />}
             {section === "general" && (

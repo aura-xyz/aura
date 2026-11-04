@@ -75,6 +75,28 @@ export function resolveTheme(preference: ThemePreference): "light" | "dark" {
   return preference;
 }
 
+/** useTheme 写入 body 的变量名。三角色名字不统一是历史遗留，别再靠拼字符串取。 */
 export function resolvedFontSizeVariable(role: FontRole): string {
-  return `--dsh-font-size-${role}`;
+  switch (role) {
+    case "text":
+      return "--dsh-content-font-size";
+    case "code":
+      return "--dsh-code-font-size";
+    case "terminal":
+      return "--dsh-terminal-font-size";
+  }
+}
+
+/** 字号设置在 ThemeSettings 里对应的字段名。 */
+export function fontSizeField(
+  role: FontRole,
+): "fontSize" | "codeFontSize" | "terminalFontSize" {
+  switch (role) {
+    case "text":
+      return "fontSize";
+    case "code":
+      return "codeFontSize";
+    case "terminal":
+      return "terminalFontSize";
+  }
 }

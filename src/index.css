@@ -298,6 +298,19 @@
     outline: 2px solid var(--color-brand);
     outline-offset: 2px;
   }
+
+  /* 三角色字号由 useTheme 写到 body，此前只有声明、没有任何消费者，
+     设置页就算能调也看不出变化。终端字号待终端面板接入后自然生效。 */
+  .md {
+    font-size: var(--dsh-content-font-size, 15px);
+  }
+  .bg-bubble-user {
+    font-size: var(--dsh-content-font-size, 15px);
+  }
+  .md pre,
+  .md pre code {
+    font-size: var(--dsh-code-font-size, 11px);
+  }
 }
 
 /* ---------------------------------------------------------------
