@@ -487,6 +487,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [appendBlocks, flushBuffer],
   );
 
+  /**
+   * 思考过程按片段累积到**同一个** thinking 块。
+   *
+   * 不能每片新建一个块，否则模型一次思考会刷出几十条折叠行。
+   * 插入前先排空正文缓冲，保证「先说一句再思考」时顺序不颠倒。
+   */
+  const appendThinking = useCallback(
+    (stream: StreamTarget, text: string) => {
+      flushBuffer();
+      appendBlocks(stream.sessionId, stream.messageId, (b) => {
+        const last = b[b.length - 1];
+        const next: Block[] =
+          last?.kind === "thinking"
+            ? [...b.slice(0, -1), { ...last, text: last.text + text }]
+            : [...b, { kind: "thinking", text }];
+        // 后续正文必须写在这个块之后，不能合并回思考文本里
+        stream.textIndex = next.length;
+        return next;
+      });
+    },
+    [appendBlocks, flushBuffer],
+  );
+
   useEffect(() => {
     let disposed = false;
     const unsubs: Array<() => void> = [];
@@ -503,6 +526,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;
       bufferRef.current += p.text ?? "";
+    });
+
+    // 思考过程与正文是两条独立流：它不进打字机缓冲，单独成块。
+    on<{ session_id: string; text?: string }>("agent:thinking", (p) => {
+      const stream = streamRef.current;
+      if (!stream || stream.sessionId !== p.session_id) return;
+      const text = p.text ?? "";
+      if (text) appendThinking(stream, text);
     });
     on<{
       session_id: string;

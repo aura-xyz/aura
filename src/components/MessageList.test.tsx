@@ -87,3 +87,50 @@ describe("MessageList 渲染开销", () => {
     expect(renderCount["第一段第二句"]).toBe(1);
   });
 });
+
+describe("思考折叠行的生成中状态", () => {
+  /**
+   * running 曾写死 false，于是「生成中…」、遮罩与 data-state 全是死代码。
+   * 只有当前正在接收流量的最后一块才算生成中，历史思考行必须显示已就绪。
+   */
+  it("流式中的思考块显示生成中，流结束后显示已就绪", async () => {
+    vi.doMock("./Markdown", () => ({
+      default: ({ content }: { content: string }) => <div>{content}</div>,
+    }));
+    let busy = true;
+    const messages = [
+      { id: "u1", role: "user" as const, content: "看一下" },
+      {
+        id: "a1",
+        role: "assistant" as const,
+        blocks: [{ kind: "thinking" as const, text: "先看目录结构" }],
+      },
+    ];
+    const store = {
+      get activeSession() {
+        return { messages };
+      },
+      get busy() {
+        return busy;
+      },
+      resendFrom: vi.fn(),
+      switchMessageVersion: vi.fn(),
+      beginEdit: vi.fn(),
+    };
+    vi.doMock("../store", () => ({ useStore: () => store }));
+
+    const { default: MessageList } = await import("./MessageList");
+    const { container, rerender } = render(<MessageList />);
+    expect(container.querySelector("[data-state]")?.getAttribute("data-state")).toBe(
+      "running",
+    );
+    expect(container.textContent).toContain("生成中");
+
+    busy = false;
+    rerender(<MessageList />);
+    expect(container.querySelector("[data-state]")?.getAttribute("data-state")).toBe(
+      "ok",
+    );
+    expect(container.textContent).toContain("已就绪");
+  });
+});

@@ -52,7 +52,7 @@ const UserBubble = memo(function UserBubble({
   );
 });
 
-function renderBlock(block: Block, i: number) {
+function renderBlock(block: Block, i: number, running: boolean) {
   switch (block.kind) {
     case "text":
       return <Markdown key={i} content={block.text} />;
@@ -72,7 +72,7 @@ function renderBlock(block: Block, i: number) {
     case "error":
       return <ErrorRow key={i} text={block.text} />;
     case "thinking":
-      return <ReasoningRow key={i} text={block.text} running={false} />;
+      return <ReasoningRow key={i} text={block.text} running={running} />;
   }
 }
 
@@ -130,7 +130,7 @@ const AssistantMessage = memo(function AssistantMessage({
   }
   return (
     <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(blocks)}>
-      {blocks.map(renderBlock)}
+      {blocks.map((b, i) => renderBlock(b, i, pending && i === blocks.length - 1))}
       {/* 悬停才出现的操作条。放最后一行之下，不占用正文流 */}
       <div className="flex flex-wrap items-center justify-end gap-2">
         {versions && <VersionSwitcher message={versions} onSwitch={handleSwitch} />}
