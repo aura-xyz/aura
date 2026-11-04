@@ -1,7 +1,6 @@
 import {
   ChevronRight,
-  PanelLeftClose,
-  PanelLeftOpen,
+  PanelLeft,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -170,7 +169,7 @@ function toggleExpand(w: string) {
             title="收起侧边栏"
             className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-[opacity] duration-200 hover:bg-bubble hover:text-foreground"
           >
-            <PanelLeftClose size={14} />
+            <PanelLeft size={14} />
           </button>
         )}
         {collapsed && everWide.current && (
@@ -181,7 +180,7 @@ function toggleExpand(w: string) {
             title="展开侧边栏"
             className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
           >
-            <PanelLeftOpen size={14} />
+            <PanelLeft size={14} />
           </button>
         )}
       </header>

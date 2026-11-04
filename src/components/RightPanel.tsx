@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { PanelRight } from "lucide-react";
 import { useStore } from "../store";
 import { showsTodoPanel } from "../lib/mode";
 import TodoPanel from "./TodoPanel";
@@ -65,7 +65,7 @@ export default function RightPanel() {
           title="展开任务面板"
           className="mt-3 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
         >
-          <PanelRightOpen size={14} />
+          <PanelRight size={14} />
         </button>
         <span
           className="mt-2 text-[10px] text-subtle tabular-nums"
@@ -89,7 +89,7 @@ export default function RightPanel() {
         title="收起任务面板"
         className="mx-3 mt-3 mb-1 flex items-center gap-1.5 rounded-tag px-1.5 py-1 text-left text-[11px] font-medium tracking-[0.08em] text-subtle transition-colors hover:bg-bubble"
       >
-        <PanelRightClose size={12} aria-hidden />
+        <PanelRight size={12} aria-hidden />
         任务面板
       </button>
       {hasContent ? (

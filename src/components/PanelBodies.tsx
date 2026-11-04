@@ -5,7 +5,7 @@
  * 新增一种面板 = 注册一条定义 + 在这里挂一个 body，外壳 App.tsx 不用改。
  */
 import type { ComponentType } from "react";
-import { FolderTree, Globe, ListTodo, type LucideIcon } from "lucide-react";
+import { Folder, Globe, ListTodo, type LucideIcon } from "lucide-react";
 import { panelRegistry, type PanelDefinition } from "../lib/panels";
 import type { View } from "./Sidebar";
 import { FileBrowserPanel } from "./FileBrowserPanel";
@@ -29,7 +29,7 @@ for (const def of DEFINITIONS) {
 }
 
 export const PANEL_ICONS: Record<string, LucideIcon> = {
-  files: FolderTree,
+  files: Folder,
   web: Globe,
   todo: ListTodo,
 };
