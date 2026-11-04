@@ -238,7 +238,11 @@ export function listWorkspaceFiles(
 export interface DirEntry {
   /** 文件名（展示用） */
   name: string;
-  /** 绝对路径（正斜杠），可直接作为下一次 listDirectory 的 path */
+  /**
+   * 工作区相对路径（前导 `/`）；工作区外的白名单目录为盘符绝对路径。
+   * 可直接作为下一次 listDirectory / readFileText 的 path。
+   * 后端不会回传带 `\\?\` 扩展前缀的磁盘路径。
+   */
   path: string;
   is_dir: boolean;
   /** 文件大小（字节，目录为 0） */

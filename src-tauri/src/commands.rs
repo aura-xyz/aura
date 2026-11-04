@@ -1133,7 +1133,8 @@ pub struct FileCandidate {
 pub struct DirEntryView {
     /// 文件名（展示用）
     pub name: String,
-    /// 绝对路径（正斜杠），可直接作为下一次 list_directory 的 `path`
+    /// 工作区相对路径（前导 `/`），或工作区外白名单目录的盘符绝对路径；
+    /// 可直接作为下一次 list_directory / read_file_text 的 `path`
     pub path: String,
     /// 是目录吗
     pub is_dir: bool,
@@ -1223,6 +1224,21 @@ pub fn list_workspace_files(
     Ok(out)
 }
 
+/// 把目录项拼成前端下一次要传回来的路径（v0.8.0）。
+///
+/// 不能用 `canonicalize()` 后的磁盘绝对路径：Windows 上它带 `\\?\` 扩展前缀，
+/// 转成 `//?/E:/...` 后 `resolve_path` 不认这是盘符路径，会把它当工作区相对
+/// 路径逐段检查，于是 `E:` 命中「路径段不能包含冒号」——用户点开任意子目录都会报错。
+/// 相对写法同时避免把工作区在磁盘上的绝对位置暴露给界面。
+fn join_panel_path(base: &str, name: &str) -> String {
+    let base = base.trim();
+    let base = base.strip_prefix("//?/").unwrap_or(base);
+    if base.is_empty() || base == "/" {
+        return format!("/{name}");
+    }
+    format!("{}/{name}", base.trim_end_matches('/'))
+}
+
 /// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
 ///
 /// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
@@ -1267,8 +1283,8 @@ pub fn list_directory(
     for entry in std::fs::read_dir(&target).map_err(|e| format!("读取目录失败: {e}"))? {
         let entry = entry.map_err(|e| format!("读取目录失败: {e}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
+        let next_path = join_panel_path(&path, &name);
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let entry_path = entry.path();
         let meta = entry.metadata().ok();
         let size = meta.as_ref().map(|m| if is_dir { 0 } else { m.len() }).unwrap_or(0);
         let modified_ms = meta
@@ -1279,7 +1295,9 @@ pub fn list_directory(
             .unwrap_or(0);
         out.push(DirEntryView {
             name,
-            path: crate::paths::display(&entry_path),
+            // 工作区相对路径（前导 /）；工作区外的白名单目录才用盘符绝对路径。
+            // 绝不能回传 canonicalize 后带 \\?\ 前缀的磁盘路径。
+            path: next_path,
             is_dir,
             size,
             modified_ms,
@@ -1861,6 +1879,20 @@ mod tests {
         // 显式给了名字就用给的
         let ok = verify_allowlist_add("D:/projects/data", Some("我的数据"), false).unwrap();
         assert_eq!(ok.label, "我的数据");
+    }
+
+    /// 右侧文件面板点开子目录曾被误报「路径段不能包含冒号」：
+    /// canonicalize 的 `\\?\` 前缀会让盘符段降级成相对路径的一段。
+    /// 这里钉住返回值始终是工作区相对路径（或干净的盘符绝对路径）。
+    #[test]
+    fn panel_paths_stay_workspace_relative() {
+        assert_eq!(join_panel_path("/", "src"), "/src");
+        assert_eq!(join_panel_path("/src", "lib"), "/src/lib");
+        assert_eq!(join_panel_path("/src/", "lib"), "/src/lib");
+        assert_eq!(join_panel_path("E:/ws", "src"), "E:/ws/src");
+        let legacy = join_panel_path("//?/E:/ws", "src");
+        assert_eq!(legacy, "E:/ws/src");
+        assert!(!legacy.contains("//?/"), "扩展前缀不能回传到前端: {legacy}");
     }
 
 }
