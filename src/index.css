@@ -798,3 +798,46 @@
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------
+   右栏展开 / 收起
+   --------------------------------------------------------------- */
+/* 条件渲染本身播不了退出动画，卸载由 useRightbarTransition 延迟到动画结束；
+   时长必须与 hook 的 RIGHTBAR_ANIM_MS 一致。transform 不改布局，
+   拖拽求解出的三栏宽度不会跟着抖。 */
+@keyframes aura-rightbar-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes aura-rightbar-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.rightbar-enter {
+  animation: aura-rightbar-in 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.rightbar-leave {
+  animation: aura-rightbar-out 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rightbar-enter,
+  .rightbar-leave {
+    animation-duration: 1ms;
+  }
+}

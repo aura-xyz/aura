@@ -7,14 +7,13 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
-  FolderTree,
+  Folder,
   Globe,
   History,
   Maximize2,
   MessageSquarePlus,
   Minimize2,
-  PanelRightClose,
-  PanelRightOpen,
+  PanelRight,
   Plug,
   Sparkles,
   TriangleAlert,
@@ -27,6 +26,7 @@ import Sidebar from "./components/Sidebar";
 import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
 import { useTheme } from "./hooks/useTheme";
+import { useRightbarTransition } from "./hooks/useRightbarTransition";
 import { useDropZone } from "./hooks/useDropZone";
 import { checkAllowlistPath } from "./lib/api";
 import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
@@ -127,6 +127,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const [view, setView] = useState<"chat" | "settings" | "skills" | "mcp" | "timeline">(
     "chat",
   );
+  // 导航区块要引用 openRightbar，故过渡 hook 必须在 navBlocks 之前声明。
+  const {
+    shown: rightbarShown,
+    closing: rightbarClosing,
+    open: openRightbar,
+    close: closeRightbar,
+  } = useRightbarTransition();
   // 左侧导航默认区块，由 Shell 拥有 onClick 闭包（newSession / setView 等）。
   const navBlocks: { id: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; panel?: string }[] = useMemo(
     () => [
@@ -142,11 +149,11 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       {
         id: "files",
         label: "文件",
-        icon: FolderTree,
+        icon: Folder,
         panel: "files",
         onClick: () => {
           setView("chat");
-          setRightbarShown(true);
+          openRightbar();
           setRightbarTab("files");
         },
       },
@@ -157,7 +164,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         panel: "web",
         onClick: () => {
           setView("chat");
-          setRightbarShown(true);
+          openRightbar();
           setRightbarTab("web");
         },
       },
@@ -180,14 +187,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         onClick: () => setView("timeline"),
       },
     ],
-    [newSession, setView],
+    [newSession, setView, openRightbar],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [rightbarShown, setRightbarShown] = useState(false);
   const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
   const [rightbarTab, setRightbarTab] = useState<string>("files");
   const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
@@ -201,6 +207,11 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // 面板卸载后复位全屏态，避免下次打开仍是全屏（过渡 hook 不感知全屏）
+  useEffect(() => {
+    if (!rightbarShown) setRightbarFullscreen(false);
+  }, [rightbarShown]);
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
   const sidebarIsCollapsed = narrow ? !narrowExpanded : sidebarCollapsed;
@@ -580,7 +591,10 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
         {rightbarShown && (
           <aside
+            data-state={rightbarClosing ? "closing" : "open"}
             className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
+              rightbarClosing ? "rightbar-leave" : "rightbar-enter"
+            } ${
               rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
             }`}
             style={{ width: rightbarWidthPx }}
@@ -631,15 +645,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setRightbarShown(false);
-                  setRightbarFullscreen(false);
-                }}
+                onClick={closeRightbar}
                 aria-label="关闭面板"
                 title="关闭面板"
                 className="rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
               >
-                <PanelRightClose size={13} aria-hidden />
+                <PanelRight size={13} aria-hidden />
               </button>
             </div>
             {(() => {
@@ -657,12 +668,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         {!rightbarShown && (
           <button
             type="button"
-            onClick={() => setRightbarShown(true)}
+            onClick={() => openRightbar()}
             aria-label="打开侧边面板"
             title="打开侧边面板"
             className="absolute right-2 top-2 z-10 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
           >
-            <PanelRightOpen size={14} aria-hidden />
+            <PanelRight size={14} aria-hidden />
           </button>
         )}
       </div>
