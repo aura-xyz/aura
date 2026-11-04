@@ -290,9 +290,10 @@ export default function InputArea({
       )}
       {/* 参考图版式：一个圆角卡片两段式——上半部输入区（最小两行高，
           单行时也保持舒展的留白），下半部工具行收入卡内；卡片外只放
-          次级控件（工作区/模式/快捷键提示）。token 不变：圆角、细边框、
-          轻阴影、focus 描边。 */}
-      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-colors focus-within:border-brand focus-within:shadow-sm">
+          次级控件（工作区/模式/快捷键提示）。
+          不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感，
+          桌面应用里输入框本来就常驻，聚焦不该让边框变色。 */}
+      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs">
         <textarea
           ref={textareaRef}
           rows={1}
