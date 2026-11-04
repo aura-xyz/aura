@@ -36,6 +36,12 @@ interface Props {
   onOpenSettings: () => void;
   /** 选中会话后回调，用于从设置/Skills/MCP 页切回对话视图 */
   onNavigate?: () => void;
+  /** 展开态宽度，由 App 的三栏几何求解下发 */
+  width?: number;
+  /** 受控折叠态；不传则由组件自己用 localStorage 记忆 */
+  collapsed?: boolean;
+  /** 折叠按钮回调，传入后由外层统一管窄视口自动折叠 */
+  onToggleCollapsed?: () => void;
 }
 
 function basename(p: string): string {
@@ -49,6 +55,9 @@ export default function Sidebar({
   activePanel = null,
   onOpenSettings,
   onNavigate,
+  width,
+  collapsed: controlledCollapsed,
+  onToggleCollapsed,
 }: Props) {
   const {
     workspaces,
@@ -64,9 +73,10 @@ export default function Sidebar({
   } = useStore();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [collapsed, setCollapsed] = useState(
+  const [innerCollapsed, setInnerCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
+  const collapsed = controlledCollapsed ?? innerCollapsed;
 
   // 折叠动画：内容先保持宽度淡出，宽度收窄后再切到 rail 布局。
   const [settled, setSettled] = useState(collapsed);
@@ -92,7 +102,11 @@ export default function Sidebar({
   }, [workspaces]);
 
   function toggleCollapsed() {
-    setCollapsed((v) => {
+    if (onToggleCollapsed) {
+      onToggleCollapsed();
+      return;
+    }
+    setInnerCollapsed((v) => {
       localStorage.setItem(COLLAPSE_KEY, v ? "0" : "1");
       return !v;
     });
@@ -126,7 +140,9 @@ function toggleExpand(w: string) {
       className={`m-2 flex max-h-[calc(100%-1rem)] shrink-0 flex-col self-start overflow-hidden rounded-card border border-line bg-surface shadow-sm transition-[width,min-height] duration-200 ease-in-out ${
         collapsed ? "w-14 min-h-0" : "w-64 min-h-[calc(100%-1rem)]"
       } ${!wide && everWide.current ? "railIn" : ""} ${collapsed && wide ? "fading" : ""}`}
-      style={wide ? { width: collapsed ? 240 : undefined } : undefined}
+      style={{
+        width: collapsed ? (wide ? (width ?? 240) : undefined) : (width ?? undefined),
+      }}
     >
       <header className="flex h-[49px] shrink-0 items-center gap-2 px-3">
         {/* 折叠态下 logo 即展开入口，不再 disabled，避免用户无法展开。 */}

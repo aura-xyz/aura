@@ -10,7 +10,9 @@ import {
   FolderTree,
   Globe,
   History,
+  Maximize2,
   MessageSquarePlus,
+  Minimize2,
   PanelRightClose,
   PanelRightOpen,
   Plug,
@@ -19,14 +21,12 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
-import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
-import RightPanel from "./components/RightPanel";
 import Sidebar from "./components/Sidebar";
 import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
-import { useTheme, type Theme } from "./hooks/useTheme";
+import { useTheme } from "./hooks/useTheme";
 import { useDropZone } from "./hooks/useDropZone";
 import { checkAllowlistPath } from "./lib/api";
 import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
@@ -45,8 +45,20 @@ import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
 import TimelinePage from "./pages/TimelinePage";
-import { WebBrowserPanel } from "./components/WebBrowserPanel";
+import { PANEL_BODIES, PANEL_ICONS } from "./components/PanelBodies";
 import { StoreProvider, useStore } from "./store";
+import { panelRegistry } from "./lib/panels";
+import {
+  RIGHTBAR_DEFAULT,
+  RIGHTBAR_MAX_RATIO,
+  RIGHTBAR_MIN,
+  SIDEBAR_AUTO_COLLAPSE,
+  SIDEBAR_DEFAULT,
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
+  clampWidth,
+  computeColumns,
+} from "./lib/columns";
 
 function basename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
@@ -83,7 +95,7 @@ function shouldUseNativeMenu(target: EventTarget | null): boolean {
   return false;
 }
 
-function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const {
     busy,
     sendMessage,
@@ -176,9 +188,40 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
   const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [rightbarShown, setRightbarShown] = useState(false);
-  const [rightbarWidth, setRightbarWidth] = useState(320);
-  const [rightbarTab, setRightbarTab] = useState<"files" | "todo" | "web">("files");
-  const rightbarRef = useRef<HTMLDivElement | null>(null);
+  const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
+  const [rightbarTab, setRightbarTab] = useState<string>("files");
+  const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [narrowExpanded, setNarrowExpanded] = useState(false);
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewport(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
+  const sidebarIsCollapsed = narrow ? !narrowExpanded : sidebarCollapsed;
+  const toggleSidebar = () => {
+    // 窄视口下用户手动展开要能盖过自动折叠，不能点一下就弹回去
+    if (narrow) setNarrowExpanded((v) => !v);
+    else setSidebarCollapsed((v) => !v);
+  };
+  const cols = computeColumns(
+    viewport,
+    sidebarWidth,
+    rightbarWidth,
+    sidebarIsCollapsed,
+    rightbarShown && !rightbarFullscreen,
+  );
+  // 轨道为 0（视口太窄）或全屏时右栏改走覆盖层，中栏保底宽度不受影响
+  const rightbarOverlay = rightbarFullscreen || cols.rightbar === 0;
+  const rightbarWidthPx = rightbarFullscreen
+    ? Math.max(RIGHTBAR_MIN, viewport - cols.sidebar)
+    : cols.rightbar || RIGHTBAR_MIN;
+  const panelList = panelRegistry.list();
 
   /**
    * v0.7.0：拖入文件 → 把路径附加到输入框。
@@ -411,38 +454,51 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
     </div>
   ) : null;
 
-  // 右侧面板拖拽：pointer capture + rAF 节流，dx 累加到 width，clamp 到 [300, 70% 视口]
-  const rightbarDrag = useRef<{ startX: number; startWidth: number } | null>(null);
-  const onRightbarStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const el = rightbarRef.current;
-    if (!el) return;
-    rightbarDrag.current = { startX: e.clientX, startWidth: el.getBoundingClientRect().width };
-  }, []);
+  /**
+   * 左右两栏共用一套拖拽。
+   *
+   * 旧实现把 ref 挂在 1px 宽的拖拽把手上，startWidth 拿到的是 1，
+   * 于是 dx 无论怎么累加都被 clamp 成 300 —— 表现为「拖不动」。
+   * 现在基准宽度直接取三栏求解的结果，并用 pointer capture 保证
+   * 指针移出把手后仍能继续拖。
+   */
+  const dragRef = useRef<{
+    side: "sidebar" | "rightbar";
+    startX: number;
+    startWidth: number;
+  } | null>(null);
 
-  const onRightbarMove = useCallback((e: MouseEvent) => {
-    if (!rightbarDrag.current) return;
-    const dx = e.clientX - rightbarDrag.current.startX;
-    let next = rightbarDrag.current.startWidth + dx;
-    const max = Math.floor(window.innerWidth * 0.7);
-    next = Math.min(max, Math.max(300, next));
-    setRightbarWidth(next);
-  }, []);
-
-  const onRightbarEnd = useCallback((_e?: MouseEvent) => {
-    rightbarDrag.current = null;
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => onRightbarMove(e);
-    const onUp = (e: MouseEvent) => onRightbarEnd(e);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+  const startDrag =
+    (side: "sidebar" | "rightbar") => (e: React.PointerEvent) => {
+      e.preventDefault();
+      const el = e.currentTarget as HTMLElement;
+      el.setPointerCapture(e.pointerId);
+      dragRef.current = {
+        side,
+        startX: e.clientX,
+        startWidth: side === "sidebar" ? cols.sidebar : cols.rightbar,
+      };
     };
-  }, [onRightbarMove, onRightbarEnd]);
+
+  const moveDrag = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    if (d.side === "sidebar") {
+      setSidebarWidth(clampWidth(d.startWidth + dx, SIDEBAR_MIN, SIDEBAR_MAX));
+    } else {
+      // 右栏在左边拖：向右拖 dx>0 应该变窄
+      setRightbarWidth(
+        clampWidth(d.startWidth - dx, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO),
+      );
+    }
+  };
+
+  const endDrag = (e: React.PointerEvent) => {
+    dragRef.current = null;
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+  };
 
   return (
     <div
@@ -458,7 +514,21 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
           activePanel={rightbarShown ? rightbarTab : null}
           onOpenSettings={() => setView("settings")}
           onNavigate={() => setView("chat")}
+          width={cols.sidebar}
+          collapsed={sidebarIsCollapsed}
+          onToggleCollapsed={toggleSidebar}
         />
+        {!sidebarIsCollapsed && (
+          <div
+            className="absolute top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-brand/30"
+            style={{ left: cols.sidebar - 2 }}
+            onPointerDown={startDrag("sidebar")}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            aria-hidden
+          />
+        )}
 
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "settings" ? (
@@ -466,7 +536,6 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
               <SettingsPage
                 onClose={() => setView("chat")}
                 theme={theme}
-                setTheme={setTheme}
               />
             </div>
           ) : view === "skills" ? (
@@ -510,70 +579,90 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
         </main>
 
         {rightbarShown && (
-          <>
-            <div
-              ref={rightbarRef}
-              className="absolute left-[-8px] top-0 bottom-0 w-1 cursor-col-resize border-r border-brand/30 z-10"
-              onMouseDown={onRightbarStart}
-            />
-            <aside
-              className="flex shrink-0 flex-col overflow-hidden border-l border-line transition-width duration-200 ease-in-out"
-              style={{ width: rightbarShown ? `${rightbarWidth}px` : 0 }}
-            >
-              <div className="mx-2 mt-2 mb-1 flex items-center gap-0.5">
-                {(
-                  [
-                    { id: "files", label: "文件" },
-                    { id: "web", label: "网页" },
-                    { id: "todo", label: "任务" },
-                  ] as const
-                ).map((tab) => (
+          <aside
+            className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
+              rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
+            }`}
+            style={{ width: rightbarWidthPx }}
+          >
+            {!rightbarFullscreen && (
+              <div
+                className="absolute left-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-brand/30"
+                onPointerDown={startDrag("rightbar")}
+                onPointerMove={moveDrag}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+                aria-hidden
+              />
+            )}
+            <div className="mx-2 mt-2 mb-1 flex items-center gap-0.5">
+              {/* tab 列表由注册表派生，新增面板不必再改外壳 */}
+              {panelList.map((panel) => {
+                const Icon = PANEL_ICONS[panel.id];
+                return (
                   <button
-                    key={tab.id}
+                    key={panel.id}
                     type="button"
-                    onClick={() => setRightbarTab(tab.id)}
-                    aria-current={rightbarTab === tab.id ? "page" : undefined}
-                    className={`rounded-tag px-2 py-1 text-[11px] font-medium tracking-[0.04em] transition-colors ${
-                      rightbarTab === tab.id
+                    onClick={() => setRightbarTab(panel.id)}
+                    aria-current={rightbarTab === panel.id ? "page" : undefined}
+                    className={`flex items-center gap-1 rounded-tag px-2 py-1 text-[11px] font-medium tracking-[0.04em] transition-colors ${
+                      rightbarTab === panel.id
                         ? "bg-bubble text-foreground"
                         : "text-subtle hover:bg-bubble hover:text-foreground"
                     }`}
                   >
-                    {tab.label}
+                    {Icon && <Icon size={12} aria-hidden />}
+                    {panel.label}
                   </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setRightbarShown(false)}
-                  aria-label="关闭面板"
-                  title="关闭面板"
-                  className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-                >
-                  <PanelRightClose size={13} aria-hidden />
-                </button>
-              </div>
-              {rightbarTab === "files" ? (
-                <FileBrowserPanel sessionId={activeId} />
-              ) : rightbarTab === "web" ? (
-                <WebBrowserPanel />
-              ) : view === "chat" ? (
-                <RightPanel />
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setRightbarFullscreen((v) => !v)}
+                aria-label={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                title={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+              >
+                {rightbarFullscreen ? (
+                  <Minimize2 size={13} aria-hidden />
+                ) : (
+                  <Maximize2 size={13} aria-hidden />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRightbarShown(false);
+                  setRightbarFullscreen(false);
+                }}
+                aria-label="关闭面板"
+                title="关闭面板"
+                className="rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+              >
+                <PanelRightClose size={13} aria-hidden />
+              </button>
+            </div>
+            {(() => {
+              const Body = PANEL_BODIES[rightbarTab];
+              return Body ? (
+                <Body sessionId={activeId} view={view} />
               ) : (
                 <p className="px-3 py-4 text-[11px] text-subtle">
-                  任务面板只在对话视图可用
+                  未注册的面板：{rightbarTab}
                 </p>
-              )}
-            </aside>
-          </>
+              );
+            })()}
+          </aside>
         )}
         {!rightbarShown && (
           <button
             type="button"
             onClick={() => setRightbarShown(true)}
-            className="absolute right-0 top-1/2 -translate-y-1/2 z-10 flex items-center gap-1.5 rounded-l-md px-2 py-1.5 text-left text-[11px] font-medium tracking-[0.08em] text-subtle transition-colors hover:bg-bubble shadow-sm"
+            aria-label="打开侧边面板"
+            title="打开侧边面板"
+            className="absolute right-2 top-2 z-10 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
           >
-            <PanelRightOpen size={12} aria-hidden />
-            面板
+            <PanelRightOpen size={14} aria-hidden />
           </button>
         )}
       </div>
@@ -672,11 +761,11 @@ function Shell({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void
 }
 
 export default function App() {
-  const { resolved, setTheme } = useTheme();
+  const themeApi = useTheme();
 
   return (
     <StoreProvider>
-      <Shell theme={resolved} setTheme={setTheme as (t: "light" | "dark") => void} />
+      <Shell theme={themeApi} />
     </StoreProvider>
   );
 }
