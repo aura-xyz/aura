@@ -440,6 +440,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     onSubmit: submitMessage,
   };
 
+  /** 设置改成叠加模态，底层继续按对话视图渲染，不再整页替换。 */
+  const contentView = view === "settings" ? "chat" : view;
+
   /** 没有消息（或没有会话）→ 走开始界面 */
   const isEmptySession = (activeSession?.messages.length ?? 0) === 0;
 
@@ -513,7 +516,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
   return (
     <div
-      className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
+      className="flex h-screen flex-col overflow-hidden bg-chrome text-foreground"
       onContextMenu={onContextMenu}
     >
       <TitleBar />
@@ -541,23 +544,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
           />
         )}
 
-        <main className="flex min-w-0 flex-1 flex-col">
-          {view === "settings" ? (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <SettingsPage
-                onClose={() => setView("chat")}
-                theme={theme}
-              />
-            </div>
-          ) : view === "skills" ? (
+        <main className="flex min-w-0 flex-1 flex-col bg-surface">
+          {contentView === "skills" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <SkillsPage onClose={() => setView("chat")} />
             </div>
-          ) : view === "mcp" ? (
+          ) : contentView === "mcp" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <McpPage onClose={() => setView("chat")} />
             </div>
-          ) : view === "timeline" ? (
+          ) : contentView === "timeline" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TimelinePage onClose={() => setView("chat")} />
             </div>
@@ -677,6 +673,10 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
           </button>
         )}
       </div>
+
+      {view === "settings" && (
+        <SettingsPage onClose={() => setView("chat")} theme={theme} />
+      )}
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
 
