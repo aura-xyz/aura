@@ -197,6 +197,8 @@ pub struct TurnContext<'a> {
     pub cancelled: &'a AtomicBool,
     /// 本轮会话模式，决定可用工具与 prompt 形态。默认 Chat 以兼容既有调用方。
     pub mode: Mode,
+    /// `/goal` 设定的长期目标，每轮重建 system prompt 时注入。
+    pub goal: &'a str,
     /// 当前任务清单的运行时副本。
     ///
     /// 用 `&mut` 是关键：runner 每轮工具调用后都会重建 system prompt，
@@ -292,6 +294,15 @@ fn emit_action_detail(
         EV_ACTION,
         json!({ "session_id": session_id, "tool": tool, "text": label, "ok": ok, "detail": detail, "duration_ms": duration_ms, "diff": diff }),
     );
+}
+
+/// 长期目标段落。压缩只动 history，目标每轮重建 prompt 时重新注入，
+/// 因此长对话里不会被摘要吃掉（与任务清单同一思路）。
+pub fn render_goal_section(goal: &str) -> String {
+    format!(
+        "\n\n## 长期目标\n以下是用户设定的长期目标，请在本轮及后续轮次持续推进，不要擅自宣布完成：\n{}\n",
+        goal.trim()
+    )
 }
 
 /// 本轮累计用量。一轮里可能因工具往返发起多次 LLM 请求，
@@ -681,6 +692,14 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                 s.push_str(todo_update_brief());
             }
             s.push_str(&todo::render_for_prompt(ctx.todos));
+            s
+        };
+        // 长期目标与压缩互不影响：history 被摘要替换后目标仍在。
+        let system = if ctx.goal.trim().is_empty() {
+            system
+        } else {
+            let mut s = system;
+            s.push_str(&render_goal_section(ctx.goal));
             s
         };
         let system_tokens = estimate_tokens(&system) + 4;

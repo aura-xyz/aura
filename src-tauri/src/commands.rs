@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::agent::mode::Mode;
@@ -236,6 +236,15 @@ pub async fn send_message(
         .and_then(|db| db::disabled_skill_names(&db).ok())
         .unwrap_or_default();
 
+    // `/goal` 设定的长期目标：每轮重建 prompt 时注入，压缩历史不会丢。
+    let goal = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::get_setting(&db, &format!("goal:{session_id}"))
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    };
+
     let result = {
         let mut ctx = TurnContext {
             app: &app,
@@ -249,6 +258,7 @@ pub async fn send_message(
             session_id: &session_id,
             cancelled: &state.cancelled,
             mode,
+            goal: &goal,
             todos: &mut todos,
             persist_todos: Some(&|next: Vec<Todo>| {
                 if let Ok(db) = state.db.lock() {
@@ -1763,6 +1773,95 @@ pub fn open_in_app(
     crate::apps::open_in(&app_id, &workspace)
 }
 
+/// `/goal`：读取当前会话的长期目标。存 settings 表，不新增 schema。
+#[tauri::command]
+pub fn get_session_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    Ok(db::get_setting(&db, &format!("goal:{session_id}"))
+        .ok()
+        .flatten()
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn set_session_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+    text: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    db::set_setting(&db, &format!("goal:{session_id}"), text.trim())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct ExportBundle {
+    pub conversation_md: String,
+    pub timeline_md: String,
+    pub updater_log: String,
+}
+
+/// 会话历史转可读 Markdown；工具结果也是 user 角色，按引用块展示。
+fn format_conversation_md(history: &[Value], title: &str) -> String {
+    let mut out = format!("# {title}\n\n");
+    for m in history {
+        let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        if content.trim().is_empty() {
+            continue;
+        }
+        if role == "user" {
+            out.push_str(&format!("> {content}\n\n"));
+        } else if role == "assistant" {
+            out.push_str(&format!("{content}\n\n"));
+        }
+    }
+    out
+}
+
+/// `/export`：把当前会话整理成可读三件套，前端用 fflate 打包成 zip。
+#[tauri::command]
+pub fn export_session_bundle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    title: Option<String>,
+) -> Result<ExportBundle, String> {
+    let (history, entries) = {
+        let db = state.db.lock().map_err(lock_err)?;
+        let history = db::load_history(&db, &session_id)
+            .ok()
+            .flatten()
+            .map(|(h, _)| h)
+            .unwrap_or_default();
+        let entries = db::load_timeline(&db, &session_id).unwrap_or_default();
+        (history, entries)
+    };
+    let title = title.as_deref().unwrap_or("未命名会话");
+    let log_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("logs")
+        .join("updater.log");
+    let updater_log = std::fs::read_to_string(&log_path)
+        .unwrap_or_else(|e| format!("（读取更新日志失败：{e}）"));
+    Ok(ExportBundle {
+        conversation_md: format_conversation_md(&history, title),
+        timeline_md: crate::timeline::to_markdown(title, &entries),
+        updater_log,
+    })
+}
+
+/// 前端打包好 zip 后由后端落盘，绕开 plugin-fs 对任意保存路径的权限限制。
+#[tauri::command]
+pub fn write_export_bundle(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1925,6 +2024,27 @@ mod tests {
         let legacy = join_panel_path("//?/E:/ws", "src");
         assert_eq!(legacy, "E:/ws/src");
         assert!(!legacy.contains("//?/"), "扩展前缀不能回传到前端: {legacy}");
+    }
+
+    #[test]
+    fn export_conversation_keeps_both_roles_readable() {
+        let history = vec![
+            serde_json::json!({"role": "user", "content": "看一下"}),
+            serde_json::json!({"role": "assistant", "content": "好的"}),
+            serde_json::json!({"role": "system", "content": "不该出现"}),
+        ];
+        let md = format_conversation_md(&history, "测试会话");
+        assert!(md.contains("# 测试会话"));
+        assert!(md.contains("> 看一下"));
+        assert!(md.contains("好的"));
+        assert!(!md.contains("不该出现"));
+    }
+
+    #[test]
+    fn goal_section_is_injected_every_turn() {
+        let section = crate::agent::runner::render_goal_section("  写完报告  ");
+        assert!(section.contains("写完报告"));
+        assert!(section.contains("持续推进"), "目标必须明确要求跨轮推进");
     }
 
 }
