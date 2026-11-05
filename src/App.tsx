@@ -7,8 +7,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
-  Folder,
-  Globe,
   History,
   Maximize2,
   MessageSquarePlus,
@@ -45,6 +43,7 @@ import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
 import TimelinePage from "./pages/TimelinePage";
+import OpenInMenu from "./components/OpenInMenu";
 import { PANEL_BODIES, PANEL_ICONS } from "./components/PanelBodies";
 import { StoreProvider, useStore } from "./store";
 import { panelRegistry } from "./lib/panels";
@@ -147,28 +146,6 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         },
       },
       {
-        id: "files",
-        label: "文件",
-        icon: Folder,
-        panel: "files",
-        onClick: () => {
-          setView("chat");
-          openRightbar();
-          setRightbarTab("files");
-        },
-      },
-      {
-        id: "web",
-        label: "网页",
-        icon: Globe,
-        panel: "web",
-        onClick: () => {
-          setView("chat");
-          openRightbar();
-          setRightbarTab("web");
-        },
-      },
-      {
         id: "skills",
         label: "Skills",
         icon: Sparkles,
@@ -187,7 +164,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         onClick: () => setView("timeline"),
       },
     ],
-    [newSession, setView, openRightbar],
+    [newSession, setView],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [confirmWs, setConfirmWs] = useState<string | null>(null);
@@ -304,6 +281,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newSession();
+        setView("chat");
+        return;
+      }
       if (e.ctrlKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setSearchOpen((v) => !v);
@@ -433,15 +416,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     onWorkspaceChange: setSessionWorkspace,
     workspaceLocked: activeSession ? activeSession.messages.length > 0 : false,
     sessionId: activeSession?.id ?? "",
+    sessionTitle: activeSession?.title,
     lastUserMessage: lastUserMessageOf(activeSession),
     editPrefill,
     editing: editingUserIndex !== null,
     onCancelEdit: cancelEdit,
     onSubmit: submitMessage,
   };
-
-  /** 设置改成叠加模态，底层继续按对话视图渲染，不再整页替换。 */
-  const contentView = view === "settings" ? "chat" : view;
 
   /** 没有消息（或没有会话）→ 走开始界面 */
   const isEmptySession = (activeSession?.messages.length ?? 0) === 0;
@@ -516,7 +497,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
   return (
     <div
-      className="flex h-screen flex-col overflow-hidden bg-chrome text-foreground"
+      className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
       onContextMenu={onContextMenu}
     >
       <TitleBar />
@@ -545,15 +526,19 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         )}
 
         <main className="flex min-w-0 flex-1 flex-col bg-surface">
-          {contentView === "skills" ? (
+          {view === "settings" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <SettingsPage onClose={() => setView("chat")} theme={theme} />
+            </div>
+          ) : view === "skills" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <SkillsPage onClose={() => setView("chat")} />
             </div>
-          ) : contentView === "mcp" ? (
+          ) : view === "mcp" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <McpPage onClose={() => setView("chat")} />
             </div>
-          ) : contentView === "timeline" ? (
+          ) : view === "timeline" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TimelinePage onClose={() => setView("chat")} />
             </div>
@@ -661,22 +646,29 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
             })()}
           </aside>
         )}
-        {!rightbarShown && (
-          <button
-            type="button"
-            onClick={() => openRightbar()}
-            aria-label="打开侧边面板"
-            title="打开侧边面板"
-            className="absolute right-2 top-2 z-10 rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+        {rightbarShown && (
+          <div
+            className="absolute top-2 z-30"
+            style={{ right: rightbarWidthPx + 8 }}
           >
-            <PanelRight size={14} aria-hidden />
-          </button>
+            <OpenInMenu sessionId={activeId} workspace={workspace} />
+          </div>
+        )}
+        {!rightbarShown && (
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+            <OpenInMenu sessionId={activeId} workspace={workspace} />
+            <button
+              type="button"
+              onClick={() => openRightbar()}
+              aria-label="打开侧边面板"
+              title="打开侧边面板"
+              className="rounded-tag p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <PanelRight size={14} aria-hidden />
+            </button>
+          </div>
         )}
       </div>
-
-      {view === "settings" && (
-        <SettingsPage onClose={() => setView("chat")} theme={theme} />
-      )}
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
 

@@ -4,7 +4,6 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import OpenInMenu from "./OpenInMenu";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
@@ -164,31 +163,27 @@ function toggleExpand(w: string) {
         >
           Aura
         </span>
-        {!collapsed ? (
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <OpenInMenu sessionId={activeId ?? ""} workspace={workspace ?? ""} />
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label="收起侧边栏"
-              title="收起侧边栏"
-              className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-            >
-              <PanelLeft size={14} />
-            </button>
-          </div>
-        ) : (
-          everWide.current && (
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label="展开侧边栏"
-              title="展开侧边栏"
-              className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-            >
-              <PanelLeft size={14} />
-            </button>
-          )
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label="收起侧边栏"
+            title="收起侧边栏"
+            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          >
+            <PanelLeft size={14} />
+          </button>
+        )}
+        {collapsed && everWide.current && (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label="展开侧边栏"
+            title="展开侧边栏"
+            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          >
+            <PanelLeft size={14} />
+          </button>
         )}
       </header>
 
@@ -204,15 +199,21 @@ function toggleExpand(w: string) {
           const active = block.panel
             ? activePanel === block.panel
             : block.id !== "new" && view === block.id;
+          // 新会话单独成块：带边框的胶囊，悬停露出快捷键提示
+          const isNew = block.id === "new";
           return (
             <button
               key={block.id}
               type="button"
               onClick={block.onClick}
               aria-current={active ? "page" : undefined}
-              title={collapsed ? block.label : undefined}
-              className={`flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
+              title={isNew ? "新建对话 · Ctrl + N" : collapsed ? block.label : undefined}
+              className={`group flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
                 collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
+              } ${
+                isNew && !collapsed
+                  ? "mb-2 border border-line bg-surface shadow-sm hover:border-brand"
+                  : ""
               } ${
                 active
                   ? "bg-bubble font-medium text-foreground"
@@ -223,10 +224,21 @@ function toggleExpand(w: string) {
               <span className={`${label} ${collapsed ? labelOff : labelOn}`}>
                 {block.label}
               </span>
+              {isNew && !collapsed && (
+                <kbd className="ml-auto hidden shrink-0 text-[10px] text-subtle group-hover:inline">
+                  Ctrl + N
+                </kbd>
+              )}
             </button>
           );
         })}
       </nav>
+
+      {!collapsed && (
+        <div className="px-3 pb-1 pt-2 text-[11px] font-medium tracking-[0.08em] text-subtle">
+          工作区
+        </div>
+      )}
 
       {/* 工作区列表。折叠态是圆点指示器、展开态是可折叠分组，
           两者结构不同构，只能各自渲染；宽度过渡期间被 overflow-hidden 裁切。
