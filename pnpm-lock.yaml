@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@jetbrains/logos':
+        specifier: ^3.1.0
+        version: 3.1.0
       '@tauri-apps/api':
         specifier: ^2
         version: 2.12.1
@@ -325,6 +328,9 @@ packages:
   '@jest/types@27.0.2':
     resolution: {integrity: sha512-XpjCtJ/99HB4PmyJ2vgmN7vT+JLP7RW1FBT9RgnMFS4Dt7cvIyBee8O3/j98aUZ34ZpenPZFqmaaObWSeL65dg==}
     engines: {node: ^10.13.0 || ^12.13.0 || ^14.15.0 || >=15.0.0}
+
+  '@jetbrains/logos@3.1.0':
+    resolution: {integrity: sha512-rb7PQY29yrbP7Y0usKTT1lJ91gvVksn2vbhg/PXztyI1YIfOaLVq/Zhz4rvtpWh/mWHftWSfK9lyDSgkvPFs6w==}
 
   '@jridgewell/gen-mapping@0.3.5':
     resolution: {integrity: sha512-IzL8ZoEDIBRWEzlCcRhOaCupYyN5gdIK+Q6fbFdPDg6HqX6jpkItn7DFIpW9LQzXG6Df9sA7+OKnq0qlz/GaQg==}
@@ -2212,6 +2218,8 @@ snapshots:
       '@types/node': 26.6.5
       '@types/yargs': 16.0.11
       chalk: 4.0.0
+
+  '@jetbrains/logos@3.1.0': {}
 
   '@jridgewell/gen-mapping@0.3.5':
     dependencies:

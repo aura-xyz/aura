@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod api;
+pub mod apps;
 pub mod audit;
 pub mod commands;
 pub mod db;
@@ -18,7 +19,7 @@ use commands::{
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
     get_provider_statuses, get_providers, get_selected_model, get_workspace,
     inspect_market_skill, inspect_side_effects, install_market_skill, list_allowlist_paths, list_directory, list_market_providers,
-    list_workspace_files, read_file_text,
+    list_open_apps, list_workspace_files, open_in_app, read_file_text,
     list_market_skills, list_skill_sources, list_skills, list_timeline, load_sessions,
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
@@ -351,6 +352,8 @@ pub fn run() {
             list_workspace_files,
             list_directory,
             read_file_text,
+            list_open_apps,
+            open_in_app,
             check_allowlist_path,
             add_allowlist_path,
             remove_allowlist_path,

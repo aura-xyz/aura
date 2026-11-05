@@ -276,6 +276,22 @@ export function readFileText(
   return invoke("read_file_text", { sessionId, path });
 }
 
+/** 本机可用于「在…中打开」的应用；资源管理器始终在首位。 */
+export interface OpenApp {
+  id: string;
+  name: string;
+}
+
+/** 探测已安装的应用（文件资源管理器 / VS Code / JetBrains IDE）。 */
+export function listOpenApps(): Promise<OpenApp[]> {
+  return invoke("list_open_apps");
+}
+
+/** 在指定应用里打开当前会话的工作区；目录由后端从会话取，不由前端传。 */
+export function openInApp(appId: string, sessionId: string): Promise<void> {
+  return invoke("open_in_app", { appId, sessionId });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });

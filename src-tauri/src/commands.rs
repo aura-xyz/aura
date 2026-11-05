@@ -1731,6 +1731,38 @@ pub async fn remove_workspace(
     db::delete_workspace(&db, &path).map_err(|e| e.to_string())
 }
 
+/// 列出本机可用于「在…中打开」的应用（v0.8.0）。
+/// 资源管理器始终可用且是默认项，其余按实际安装的编辑器排列。
+#[tauri::command]
+pub fn list_open_apps() -> Vec<crate::apps::OpenAppView> {
+    crate::apps::installed_apps()
+}
+
+/// 在指定应用里打开**当前会话自己的工作区**。
+///
+/// 目录不从前端传：`AppState.workspace` 是「当前聚焦哪个」的 UI 状态，
+/// 用错会在别的目录里打开（DEV.md 不变量 #20）。路径白名单在这里不适用：
+/// 这是用户主动打开本机应用，不是模型的文件访问。
+#[tauri::command]
+pub fn open_in_app(
+    state: State<'_, AppState>,
+    app_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    let workspace = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::load_session_workspace(&db, &session_id)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+    };
+    let workspace = match workspace {
+        Some(w) => PathBuf::from(w),
+        None => state.workspace.lock().map_err(lock_err)?.clone(),
+    };
+    crate::apps::open_in(&app_id, &workspace)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

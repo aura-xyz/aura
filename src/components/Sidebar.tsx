@@ -4,6 +4,7 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
+import OpenInMenu from "./OpenInMenu";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
@@ -128,16 +129,18 @@ function toggleExpand(w: string) {
   const labelOn = "max-w-40 opacity-100";
 
   return (
-    // 悬浮卡片形态：四周留 8px 间隙 + 圆角 + 细边框与轻阴影，
-    // 取代原先贴边通栏 + border-r 的分割线形态。
+    // 展开态：与顶部标题栏同色连成一片（DSH 外壳），不要悬浮卡片；
+    // 收起态：回到原来的四周留白 + 圆角 + 细边框 + 轻阴影。
     //
-    // 高度：self-start + min-height 控制。展开态 min-h 撑满内容区（减去
-    // 上下 margin）；折叠态收成内容高，设置按钮下方不再留白。
+    // 高度：self-start + min-height 控制。展开态撑满内容区，
+    // 折叠态收成内容高，设置按钮下方不再留白。
     // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡；
     // max-height 同步限高，圆点很多时列表区内部滚动而不溢出窗口。
     <aside
-      className={`m-2 flex max-h-[calc(100%-1rem)] shrink-0 flex-col self-start overflow-hidden rounded-card border border-line bg-surface shadow-sm transition-[width,min-height] duration-200 ease-in-out ${
-        collapsed ? "w-14 min-h-0" : "w-64 min-h-[calc(100%-1rem)]"
+      className={`flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height] duration-200 ease-in-out ${
+        collapsed
+          ? "m-2 max-h-[calc(100%-1rem)] w-14 min-h-0 rounded-card border border-line bg-surface shadow-sm"
+          : "m-0 max-h-full min-h-full w-64 rounded-none border-0 bg-chrome"
       } ${!wide && everWide.current ? "railIn" : ""} ${collapsed && wide ? "fading" : ""}`}
       style={{
         width: collapsed ? (wide ? (width ?? 240) : undefined) : (width ?? undefined),
@@ -161,27 +164,31 @@ function toggleExpand(w: string) {
         >
           Aura
         </span>
-        {!collapsed && (
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label="收起侧边栏"
-            title="收起侧边栏"
-            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-[opacity] duration-200 hover:bg-bubble hover:text-foreground"
-          >
-            <PanelLeft size={14} />
-          </button>
-        )}
-        {collapsed && everWide.current && (
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label="展开侧边栏"
-            title="展开侧边栏"
-            className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-          >
-            <PanelLeft size={14} />
-          </button>
+        {!collapsed ? (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <OpenInMenu sessionId={activeId ?? ""} workspace={workspace ?? ""} />
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label="收起侧边栏"
+              title="收起侧边栏"
+              className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <PanelLeft size={14} />
+            </button>
+          </div>
+        ) : (
+          everWide.current && (
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label="展开侧边栏"
+              title="展开侧边栏"
+              className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <PanelLeft size={14} />
+            </button>
+          )
         )}
       </header>
 
