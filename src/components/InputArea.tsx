@@ -1,17 +1,51 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
+import { ArrowUp, Plus, Square } from "lucide-react";
+import type { LexicalEditor } from "lexical";
 import type { ModelInfo, SkillView } from "../lib/api";
 import type { Mode } from "../lib/mode";
 import { estimateTokens } from "../lib/tokens";
 import { loadInputDraft, saveInputDraft } from "../lib/draft";
+import { fileItems, findTrigger, type MentionItem, type MentionTrigger } from "../lib/mentions";
 import {
-  fileItems,
-  findTrigger,
-  skillItems,
-  type MentionItem,
-  type MentionTrigger,
-} from "../lib/mentions";
-import { listSkills, listWorkspaceFiles } from "../lib/api";
+  getSessionGoal,
+  listSkills,
+  listWorkspaceFiles,
+  setSessionGoal,
+} from "../lib/api";
+import {
+  SLASH_COMMANDS,
+  findSlashTrigger,
+  resolveSlashQuery,
+  type CommandId,
+} from "../lib/slashCommands";
+import {
+  exportCommandItems,
+  modelCommandItems,
+  modeCommandItems,
+  nextMode,
+  rootCommandItems,
+  skillCommandItems,
+  type CommandItem,
+} from "../lib/commandItems";
+import { downloadSessionZip } from "../lib/exportSession";
+import { useMarkdownLive } from "../hooks/useMarkdownLive";
+import MarkdownEditor, {
+  insertAtCaret,
+  replaceTrigger,
+  setEditorMarkdown,
+  type EditorSnapshot,
+} from "./MarkdownEditor";
+import CommandMenu from "./CommandMenu";
+import GoalBar from "./GoalBar";
+import GoalPanel from "./GoalPanel";
 import MentionMenu from "./MentionMenu";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
@@ -35,6 +69,8 @@ interface Props {
   workspaceLocked?: boolean;
   /** 当前会话 id。草稿按会话隔离，切换对话各自保留 */
   sessionId: string;
+  /** 会话标题，导出日志时作为文档标题 */
+  sessionTitle?: string;
   /** 最近一条用户消息，供上方向键召回 */
   lastUserMessage?: string;
   /** 编辑历史消息时要把原文放回输入框；null 表示不在编辑 */
@@ -54,9 +90,52 @@ interface Props {
    */
   onSubmit?: (text: string) => void;
   /**
-   * 布局变体：`bottom`（默认，贴在对话区底部）/ `inline`（嵌在开始界面里）。
+   * 布局变体：`bottom`（默认）贴在对话区底部 / `inline` 嵌在开始界面里。
    */
   variant?: "bottom" | "inline";
+  /**
+   * 覆盖「输入框 Markdown 实时渲染」开关。组件测试显式传 false 走
+   * textarea 路径（contenteditable 不响应 fireEvent.change），
+   * 生产环境不传、由设置页的开关决定。
+   */
+  markdownLive?: boolean;
+}
+
+type CommandView = CommandId | "root";
+
+interface CommandState {
+  view: CommandView;
+  /** slash = 由输入框的 `/` 触发；plus = 由工具行的加号按钮触发 */
+  source: "slash" | "plus";
+  /** 二级面板的过滤词 / 目标面板的预填内容 */
+  query: string;
+  /** 触发词在文本中的起止（plus 来源为 -1，表示没有可替换的文本） */
+  start: number;
+  end: number;
+}
+
+const CMD_TITLES: Record<CommandView, string> = {
+  root: "命令",
+  skill: "技能",
+  goal: "长期目标",
+  model: "模型",
+  mode: "模式",
+  export: "下载日志",
+};
+
+const CMD_HINT = "↑↓ 选择 · Enter 确认 · Esc 关闭 · 可直接点击";
+
+/** 文本节点内容 + 光标，供触发判定；textarea 的 line 就是全文。 */
+const EMPTY_SNAPSHOT: EditorSnapshot = { line: "", caret: 0, markdown: "" };
+
+/**
+ * 输入框消费一次按键：除了阻止默认行为，还要阻止继续冒泡到
+ * Lexical 在 contentEditable 上的原生 keydown 监听，否则回车会先
+ * 插段落、Tab 会先插制表符，再轮到输入框处理。
+ */
+function consume(e: KeyboardEvent<HTMLElement>): void {
+  e.preventDefault();
+  e.stopPropagation();
 }
 
 export default function InputArea({
@@ -72,60 +151,83 @@ export default function InputArea({
   onWorkspaceChange,
   workspaceLocked = false,
   sessionId,
+  sessionTitle,
   lastUserMessage,
   editPrefill = null,
   inputInsert = null,
   editing = false,
   onCancelEdit,
   onSubmit,
-  /**
-   * 布局变体：
-   * - `bottom`（默认）：贴在对话区底部，自带外边距。
-   * - `inline`：嵌在开始界面里（标题与示例之间），外边距由外层负责。
-   */
   variant = "bottom",
+  markdownLive: markdownLiveProp,
 }: Props) {
-  const [value, setValue] = useState("");
+  const [value, setValueState] = useState(() => loadInputDraft(sessionId));
+  const valueRef = useRef(value);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // 草稿是「切换会话时换内容」，必须知道当前显示的是哪个会话的草稿，
-  // 否则会把上个会话的草稿写进新会话。
-  const loadedForRef = useRef<string | null>(null);
+  const editorRef = useRef<LexicalEditor | null>(null);
+  const loadedForRef = useRef<string | null>(sessionId);
+  const lastSnapshotRef = useRef<EditorSnapshot>(EMPTY_SNAPSHOT);
+  /** Esc 关掉的那一版触发文本：文本没变就不要因光标变动重新弹出来。 */
+  const dismissedRef = useRef<string | null>(null);
 
-  // ── @ 文件引用 / / 技能调用（v0.7.0）─────────────────────────────
-  /** 当前的触发（null = 浮层关闭） */
+  const liveSetting = useMarkdownLive();
+  const markdownLive = markdownLiveProp ?? liveSetting;
+
+  const setValue = useCallback((next: string) => {
+    valueRef.current = next;
+    setValueState(next);
+  }, []);
+
+  // ── @ 文件引用（保留旧行为）──────────────────────────────────────
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
-  /** 候选条目 */
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
-  /** 高亮下标 */
   const [mentionIndex, setMentionIndex] = useState(0);
-  /** 请求序号：只认最后一次请求的结果 */
   const mentionReqRef = useRef(0);
-  /** 技能列表缓存：技能不会每敲一个键变一次 */
-  const skillCacheRef = useRef<SkillView[] | null>(null);
 
-  // 切会话：装入该会话的草稿
+  // ── / 命令面板 ───────────────────────────────────────────────────
+  const [cmd, setCmd] = useState<CommandState | null>(null);
+  const [cmdIndex, setCmdIndex] = useState(0);
+  const [skills, setSkills] = useState<SkillView[]>([]);
+  const [goal, setGoal] = useState("");
+  const goalRef = useRef("");
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // 切会话：装入该会话的草稿，同时把富文本编辑器内容一起换掉。
   useEffect(() => {
     if (loadedForRef.current === sessionId) return;
     loadedForRef.current = sessionId;
-    setValue(loadInputDraft(sessionId));
-  }, [sessionId]);
+    const text = loadInputDraft(sessionId);
+    setValue(text);
+    if (editorRef.current) setEditorMarkdown(editorRef.current, text);
+    setCmd(null);
+    setCmdIndex(0);
+    setTrigger(null);
+    setMentionItems([]);
+    mentionReqRef.current += 1;
+  }, [sessionId, setValue]);
 
-  // 编辑历史消息：原文放回输入框。
-  // 刻意不写进草稿——草稿是「用户正在写的东西」，编辑态的原文是
-  // 系统填的，存进去会在下次切会话时莫名其妙冒出来。
+  // 编辑历史消息：原文放回输入框。刻意不写进草稿——编辑态的原文是系统填的。
   useEffect(() => {
     if (editPrefill === null) return;
     setValue(editPrefill);
-  }, [editPrefill]);
+    if (editorRef.current) setEditorMarkdown(editorRef.current, editPrefill);
+    setCmd(null);
+    setTrigger(null);
+    setMentionItems([]);
+    mentionReqRef.current += 1;
+  }, [editPrefill, setValue]);
 
-  // 拖放插入的路径：追加到当前内容末尾。
-  // 用 id 做依赖，连续插入同一段文本也能被区分开。
+  // 拖放插入的路径：追加到当前内容末尾。用 id 做依赖，连续插入同段文本也能生效。
   useEffect(() => {
     if (!inputInsert) return;
-    setValue((v) => (v.trim() ? `${v} ${inputInsert.text}` : inputInsert.text));
-  }, [inputInsert?.id]);
+    const next = valueRef.current.trim()
+      ? `${valueRef.current} ${inputInsert.text}`
+      : inputInsert.text;
+    setValue(next);
+    if (editorRef.current) setEditorMarkdown(editorRef.current, next);
+  }, [inputInsert?.id, setValue]);
 
-  // 每次输入即存。不节流：localStorage 同步写，输入频率下量级可接受
+  // 每次输入即存。不节流：localStorage 同步写，输入频率下量级可接受。
   useEffect(() => {
     if (loadedForRef.current !== sessionId) return;
     saveInputDraft(sessionId, value);
@@ -137,132 +239,371 @@ export default function InputArea({
     el.style.height = "auto";
     const max = Math.floor(window.innerHeight / 3);
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  }, [value]);
+  }, [value, markdownLive]);
+
+  // 长期目标按会话存储，切会话即换成该会话的。
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    getSessionGoal(sessionId)
+      .then((g) => {
+        // 值没变就不 set：测试里 invoke 桩返回 null，避免一次无意义的
+        // 异步 setState 触发 act 警告；切会话回落到无目标时也能正确清空。
+        const next = typeof g === "string" ? g : "";
+        if (alive && goalRef.current !== next) {
+          goalRef.current = next;
+          setGoal(next);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
+
+  // 技能列表只在进入技能面板时拉一次，技能不会每敲一个键变一次。
+  useEffect(() => {
+    if (cmd?.view !== "skill") return;
+    let alive = true;
+    listSkills()
+      .then((s) => {
+        if (alive) setSkills(s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [cmd?.view]);
+
+  const activeItems = useMemo<CommandItem[]>(() => {
+    if (!cmd) return [];
+    switch (cmd.view) {
+      case "root":
+        return rootCommandItems(cmd.query);
+      case "skill":
+        return skillCommandItems(skills, cmd.query);
+      case "model":
+        return modelCommandItems(models, selectedModel, cmd.query);
+      case "mode":
+        return modeCommandItems(mode, cmd.query);
+      case "export":
+        return exportCommandItems();
+      case "goal":
+        return [];
+    }
+  }, [cmd, skills, models, selectedModel, mode]);
+
+  function closeMentions() {
+    setTrigger(null);
+    setMentionItems([]);
+    setMentionIndex(0);
+    mentionReqRef.current += 1;
+  }
+
+  function closeCommand() {
+    setCmd(null);
+    setCmdIndex(0);
+  }
+
+  /** 取文件候选。请求带序号，回来时只认最新的那次。 */
+  async function loadMentions(t: MentionTrigger) {
+    const req = ++mentionReqRef.current;
+    try {
+      const files = await listWorkspaceFiles(sessionId, t.query, 50);
+      if (req !== mentionReqRef.current) return;
+      setMentionItems(fileItems(files, t.query));
+      setMentionIndex(0);
+    } catch {
+      if (req === mentionReqRef.current) setMentionItems([]);
+    }
+  }
+
+  /**
+   * 依据光标处的文本重算浮层。
+   *
+   * `@` 仍是文件引用；`/` 现在先出**根命令**，精确命中某个别名
+   * （`/skill`、`/目标`…）才进入二级面板。参数带空格也支持，因为
+   * findSlashTrigger 交给 resolveSlashQuery 的是整段 query。
+   */
+  function updateTrigger(line: string, caret: number) {
+    if (dismissedRef.current !== line) dismissedRef.current = null;
+
+    const at = findTrigger(line, caret);
+    if (at?.char === "@") {
+      closeCommand();
+      setTrigger(at);
+      void loadMentions(at);
+      return;
+    }
+    closeMentions();
+
+    const slash = findSlashTrigger(line, caret);
+    const dismissed = dismissedRef.current === line;
+    if (slash && !dismissed) {
+      const res = resolveSlashQuery(slash.query);
+      if (res.command || res.matches.length > 0) {
+        setCmd({
+          view: res.command ?? "root",
+          source: "slash",
+          query: res.command ? res.args : slash.query,
+          start: slash.start,
+          end: slash.end,
+        });
+        setCmdIndex(0);
+        return;
+      }
+    }
+    closeCommand();
+  }
+
+  /** 两条编辑路径共用的变化入口。programmatic = 外部写入，只同步文本。 */
+  function handleSnapshot(s: EditorSnapshot, programmatic: boolean) {
+    lastSnapshotRef.current = s;
+    setValue(s.markdown);
+    if (programmatic) {
+      closeCommand();
+      closeMentions();
+      return;
+    }
+    updateTrigger(s.line, s.caret);
+  }
+
+  function handleTextareaChange(e: ChangeEvent<HTMLTextAreaElement>) {
+    const text = e.currentTarget.value;
+    const caret = e.currentTarget.selectionStart ?? text.length;
+    handleSnapshot({ line: text, caret, markdown: text }, false);
+  }
+
+  /**
+   * 替换一段文本。programmatic=true 时打标签，让 Lexical 的 OnChange
+   * 只同步内容、不重新弹面板；false 用于「选中根命令 → 插入 /skill 」，
+   * 需要让下一次解析把面板推进到二级。
+   */
+  function replaceRange(
+    start: number,
+    end: number,
+    insert: string,
+    programmatic: boolean,
+  ) {
+    const editor = editorRef.current;
+    if (editor) {
+      replaceTrigger(editor, start, end, insert, programmatic);
+      return; // Lexical 的 OnChange 负责后续
+    }
+    const cur = valueRef.current;
+    const next = cur.slice(0, start) + insert + cur.slice(end);
+    setValue(next);
+    if (programmatic) {
+      closeCommand();
+      closeMentions();
+    } else {
+      updateTrigger(next, start + insert.length);
+    }
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const caret = start + insert.length;
+      el.setSelectionRange(caret, caret);
+    });
+  }
+
+  function applyText(next: string) {
+    setValue(next);
+    if (editorRef.current) setEditorMarkdown(editorRef.current, next);
+    closeCommand();
+    closeMentions();
+  }
 
   function submit() {
-    const text = value.trim();
+    const text = valueRef.current.trim();
     if (!text || busy) return;
     // 没定工作区就发不出去：后端拿不到执行目录，工具会落到默认目录。
-    // 发送键同时置灰，这里拦住 Enter 快捷键那条路径。
     if (!workspace) return;
     if (onSubmit) {
       onSubmit(text);
     } else {
       onSend(text);
     }
-    setValue("");
+    applyText("");
     saveInputDraft(sessionId, "");
   }
 
-  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+  /** 选中面板条目后的收尾：清掉触发词（plus 来源则按需插入文本）。 */
+  function finishCommand(insert = "") {
+    const c = cmd;
+    closeCommand();
+    if (!c) return;
+    if (c.source === "slash") {
+      replaceRange(c.start, c.end, insert, true);
+    } else if (insert) {
+      const editor = editorRef.current;
+      if (editor) insertAtCaret(editor, insert);
+      else setValue(valueRef.current + insert);
+    }
+  }
+
+  async function runExport() {
+    try {
+      const ok = await downloadSessionZip(sessionId, sessionTitle);
+      if (ok) setNotice("日志已导出");
+    } catch (e) {
+      setNotice(`导出失败：${String(e)}`);
+    }
+  }
+
+  async function saveGoal(text: string) {
+    const trimmed = text.trim();
+    try {
+      await setSessionGoal(sessionId, trimmed);
+      goalRef.current = trimmed;
+      setGoal(trimmed);
+    } catch (e) {
+      setNotice(`目标保存失败：${String(e)}`);
+    }
+    finishCommand("");
+  }
+
+  function pickCommand(item: CommandItem) {
+    const c = cmd;
+    if (!c) return;
+    if (c.view === "root") {
+      const id = item.id as CommandId;
+      if (c.source === "plus") {
+        setCmd({ ...c, view: id, query: "" });
+        setCmdIndex(0);
+      } else {
+        const alias = SLASH_COMMANDS.find((x) => x.id === id)?.aliases[0] ?? id;
+        replaceRange(c.start, c.end, `/${alias} `, false);
+      }
+      return;
+    }
+    switch (c.view) {
+      case "skill":
+        finishCommand(`/${item.id} `);
+        break;
+      case "model":
+        onModelChange(item.id);
+        finishCommand();
+        break;
+      case "mode":
+        onModeChange(item.id as Mode);
+        finishCommand();
+        break;
+      case "export":
+        finishCommand();
+        void runExport();
+        break;
+      case "goal":
+        break;
+    }
+  }
+
+  function pickMention(item: MentionItem) {
+    const t = trigger;
+    if (!t) return;
+    closeMentions();
+    replaceRange(t.start, t.end, `${item.insert} `, true);
+  }
+
+  function openPlusMenu() {
+    closeMentions();
+    dismissedRef.current = null;
+    setCmd({ view: "root", source: "plus", query: "", start: -1, end: -1 });
+    setCmdIndex(0);
+  }
+
+  function dismiss() {
+    dismissedRef.current = lastSnapshotRef.current.line;
+    closeCommand();
+    closeMentions();
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLElement>) {
     if (e.nativeEvent.isComposing) return;
 
-    // 候选浮层开着时，方向键与回车归它——否则用户想选文件却把消息发了。
+    // 命令面板优先：浮层开着时回车是「选中」，不是「发送」。
+    if (cmd) {
+      if (e.key === "ArrowDown" && activeItems.length > 0) {
+        consume(e);
+        setCmdIndex((i) => (i + 1) % activeItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp" && activeItems.length > 0) {
+        consume(e);
+        setCmdIndex((i) => (i - 1 + activeItems.length) % activeItems.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        consume(e);
+        const item = activeItems[cmdIndex] ?? activeItems[0];
+        if (item) pickCommand(item);
+        return; // goal 面板由它自己的输入框接管回车
+      }
+      if (e.key === "Escape") {
+        consume(e);
+        dismiss();
+        return;
+      }
+      if (e.key === "Tab") {
+        consume(e);
+        closeCommand();
+        return;
+      }
+    }
+
+    // @ 文件面板开着时，方向键与回车归它。
     if (mentionItems.length > 0) {
       if (e.key === "ArrowDown") {
-        e.preventDefault();
+        consume(e);
         setMentionIndex((i) => (i + 1) % mentionItems.length);
         return;
       }
       if (e.key === "ArrowUp") {
-        e.preventDefault();
+        consume(e);
         setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length);
         return;
       }
       if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
+        consume(e);
         pickMention(mentionItems[mentionIndex] ?? mentionItems[0]);
         return;
       }
       if (e.key === "Escape") {
-        e.preventDefault();
+        consume(e);
         closeMentions();
         return;
       }
     }
 
-    // 上方向键召回上一条输入。仅在输入框为空时生效——
-    // 非空时方向键要留给光标移动，抢过来会让用户无法编辑中间内容。
-    if (e.key === "ArrowUp" && !value && lastUserMessage) {
-      e.preventDefault();
-      setValue(lastUserMessage);
+    // 上方向键召回上一条输入，仅在输入框为空时生效。
+    if (e.key === "ArrowUp" && !valueRef.current && lastUserMessage) {
+      consume(e);
+      applyText(lastUserMessage);
+      return;
+    }
+    // 焦点在输入框时 Tab 直接切模式（Chat → Plan → Build → Chat）。
+    if (e.key === "Tab") {
+      consume(e);
+      onModeChange(nextMode(mode));
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+      consume(e);
       submit();
     }
   }
 
-  /**
-   * 输入变化：判断光标处是不是 `@` / `/` 触发。
-   *
-   * 触发判定与过滤都在 `lib/mentions.ts`（纯函数、可单测），
-   * 这里只负责取光标位置与取候选。
-   */
-  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const text = e.target.value;
-    setValue(text);
-    const cursor = e.target.selectionStart ?? text.length;
-    const trigger = findTrigger(text, cursor);
-    if (!trigger) {
-      closeMentions();
-      return;
-    }
-    setTrigger(trigger);
-    void loadMentions(trigger);
-  }
-
-  /** 关掉浮层 */
-  function closeMentions() {
-    setTrigger(null);
-    setMentionItems([]);
-    setMentionIndex(0);
-    mentionReqRef.current += 1; // 让在途的请求作废
-  }
-
-  /** 取候选。请求带序号，回来时只认最新的那次。 */
-  async function loadMentions(t: MentionTrigger) {
-    const req = ++mentionReqRef.current;
-    try {
-      if (t.kind === "file") {
-        const files = await listWorkspaceFiles(sessionId, t.query, 50);
-        if (req !== mentionReqRef.current) return;
-        setMentionItems(fileItems(files, t.query));
-      } else {
-        const skills = skillCacheRef.current ?? (await listSkills());
-        if (req !== mentionReqRef.current) return;
-        skillCacheRef.current = skills;
-        setMentionItems(skillItems(skills, t.query));
-      }
-      setMentionIndex(0);
-    } catch {
-      // 取不到就当没有候选，不打断输入
-      if (req === mentionReqRef.current) setMentionItems([]);
-    }
-  }
-
-  /** 选中一条：把触发的那段文本替换掉，光标落到插入内容之后 */
-  function pickMention(item: MentionItem) {
-    const t = trigger;
-    if (!t) return;
-    const next = value.slice(0, t.start) + item.insert + " " + value.slice(t.end);
-    setValue(next);
-    closeMentions();
-    // 光标定位到插入内容之后
-    const caret = t.start + item.insert.length + 1;
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(caret, caret);
-    });
-  }
+  const placeholder =
+    mode === "plan"
+      ? "描述你想做的事，先让 Aura 给出计划…"
+      : mode === "build"
+        ? "描述要执行的任务…"
+        : "输入消息…";
 
   return (
     <div className={variant === "inline" ? "w-full" : "px-6 pb-5 pt-3"}>
-      {/* 编辑历史消息时的提示条。放在卡片上方，说明「这次发送会替换哪一条」——
-          没有它用户不知道发出去会发生什么。 */}
+      {/* 编辑历史消息时的提示条 */}
       {editing && (
         <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs">
           <span className="text-foreground">正在编辑之前的消息，发送后将替换它</span>
@@ -277,8 +618,34 @@ export default function InputArea({
           )}
         </div>
       )}
-      {/* @ 文件引用 / / 技能调用的候选浮层。放在输入卡片**上方**——
-          用户打 @ 或 / 时浮层就顶上来，不用移动视线去找。 */}
+      {notice && (
+        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-tag border border-line bg-surface px-3 py-1.5 text-xs">
+          <span className="min-w-0 flex-1 text-foreground">{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            aria-label="关闭提示"
+            className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle hover:border-brand"
+          >
+            关闭
+          </button>
+        </div>
+      )}
+      <GoalBar
+        goal={goal}
+        onEdit={() => {
+          setCmd({
+            view: "goal",
+            source: "plus",
+            query: goal,
+            start: -1,
+            end: -1,
+          });
+          setCmdIndex(0);
+        }}
+        onClear={() => void saveGoal("")}
+      />
+      {/* @ 文件引用浮层 */}
       {mentionItems.length > 0 && trigger && (
         <MentionMenu
           kind={trigger.kind}
@@ -288,40 +655,68 @@ export default function InputArea({
           onHover={setMentionIndex}
         />
       )}
-      {/* 参考图版式：一个圆角卡片两段式——上半部输入区（最小两行高，
-          单行时也保持舒展的留白），下半部工具行收入卡内；卡片外只放
-          次级控件（工作区/模式/快捷键提示）。
-          不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感，
-          桌面应用里输入框本来就常驻，聚焦不该让边框变色。 */}
-      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs">
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            mode === "plan"
-              ? "描述你想做的事，先让 Aura 给出计划…"
-              : mode === "build"
-                ? "描述要执行的任务…"
-                : "输入消息…"
+      {/* / 命令 / 加号共用的面板；鼠标与键盘走同一份 pickCommand。 */}
+      {cmd && (
+        <CommandMenu
+          title={CMD_TITLES[cmd.view]}
+          items={activeItems}
+          activeIndex={cmdIndex}
+          onHover={setCmdIndex}
+          onPick={pickCommand}
+          header={
+            cmd.view === "goal" ? (
+              <GoalPanel
+                initial={cmd.query}
+                onSave={(text) => void saveGoal(text)}
+                onClear={() => void saveGoal("")}
+              />
+            ) : undefined
           }
-          className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
+          hint={
+            cmd.view === "skill" && skills.length === 0
+              ? "正在加载技能…"
+              : CMD_HINT
+          }
         />
-        {/* 工具行。flex-wrap：窄屏时右侧的控件折行而不是被挤掉。
-            工作区与模型挨在一起——它们都是「这次任务在哪儿、用什么」，
-            分散在两行反而要来回扫。 */}
+      )}
+      {/* 不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感。 */}
+      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs">
+        {markdownLive ? (
+          <MarkdownEditor
+            initialValue={value}
+            editorRef={editorRef}
+            onChange={handleSnapshot}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+          />
+        ) : (
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={value}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            aria-label="消息输入框"
+            className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
+          />
+        )}
+        {/* 工具行。flex-wrap：窄屏时右侧控件折行而不是被挤掉。 */}
         <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-          {/* 工具行居左：模式胶囊（Chat/Plan/Build）。参考图此处是
-              「添加上下文」的 +，本应用没有对应功能，用已有的模式切换
-              补位——它本来就是每次发送时生效的核心开关。 */}
-          <ModeTabs mode={mode} onChange={onModeChange} />
-          {/* 右侧组用 min-w-0 而非 shrink-0：模型名可能很长，
-              固定不收缩会把工作区按钮挤出可视区。 */}
+          <div className="flex items-center gap-2">
+            {/* 加号：与输入 `/` 打开同一个命令面板 */}
+            <button
+              type="button"
+              onClick={openPlusMenu}
+              aria-label="插入命令"
+              title="插入命令"
+              className="rounded-full border border-line p-1.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <Plus size={14} aria-hidden />
+            </button>
+            <ModeTabs mode={mode} onChange={onModeChange} />
+          </div>
           <div className="flex min-w-0 items-center gap-3">
-            {/* 首条消息发出后工作区即锁定：按钮整体隐藏而非置灰——
-                一个对话唯一对应一个工作区，没有「改」这个操作了。 */}
             {!workspaceLocked && (
               <WorkspaceSelect
                 workspace={workspace}
@@ -364,7 +759,7 @@ export default function InputArea({
             约 {estimateTokens(value)} tokens
           </span>
         )}
-        <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行</p>
+        <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行 · Tab 切模式</p>
       </div>
     </div>
   );

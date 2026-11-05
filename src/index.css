@@ -817,3 +817,32 @@
     animation-duration: 1ms;
   }
 }
+
+/* ---------------------------------------------------------------
+   输入框内 Markdown 所见即所得（Lexical）
+   --------------------------------------------------------------- */
+/* ContentEditable 是常驻输入区，聚焦不该出现网页表单那种蓝色描边；
+   placeholder 由 RichTextPlugin 作为兄弟节点渲染，容器必须 relative。 */
+.aura-md-editor {
+  position: relative;
+}
+
+.aura-md-editor [contenteditable] {
+  outline: none;
+  -webkit-user-modify: read-write-plaintext-only;
+}
+
+.aura-md-editor p:first-child {
+  margin-top: 0;
+}
+
+.aura-md-editor p:last-child {
+  margin-bottom: 0;
+}
+
+/* Lexical 的空白段落也要撑出与 textarea 一致的最小高度 */
+.aura-md-editor [contenteditable] > p:only-child:empty::after {
+  content: "";
+  display: inline-block;
+  min-height: 1.5rem;
+}

@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // WorkspaceSelect 走 Tauri dialog；用 hoisted 保证工厂里能引用桩本体。
 // open 返回一个固定目录，模拟「用户选了 E:/dev/picked」。
-const { openMock } = vi.hoisted(() => ({
+const { openMock, saveMock } = vi.hoisted(() => ({
   openMock: vi.fn(async () => "E:/dev/picked"),
+  saveMock: vi.fn(async () => null as string | null),
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock, save: saveMock }));
 
 import InputArea from "./InputArea";
 import type { ModelInfo } from "../lib/api";
@@ -28,6 +29,8 @@ function mount(overrides: Partial<Record<string, unknown>> = {}) {
     onWorkspaceChange: vi.fn(async () => {}),
     workspaceLocked: false,
     sessionId: "s1",
+    // 组件测试固定走 textarea 路径：contenteditable 不响应 fireEvent.change
+    markdownLive: false,
     lastUserMessage: undefined as string | undefined,
     ...overrides,
   };
@@ -221,6 +224,7 @@ describe("InputArea 的 @ / 触发", () => {
   beforeEach(() => {
     filesMock.mockClear();
     skillsMock.mockClear();
+    saveMock.mockClear();
   });
 
   it("打 @ 后浮层出现在输入框上方并列出文件", async () => {
@@ -255,13 +259,68 @@ describe("InputArea 的 @ / 触发", () => {
     expect(box).toHaveValue("@<src/store.tsx> ");
   });
 
-  it("打 / 列出已启用的技能并插入技能名", async () => {
+  /// v0.8.0：`/` 变成命令入口，不再直接列技能。这是与旧行为最关键的差别，
+  /// 弄反了用户打 `/` 会看到一堆技能名，指令功能等于不存在。
+  it("打 / 列出 5 根命令，而不是技能列表", async () => {
     mount({ sessionId: "s1" });
     const box = screen.getByRole("textbox");
-    await userEvent.type(box, "/doc");
-    expect(await screen.findByText("docx")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("docx"));
+    await userEvent.type(box, "/");
+    expect(await screen.findByText("/skill")).toBeInTheDocument();
+    expect(screen.getByText("/goal")).toBeInTheDocument();
+    expect(screen.getByText("/model")).toBeInTheDocument();
+    expect(screen.getByText("/mode")).toBeInTheDocument();
+    expect(screen.getByText("/export")).toBeInTheDocument();
+    expect(screen.queryByText("docx")).toBeNull();
+  });
+
+  it("/skill 才进入技能菜单，鼠标点选后插入技能名", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/skill");
+    expect(await screen.findByText("/docx")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("/docx"));
     expect(box).toHaveValue("/docx ");
+  });
+
+  it("加号按钮打开与 / 相同的命令面板，且可用鼠标点选", async () => {
+    mount({ sessionId: "s1" });
+    await userEvent.click(screen.getByRole("button", { name: "插入命令" }));
+    expect(await screen.findByText("/goal")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("/goal"));
+    expect(screen.getByLabelText("给模型设定一个长期目标")).toBeInTheDocument();
+  });
+
+  it("焦点在输入框时 Tab 依次切换模式，不会把消息发出去", async () => {
+    const { props } = mount({ sessionId: "s1", mode: "chat" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "hello{Tab}");
+    expect(props.onModeChange).toHaveBeenCalledWith("plan");
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(box).toHaveValue("hello");
+  });
+
+  it("/model 面板列已收藏模型，点选后清掉触发词", async () => {
+    const onModelChange = vi.fn();
+    mount({
+      sessionId: "s1",
+      onModelChange,
+      models: [
+        {
+          key: "p:a",
+          id: "a",
+          label: "模型甲",
+          provider: "p",
+          provider_name: "厂商",
+          context_limit: 100,
+          pinned: true,
+        },
+      ],
+    });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/model");
+    await userEvent.click(await screen.findByText("模型甲"));
+    expect(onModelChange).toHaveBeenCalledWith("p:a");
+    expect(box).toHaveValue("");
   });
 
   /// 浮层与输入卡片的宽度约束必须一致（都是 mx-auto + max-w-4xl）。

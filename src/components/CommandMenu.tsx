@@ -1,0 +1,60 @@
+import type { ReactNode } from "react";
+import type { CommandItem } from "../lib/commandItems";
+
+/**
+ * 统一的鼠标可点命令面板。键盘上下/回车由输入框统一处理，
+ * 这里只负责展示与鼠标交互，避免两处各管一半。
+ */
+export default function CommandMenu({
+  title,
+  items,
+  activeIndex,
+  onHover,
+  onPick,
+  header,
+  hint,
+}: {
+  title: string;
+  items: CommandItem[];
+  activeIndex: number;
+  onHover: (index: number) => void;
+  onPick: (item: CommandItem) => void;
+  header?: ReactNode;
+  hint?: string;
+}) {
+  return (
+    <div
+      role="listbox"
+      aria-label={title}
+      className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl max-h-72 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
+    >
+      <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
+      {header}
+      {items.map((item, i) => (
+        <button
+          key={item.id}
+          type="button"
+          role="option"
+          aria-selected={i === activeIndex}
+          onMouseEnter={() => onHover(i)}
+          onClick={() => onPick(item)}
+          className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left transition-colors ${
+            i === activeIndex ? "bg-bubble" : "hover:bg-bubble"
+          }`}
+        >
+          {item.icon && <item.icon size={13} className="shrink-0 self-center text-subtle" />}
+          <span className="shrink-0 text-sm">{item.label}</span>
+          {item.detail && (
+            <span className="min-w-0 flex-1 truncate text-[11px] text-subtle">
+              {item.detail}
+            </span>
+          )}
+        </button>
+      ))}
+      {items.length === 0 && !header && (
+        <p className="px-3 py-2 text-[11px] text-subtle">没有匹配的命令</p>
+      )}
+      {hint && <div className="border-t border-line px-3 py-1 text-[10px] text-subtle">{hint}</div>}
+    </div>
+  );
+}

@@ -292,6 +292,33 @@ export function openInApp(appId: string, sessionId: string): Promise<void> {
   return invoke("open_in_app", { appId, sessionId });
 }
 
+/** `/goal` 长期目标：按会话存 settings 表，每轮注入 system prompt。 */
+export function getSessionGoal(sessionId: string): Promise<string> {
+  return invoke("get_session_goal", { sessionId });
+}
+
+export function setSessionGoal(sessionId: string, text: string): Promise<void> {
+  return invoke("set_session_goal", { sessionId, text });
+}
+
+export interface ExportBundle {
+  conversation_md: string;
+  timeline_md: string;
+  updater_log: string;
+}
+
+/** `/export`：后端整理会话/时间线/更新日志的可读文本，前端打包成 zip。 */
+export function exportSessionBundle(
+  sessionId: string,
+  title?: string,
+): Promise<ExportBundle> {
+  return invoke("export_session_bundle", { sessionId, title: title ?? null });
+}
+
+export function writeExportBundle(path: string, bytes: number[]): Promise<void> {
+  return invoke("write_export_bundle", { path, bytes });
+}
+
 /** 启用/禁用技能。禁用后不进 L1 索引，模型看不到也就不会调用。 */
 export function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
   return invoke("set_skill_enabled", { name, enabled });

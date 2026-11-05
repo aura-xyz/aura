@@ -57,4 +57,18 @@ describe("外观设置", () => {
       screen.getByRole("button", { name: "跟随系统" }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
+
+  it("输入框 Markdown 实时渲染开关可关闭并持久化", () => {
+    const t = api();
+    render(<AppearanceSection theme={t} />);
+    const toggle = screen.getByRole("switch", {
+      name: "输入框 Markdown 实时渲染",
+    });
+    const before = toggle.getAttribute("aria-checked");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).not.toBe(before);
+    // 再点回来，避免测试之间把默认开启的状态改脏
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe(before);
+  });
 });

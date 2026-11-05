@@ -5,6 +5,8 @@
  * 三档字号 —— 数据模型有、界面没有入口，等于功能不存在。
  */
 import { FONT_SIZE_MAX, FONT_SIZE_MIN } from "../lib/theme";
+import { saveMarkdownLive } from "../lib/markdownLive";
+import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import { RotateCcw } from "lucide-react";
 
 type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
@@ -16,6 +18,7 @@ const THEMES: { id: ThemeApi["theme"]; label: string }[] = [
 ];
 
 export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
+  const markdownLive = useMarkdownLive();
   const fontRows: {
     label: string;
     value: number;
@@ -92,6 +95,31 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
       <p className="mt-3 text-xs leading-relaxed text-subtle">
         正文字号作用于对话消息，代码字号作用于代码块；终端字号作用于工具输出等宽文本。
       </p>
+
+      <div className="mt-6 flex items-center justify-between gap-3 border-t border-line pt-5">
+        <div className="min-w-0">
+          <span className="text-sm font-medium">输入框 Markdown 实时渲染</span>
+          <p className="mt-1 text-xs leading-relaxed text-subtle">
+            输入 #、**、``` 等语法时即时显示排版；关闭后回到纯文本输入。发出的仍是原始 Markdown。
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="输入框 Markdown 实时渲染"
+          aria-checked={markdownLive}
+          onClick={() => saveMarkdownLive(!markdownLive)}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+            markdownLive ? "bg-brand" : "bg-bubble"
+          }`}
+        >
+          <span
+            className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
+              markdownLive ? "left-6" : "left-1"
+            }`}
+          />
+        </button>
+      </div>
     </section>
   );
 }
