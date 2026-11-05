@@ -25,17 +25,17 @@ struct OpenApp {
     exe: PathBuf,
 }
 
-/// JetBrains 产品：id / 显示名 / 可执行文件候选名 / 目录名关键词。
-const JETBRAINS: &[(&str, &str, &[&str], &[&str])] = &[
-    ("idea", "IntelliJ IDEA", &["idea64.exe", "idea.exe"], &["idea", "intellij"]),
-    ("pycharm", "PyCharm", &["pycharm64.exe", "pycharm.exe"], &["pycharm"]),
-    ("webstorm", "WebStorm", &["webstorm64.exe", "webstorm.exe"], &["webstorm"]),
-    ("rider", "Rider", &["rider64.exe", "rider.exe"], &["rider"]),
-    ("clion", "CLion", &["clion64.exe", "clion.exe"], &["clion"]),
-    ("goland", "GoLand", &["goland64.exe", "goland.exe"], &["goland"]),
-    ("phpstorm", "PhpStorm", &["phpstorm64.exe", "phpstorm.exe"], &["phpstorm"]),
-    ("datagrip", "DataGrip", &["datagrip64.exe", "datagrip.exe"], &["datagrip"]),
-    ("androidstudio", "Android Studio", &["studio64.exe", "studio.exe"], &["android studio", "androidstudio"]),
+/// JetBrains 产品：id / 显示名 / 可执行文件候选名 / 目录名关键词 / Toolbox 启动脚本名。
+const JETBRAINS: &[(&str, &str, &[&str], &[&str], &[&str])] = &[
+    ("idea", "IntelliJ IDEA", &["idea64.exe", "idea.exe"], &["idea", "intellij"], &["idea"]),
+    ("pycharm", "PyCharm", &["pycharm64.exe", "pycharm.exe"], &["pycharm"], &["pycharm"]),
+    ("webstorm", "WebStorm", &["webstorm64.exe", "webstorm.exe"], &["webstorm"], &["webstorm"]),
+    ("rider", "Rider", &["rider64.exe", "rider.exe"], &["rider"], &["Rider", "rider"]),
+    ("clion", "CLion", &["clion64.exe", "clion.exe"], &["clion"], &["clion"]),
+    ("goland", "GoLand", &["goland64.exe", "goland.exe"], &["goland"], &["goland"]),
+    ("phpstorm", "PhpStorm", &["phpstorm64.exe", "phpstorm.exe"], &["phpstorm"], &["phpstorm"]),
+    ("datagrip", "DataGrip", &["datagrip64.exe", "datagrip.exe"], &["datagrip"], &["datagrip"]),
+    ("androidstudio", "Android Studio", &["studio64.exe", "studio.exe"], &["android studio", "androidstudio"], &["studio"]),
 ];
 
 /// 目录名是否命中产品关键词（大小写不敏感）。
@@ -100,6 +100,9 @@ pub fn candidate_roots() -> Vec<PathBuf> {
     if !local.is_empty() {
         roots.push(PathBuf::from(&local).join("Programs"));
         roots.push(PathBuf::from(&local).join("JetBrains").join("Toolbox").join("apps"));
+        // Toolbox 把启动脚本放在 scripts/ 下（idea.cmd、Rider.cmd…），
+        // 实测本机五个 IDE 全靠它们才能被识别。
+        roots.push(PathBuf::from(&local).join("JetBrains").join("Toolbox").join("scripts"));
     }
     for key in ["ProgramFiles", "ProgramW6432"] {
         let value = std::env::var(key).unwrap_or_default();
@@ -109,6 +112,14 @@ pub fn candidate_roots() -> Vec<PathBuf> {
         roots.push(PathBuf::from(&value).join("JetBrains"));
         roots.push(PathBuf::from(&value));
     }
+    // Toolbox 常把 IDE 直接装在别的盘根目录（D:\CLion、D:\PyCharm…）。
+    // 只枚举存在的盘符根目录，下钻仍由产品关键词收窄，不会遍历整块盘。
+    for letter in b'A'..=b'Z' {
+        let root = PathBuf::from(format!("{}:\\", letter as char));
+        if root.is_dir() {
+            roots.push(root);
+        }
+    }
     if let Some(path) = std::env::var_os("PATH") {
         for part in std::env::split_paths(&path) {
             if part.to_string_lossy().to_lowercase().contains("vs code") {
@@ -117,6 +128,21 @@ pub fn candidate_roots() -> Vec<PathBuf> {
         }
     }
     roots
+}
+
+/// Toolbox 启动脚本（.cmd/.bat/.exe）；Windows 下 .cmd 需要交给 cmd /C。
+fn find_toolbox_script(roots: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
+    for root in roots {
+        for name in names {
+            for ext in ["cmd", "bat", "exe"] {
+                let candidate = root.join(format!("{name}.{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// VS Code：优先 `Code.exe`（直接 spawn，不经 cmd），PATH 里的 `bin/code` 也可推断安装根。
@@ -145,12 +171,13 @@ fn detect_in(roots: &[PathBuf]) -> Vec<OpenApp> {
     if let Some(exe) = find_vscode(roots) {
         apps.push(OpenApp { id: "vscode".into(), name: "VS Code".into(), exe });
     }
-    for (id, name, exe_names, keywords) in JETBRAINS {
+    for (id, name, exe_names, keywords, scripts) in JETBRAINS {
         let mut bins = Vec::new();
         for root in roots {
             collect_bin_dirs(root, keywords, 6, &mut bins);
         }
-        if let Some(exe) = find_exe(&bins, exe_names) {
+        // 先找真实 IDE 可执行文件，再退回 Toolbox 启动脚本
+        if let Some(exe) = find_exe(&bins, exe_names).or_else(|| find_toolbox_script(roots, scripts)) {
             apps.push(OpenApp { id: (*id).into(), name: (*name).into(), exe });
         }
     }
@@ -183,22 +210,10 @@ pub fn open_in(app_id: &str, target: &Path) -> Result<(), String> {
             .map(|a| a.exe)
             .ok_or_else(|| "未安装该应用".to_string())?
     };
-    let is_cmd = program
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("cmd"))
-        .unwrap_or(false);
-    let mut command = if is_cmd {
-        // code.cmd 是批处理，Windows 下必须交给 cmd；单行命令不受
-        // 「cmd /C 只执行第一行」那条坑影响。
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "\"\""]);
-        c.arg(&program);
-        c
-    } else {
-        std::process::Command::new(&program)
-    };
-    command
+    // 不再手工拼 `cmd /C start "" …`：Rust 的 Command 在 Windows 上对
+    // .cmd/.bat 会自动改走 cmd.exe 并正确转义参数，而自己拼的空标题
+    // `""` 会被 Rust 转义成 `\"\"`，反而让 start 把它当成要启动的程序。
+    std::process::Command::new(&program)
         .arg(target)
         .spawn()
         .map(|_| ())
@@ -264,6 +279,32 @@ mod tests {
         let missing = std::env::temp_dir().join("aura-open-apps-no-such-dir");
         let err = open_in("explorer", &missing).expect_err("目录不存在必须拒绝");
         assert!(err.contains("不存在"), "err={err}");
+    }
+
+    /// 本机实测：五个 IDE 都由 Toolbox scripts 暴露，Program Files 里只有缓存目录。
+    #[test]
+    fn toolbox_scripts_are_detected() {
+        let root = temp_root("scripts");
+        for name in ["idea", "pycharm", "webstorm", "clion", "Rider"] {
+            fs::write(root.join(format!("{name}.cmd")), b"").unwrap();
+        }
+        let apps = detect_in(&[root.clone()]);
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        for id in ["idea", "pycharm", "webstorm", "clion", "rider"] {
+            assert!(ids.contains(&id), "Toolbox 应识别 {id}：{ids:?}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// IDE 直接装在 D:\CLion 这类盘根目录时也要找到。
+    #[test]
+    fn drive_root_layout_is_detected() {
+        let root = temp_root("drive");
+        let bin = root.join("WebStorm").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("webstorm64.exe"), b"").unwrap();
+        assert!(detect_in(&[root.clone()]).iter().any(|a| a.id == "webstorm"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
