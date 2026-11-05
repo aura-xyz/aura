@@ -121,6 +121,21 @@ pub struct CompatProvider {
     http: reqwest::Client,
 }
 
+/// 组装聊天请求体。流式必须显式索要 usage：OpenAI 兼容协议默认不在
+/// 流式响应里下发 token 用量，前端只能靠字符数猜（v0.8.0 修）。
+fn chat_payload(model: &str, messages: &[Value], stream: bool) -> Value {
+    let mut payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+        "max_tokens": 16384,
+    });
+    if stream {
+        payload["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
+    payload
+}
+
 impl CompatProvider {
     pub fn new(
         id: &str,
@@ -219,12 +234,7 @@ impl CompatProvider {
         let mut req = self
             .http
             .post(self.endpoint())
-            .json(&serde_json::json!({
-                "model": model,
-                "messages": messages,
-                "stream": stream,
-                "max_tokens": 16384,
-            }));
+            .json(&chat_payload(model, messages, stream));
         if self.kind == ProviderKind::OpenRouter {
             req = req.header("X-Title", "Aura");
         }
@@ -454,6 +464,15 @@ impl ChatProvider for CompatProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 不显式 include_usage，流式最后一个 chunk 就没有 token 数。
+    #[test]
+    fn stream_requests_include_usage_but_complete_does_not() {
+        let stream_payload = chat_payload("m", &[], true);
+        assert_eq!(stream_payload["stream_options"]["include_usage"], true);
+        let complete_payload = chat_payload("m", &[], false);
+        assert!(complete_payload.get("stream_options").is_none());
+    }
 
     #[test]
     fn chat_endpoint_rules() {

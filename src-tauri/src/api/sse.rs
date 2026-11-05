@@ -4,13 +4,23 @@ use std::task::{Context, Poll};
 
 use super::error::{classify_reqwest, ApiError};
 use futures_util::Stream;
+use serde::Serialize;
 use serde_json::Value;
+
+/// 上游在流式最后一个 chunk 里下发的用量（需 `stream_options.include_usage`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub total: u64,
+}
 
 /// 增量解析 SSE 行，提取 delta.content 文本
 pub struct SseParser {
     buf: Vec<u8>,
     out: VecDeque<String>,
     reasoning: String,
+    usage: Option<TokenUsage>,
     event_count: usize,
     raw_tail: String,
     finished: bool,
@@ -24,6 +34,7 @@ impl SseParser {
             buf: Vec::new(),
             out: VecDeque::new(),
             reasoning: String::new(),
+            usage: None,
             event_count: 0,
             raw_tail: String::new(),
             finished: false,
@@ -62,6 +73,25 @@ impl SseParser {
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             return;
         };
+        // usage 是一个独立的 chunk（choices 为空），必须在解析 delta 之前看，
+        // 否则这一帧会被当成空内容直接丢掉。
+        if let Some(usage) = value.get("usage") {
+            let input = usage
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let output = usage
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total = usage
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(input + output);
+            if input > 0 || output > 0 || total > 0 {
+                self.usage = Some(TokenUsage { input, output, total });
+            }
+        }
         let delta = value
             .get("choices")
             .and_then(|c| c.get(0))
@@ -102,6 +132,11 @@ impl SseParser {
         std::mem::take(&mut self.reasoning)
     }
 
+    /// 取走本帧的用量；调用方负责跨多个 LLM 请求累加。
+    pub fn take_usage(&mut self) -> Option<TokenUsage> {
+        self.usage.take()
+    }
+
     pub fn diag(&self) -> (usize, String) {
         (self.event_count, self.raw_tail.clone())
     }
@@ -131,6 +166,10 @@ impl ChatStream {
 
     pub fn take_reasoning(&mut self) -> String {
         self.parser.take_reasoning()
+    }
+
+    pub fn take_usage(&mut self) -> Option<TokenUsage> {
+        self.parser.take_usage()
     }
 
     pub fn diag(&self) -> (usize, String) {
@@ -173,6 +212,29 @@ impl Stream for ChatStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 流式 usage 帧没有 choices，必须单独收下；前端估算不能替代真实用量。
+    #[test]
+    fn sse_captures_usage_frame() {
+        let mut parser = SseParser::new();
+        parser.feed(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7,\"total_tokens\":19}}\n");
+        assert_eq!(parser.next(), None);
+        assert_eq!(
+            parser.take_usage(),
+            Some(TokenUsage { input: 12, output: 7, total: 19 })
+        );
+        assert_eq!(parser.take_usage(), None, "取走后不能重复计入");
+    }
+
+    #[test]
+    fn sse_usage_without_total_falls_back_to_sum() {
+        let mut parser = SseParser::new();
+        parser.feed(b"data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n");
+        assert_eq!(
+            parser.take_usage(),
+            Some(TokenUsage { input: 3, output: 4, total: 7 })
+        );
+    }
 
     #[test]
     fn sse_parses_split_chunks() {

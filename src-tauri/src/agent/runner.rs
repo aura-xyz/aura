@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -24,6 +24,8 @@ pub const EV_ACTION: &str = "agent:action";
 pub const EV_NOTICE: &str = "agent:notice";
 pub const EV_ERROR: &str = "agent:error";
 pub const EV_DONE: &str = "agent:done";
+/// 本轮真实 token 用量与 LLM 耗时；在 done 之前发出。
+pub const EV_USAGE: &str = "agent:usage";
 /// 规划模式产出的任务清单。载荷为清洗后的 Todo 数组。
 pub const EV_TODO_PLAN: &str = "agent:todo_plan";
 /// 单个步骤的状态推进。载荷为 `{id, status}`。
@@ -292,7 +294,28 @@ fn emit_action_detail(
     );
 }
 
-fn emit_done(app: &AppHandle, session_id: &str) {
+/// 本轮累计用量。一轮里可能因工具往返发起多次 LLM 请求，
+/// 逐次相加才是「本轮」而不是「最后一次请求」。
+#[derive(Default, Clone)]
+pub struct UsageTotals {
+    pub input: u64,
+    pub output: u64,
+    pub total: u64,
+    pub llm_ms: u64,
+}
+
+/// done 之前先发用量，前端收尾时就能拿到真实值，不必自己估算。
+fn emit_done(app: &AppHandle, session_id: &str, usage: &UsageTotals) {
+    let _ = app.emit(
+        EV_USAGE,
+        json!({
+            "session_id": session_id,
+            "input": usage.input,
+            "output": usage.output,
+            "total": usage.total,
+            "llm_ms": usage.llm_ms,
+        }),
+    );
     let _ = app.emit(EV_DONE, json!({ "session_id": session_id }));
 }
 
@@ -368,7 +391,7 @@ fn strip_protocol_tags(raw: &str) -> String {
 
 fn emit_cancelled(app: &AppHandle, session_id: &str) {
     emit_text(app, session_id, EV_NOTICE, "已停止生成");
-    emit_done(app, session_id);
+    emit_done(app, session_id, &UsageTotals::default());
 }
 
 fn push_assistant(history: &mut Vec<Value>, content: &str) {
@@ -582,6 +605,8 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
     // 工具调用须过 mode ∩ allowed-tools 的交集闸门。
     let mut active_skills: Vec<SkillManifest> = Vec::new();
     let mut rounds = 0usize;
+    // 跨多次 LLM 请求累计；工具往返的每一跳都算在这一轮里。
+    let mut usage = UsageTotals::default();
 
     loop {
         if ctx.cancelled.load(Ordering::Relaxed) {
@@ -700,6 +725,7 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
             );
         }
 
+        let llm_started = Instant::now();
         let fb = match ctx.router.stream_with_fallback(*ctx.model_idx, &messages).await {
             Ok(fb) => fb,
             Err(e) => {
@@ -795,6 +821,14 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
             }
         }
 
+        // 用量与 LLM 耗时按请求累计：一轮里可能有多轮工具往返。
+        usage.llm_ms += llm_started.elapsed().as_millis() as u64;
+        if let Some(u) = stream.take_usage() {
+            usage.input += u.input;
+            usage.output += u.output;
+            usage.total += u.total;
+        }
+
         if was_cancelled {
             push_assistant(ctx.history, &turn_output);
             emit_cancelled(ctx.app, ctx.session_id);
@@ -818,13 +852,13 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                 EV_ERROR,
                 &format!("模型 {} 秒无响应，已中断本轮生成。", STREAM_IDLE_TIMEOUT.as_secs()),
             );
-            emit_done(ctx.app, ctx.session_id);
+            emit_done(ctx.app, ctx.session_id, &usage);
             return Ok(());
         }
 
         if answered {
             push_assistant(ctx.history, &turn_output);
-            emit_done(ctx.app, ctx.session_id);
+            emit_done(ctx.app, ctx.session_id, &usage);
             return Ok(());
         }
 
@@ -861,7 +895,7 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
             }
             if answered {
                 push_assistant(ctx.history, &turn_output);
-                emit_done(ctx.app, ctx.session_id);
+                emit_done(ctx.app, ctx.session_id, &usage);
                 return Ok(());
             }
 if tool_jsons.is_empty() {
@@ -882,7 +916,7 @@ if tool_jsons.is_empty() {
                 // 视为模型直接作答，宽容接受，不再强制协议标签。
                 if !turn_output.is_empty() {
                     push_assistant(ctx.history, &turn_output);
-                    emit_done(ctx.app, ctx.session_id);
+                    emit_done(ctx.app, ctx.session_id, &usage);
                     return Ok(());
                 }
                 {
@@ -988,7 +1022,7 @@ if tool_jsons.is_empty() {
                                  或切换到执行模式后再试。"
                             ),
                         );
-                        emit_done(ctx.app, ctx.session_id);
+                        emit_done(ctx.app, ctx.session_id, &usage);
                         // 已产生的结果仍然回填，让模型知道自己错在哪
                         ctx.history.push(json!({ "role": "user", "content": results.join("\n") }));
                         return Ok(());
