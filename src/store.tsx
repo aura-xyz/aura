@@ -107,6 +107,14 @@ export type ChatMessage =
       latestBlocks?: Block[];
     };
 
+/** 后端上报的一轮真实用量（v0.8.0，替代前端字符数估算）。不落库，重启后重新累计。 */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  total: number;
+  llmMs: number;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -114,6 +122,10 @@ export interface Session {
   messages: ChatMessage[];
   /** 任务清单。旧会话可能没有，按空处理 */
   todos: Todo[];
+  /** 最近一轮真实 token 用量；上游不提供时为空 */
+  lastUsage?: TurnUsage;
+  /** 会话内累计 LLM 耗时（毫秒），与工具耗时分开展示 */
+  llmMs?: number;
 }
 
 interface State {
@@ -576,6 +588,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       appendBlocks(stream.sessionId, stream.messageId, (b) =>
         b.length === 0 ? [{ kind: "text", text: "" }] : b,
       );
+    });
+
+    // 真实用量由后端在 done 之前发出；按会话累计 LLM 耗时，
+    // 工具耗时仍来自 action 块的 durationMs，两者不再混成一个恒零项。
+    on<{
+      session_id: string;
+      input: number;
+      output: number;
+      total: number;
+      llm_ms: number;
+    }>("agent:usage", (p) => {
+      setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((sess) =>
+          sess.id === p.session_id
+            ? {
+                ...sess,
+                lastUsage: {
+                  input: p.input ?? 0,
+                  output: p.output ?? 0,
+                  total: p.total ?? 0,
+                  llmMs: p.llm_ms ?? 0,
+                },
+                llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
+              }
+            : sess,
+        ),
+      }));
     });
 
     // 规划模式产出的任务清单。注意这里**不要求** streamRef 匹配：

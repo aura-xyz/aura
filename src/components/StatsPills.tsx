@@ -1,8 +1,8 @@
 /**
- * 会话统计 pills（v0.8.0，参照 dsh StatsPills）。
+ * 会话统计 pills（v0.8.0）。
  *
- * 停靠在输入区，显示会话总览：turn 数、步数、LLM 耗时、工具耗时。
- * 无耐久投影时，从可见消息节点折算。
+ * LLM 耗时由后端 usage 事件按会话累计后传入；工具耗时仍从 action 块取。
+ * 两者分开显示，避免把「恒为 0 的 llmMs」和工具耗时混成一个数字。
  */
 import { memo, useMemo } from "react";
 import { Activity, Clock } from "lucide-react";
@@ -15,10 +15,12 @@ interface WindowStats {
   toolMs: number;
 }
 
-export function deriveStats(messages: ChatMessage[]): WindowStats {
+export function deriveStats(
+  messages: ChatMessage[],
+  llmMs = 0,
+): WindowStats {
   const turns = messages.filter((m) => m.role === "user").length;
   let steps = 0;
-  let llmMs = 0;
   let toolMs = 0;
   for (const m of messages) {
     if (m.role !== "assistant") continue;
@@ -48,22 +50,27 @@ export const StatsPills = memo(function StatsPills() {
   }
   if (!activeSession) return null;
 
-  const stats = useMemo(() => deriveStats(activeSession.messages), [activeSession.messages]);
+  const stats = useMemo(
+    () => deriveStats(activeSession!.messages, activeSession!.llmMs ?? 0),
+    [activeSession!.messages, activeSession!.llmMs],
+  );
 
   return (
     <span className="flex items-center gap-2">
       <span
-        className="inline-flex items-center gap-2 px-2 py-1 rounded-md border border-line bg-surface text-[11px] text-subtle"
-        title={`共 ${stats.turns} 轮对话，${stats.steps} 条助手回复`}
+        className="inline-flex items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-subtle"
+        title={`共 ${stats.turns} 轮对话，${stats.steps} 条助手回复；模型 ${formatDuration(stats.llmMs)}，工具 ${formatDuration(stats.toolMs)}`}
       >
         <span className="flex items-center gap-1">
           <Activity size={12} className="text-brand" />
           <span>{stats.turns} 轮</span>
         </span>
-        <span className="w-px h-3 bg-line" />
+        <span className="h-3 w-px bg-line" />
         <span className="flex items-center gap-1">
           <Clock size={12} className="text-success" />
-          <span>{formatDuration(stats.llmMs + stats.toolMs)}</span>
+          <span>
+            LLM {formatDuration(stats.llmMs)} · 工具 {formatDuration(stats.toolMs)}
+          </span>
         </span>
       </span>
     </span>
