@@ -156,22 +156,24 @@
   --dsw-alias-scrollbar-bg-l2: var(--line);
   --dsw-alias-scrollbar-hover-l2: var(--subtle);
   --dsw-alias-state-business-primary: var(--brand);
-  --dsw-focus-ring-color: var(--brand);
-  --dsw-focus-ring-width: 2px;
-  --dsw-radius-xs: 4px;
-  --dsw-radius-sm: 8px;
-  --dsw-radius-md: 12px;
-  --dsw-radius-lg: 16px;
-  --dsw-radius-xl: 20px;
-  --dsw-radius-panel: 28px;
-  --ds-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --ds-transition-duration: 0.2s;
-  --ds-transition-duration-fast: 0.1s;
-  --ds-transition-duration-slow: 0.3s;
+  /* 外壳灰底：展开态侧栏与标题栏共用；收起态侧栏恢复白色悬浮卡片 */
+  --chrome-bg: #f4f4f6;
+  --dsw-alias-focus-ring-color: var(--brand);
+  --dsw-alias-focus-ring-width: 2px;
+  --dsw-alias-radius-xs: 4px;
+  --dsw-alias-radius-sm: 8px;
+  --dsw-alias-radius-md: 12px;
+  --dsw-alias-radius-lg: 16px;
+  --dsw-alias-radius-xl: 20px;
+  --dsw-alias-radius-panel: 28px;
+  --dsw-alias-motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dsw-alias-motion-duration: 0.2s;
+  --dsw-alias-motion-duration-fast: 0.1s;
+  --dsw-alias-motion-duration-slow: 0.3s;
   /* 字体大小变量由 useTheme 在 body 上动态设置，此处只声明默认 */
-  --dsh-content-font-size: 15px;
-  --dsh-code-font-size: 11px;
-  --dsh-terminal-font-size: 13px;
+  --dsw-alias-font-size-content: 15px;
+  --dsw-alias-font-size-code: 11px;
+  --dsw-alias-font-size-terminal: 13px;
 }
 
 .dark {
@@ -216,7 +218,8 @@
   --dsw-alias-scrollbar-bg-l2: var(--line);
   --dsw-alias-scrollbar-hover-l2: var(--subtle);
   --dsw-alias-state-business-primary: var(--brand);
-  --dsw-focus-ring-color: var(--brand);
+  --chrome-bg: #171719;
+  --dsw-alias-focus-ring-color: var(--brand);
 }
 
 @theme inline {
@@ -232,40 +235,7 @@
   --color-warning: var(--warning);
   --color-brand: var(--brand);
   --color-bubble-user: var(--bubble-user);
-
-  /* dsw 语义色令牌 */
-  --dsw-alias-bg-base: var(--dsw-alias-bg-base);
-  --dsw-alias-bg-layer-2: var(--dsw-alias-bg-layer-2);
-  --dsw-alias-label-primary: var(--dsw-alias-label-primary);
-  --dsw-alias-label-secondary: var(--dsw-alias-label-secondary);
-  --dsw-alias-label-tertiary: var(--dsw-alias-label-tertiary);
-  --dsw-alias-label-caption: var(--dsw-alias-label-caption);
-  --dsw-alias-label-primary-inverted: var(--dsw-alias-label-primary-inverted);
-  --dsw-alias-border-l2: var(--dsw-alias-border-l2);
-  --dsw-alias-border-l3: var(--dsw-alias-border-l3);
-  --dsw-alias-border-l4: var(--dsw-alias-border-l4);
-  --dsw-alias-interactive-bg-hover: var(--dsw-alias-interactive-bg-hover);
-  --dsw-alias-button-elevated-fill: var(--dsw-alias-button-elevated-fill);
-  --dsw-alias-scrollbar-bg-l1: var(--dsw-alias-scrollbar-bg-l1);
-  --dsw-alias-scrollbar-hover-l1: var(--dsw-alias-scrollbar-hover-l1);
-  --dsw-alias-scrollbar-bg-l2: var(--dsw-alias-scrollbar-bg-l2);
-  --dsw-alias-scrollbar-hover-l2: var(--dsw-alias-scrollbar-hover-l2);
-  --dsw-alias-state-business-primary: var(--dsw-alias-state-business-primary);
-  --dsw-focus-ring-color: var(--dsw-focus-ring-color);
-  --dsw-focus-ring-width: var(--dsw-focus-ring-width);
-  --dsw-radius-xs: var(--dsw-radius-xs);
-  --dsw-radius-sm: var(--dsw-radius-sm);
-  --dsw-radius-md: var(--dsw-radius-md);
-  --dsw-radius-lg: var(--dsw-radius-lg);
-  --dsw-radius-xl: var(--dsw-radius-xl);
-  --dsw-radius-panel: var(--dsw-radius-panel);
-  --ds-ease-in-out: var(--ds-ease-in-out);
-  --ds-transition-duration: var(--ds-transition-duration);
-  --ds-transition-duration-fast: var(--ds-transition-duration-fast);
-  --ds-transition-duration-slow: var(--ds-transition-duration-slow);
-  --dsh-content-font-size: var(--dsh-content-font-size);
-  --dsh-code-font-size: var(--dsh-code-font-size);
-  --dsh-terminal-font-size: var(--dsh-terminal-font-size);
+  --color-chrome: var(--chrome-bg);
 }
 
 /* ---------------------------------------------------------------
@@ -302,14 +272,20 @@
   /* 三角色字号由 useTheme 写到 body，此前只有声明、没有任何消费者，
      设置页就算能调也看不出变化。终端字号待终端面板接入后自然生效。 */
   .md {
-    font-size: var(--dsh-content-font-size, 15px);
+    font-size: var(--dsw-alias-font-size-content, 15px);
   }
   .bg-bubble-user {
-    font-size: var(--dsh-content-font-size, 15px);
+    font-size: var(--dsw-alias-font-size-content, 15px);
   }
   .md pre,
   .md pre code {
-    font-size: var(--dsh-code-font-size, 11px);
+    font-size: var(--dsw-alias-font-size-code, 11px);
+  }
+  /* 工具输出、命令行等宽文本用终端字号；显式带字号工具类的元素仍由 utilities 覆盖 */
+  .font-mono,
+  pre:not(.md pre),
+  code:not(.md code) {
+    font-size: var(--dsw-alias-font-size-terminal, 13px);
   }
 }
 
@@ -762,12 +738,12 @@
    避免文字在宽度骤变时换行重排。 */
 .fading > * {
   opacity: 0;
-  transition: opacity 150ms var(--ds-ease-in-out);
+  transition: opacity 150ms var(--dsw-alias-motion-ease);
 }
 
 /* 展开时内容淡入。 */
 .wide {
-  animation: wide-in 200ms var(--ds-ease-in-out);
+  animation: wide-in 200ms var(--dsw-alias-motion-ease);
 }
 
 @keyframes wide-in {
@@ -778,7 +754,7 @@
 .railIn .iconButton,
 .railIn .panelList,
 .railIn .regionArea {
-  animation: rail-in 150ms var(--ds-ease-in-out) backwards;
+  animation: rail-in 150ms var(--dsw-alias-motion-ease) backwards;
 }
 
 @keyframes rail-in {

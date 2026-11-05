@@ -15,6 +15,7 @@ function api(overrides: Partial<ThemeApi> = {}): ThemeApi {
     setFontSize: vi.fn(),
     setCodeFontSize: vi.fn(),
     setTerminalFontSize: vi.fn(),
+    resetFontSizes: vi.fn(),
     ...overrides,
   };
 }
@@ -40,6 +41,13 @@ describe("外观设置", () => {
     expect(t.setCodeFontSize).toHaveBeenCalledWith(14);
     expect(t.setTerminalFontSize).toHaveBeenCalledWith(16);
     expect(t.setFontSize).toHaveBeenCalledTimes(1);
+  });
+
+  it("恢复默认字号按钮走统一的 reset 入口", () => {
+    const t = api();
+    render(<AppearanceSection theme={t} />);
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认字号" }));
+    expect(t.resetFontSizes).toHaveBeenCalledTimes(1);
   });
 
   it("当前档位用 aria-pressed 标出来", () => {

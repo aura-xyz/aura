@@ -5,6 +5,7 @@
  * 三档字号 —— 数据模型有、界面没有入口，等于功能不存在。
  */
 import { FONT_SIZE_MAX, FONT_SIZE_MIN } from "../lib/theme";
+import { RotateCcw } from "lucide-react";
 
 type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 
@@ -54,7 +55,21 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
         </div>
       </div>
 
-      <div className="mt-6 flex flex-col gap-3">
+      <div className="mt-6 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium">字号</span>
+        <button
+          type="button"
+          onClick={theme.resetFontSizes}
+          aria-label="恢复默认字号"
+          title="恢复默认字号"
+          className="flex items-center gap-1 rounded-tag border border-line px-2 py-1 text-xs text-subtle transition-colors hover:border-brand hover:text-foreground"
+        >
+          <RotateCcw size={12} aria-hidden />
+          恢复默认
+        </button>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-3">
         {fontRows.map((row) => (
           <label key={row.label} className="flex items-center gap-3 text-sm">
             <span className="w-20 shrink-0">{row.label}字号</span>
@@ -75,7 +90,7 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
         ))}
       </div>
       <p className="mt-3 text-xs leading-relaxed text-subtle">
-        正文字号作用于对话消息，代码字号作用于代码块；终端字号为终端面板预留。
+        正文字号作用于对话消息，代码字号作用于代码块；终端字号作用于工具输出等宽文本。
       </p>
     </section>
   );

@@ -6,6 +6,7 @@ import {
   clampFontSize,
   fontSizeField,
   loadTheme,
+  DEFAULT_THEME,
   resolvedFontSizeVariable,
   saveTheme,
 } from "../lib/theme";
@@ -72,6 +73,19 @@ export function useTheme() {
     });
   }, []);
 
+  const resetFontSizes = useCallback(() => {
+    setSettings((prev) => {
+      const nextSettings: ThemeSettings = {
+        ...prev,
+        fontSize: DEFAULT_THEME.fontSize,
+        codeFontSize: DEFAULT_THEME.codeFontSize,
+        terminalFontSize: DEFAULT_THEME.terminalFontSize,
+      };
+      saveTheme(nextSettings);
+      return nextSettings;
+    });
+  }, []);
+
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", resolved === "dark");
@@ -95,5 +109,6 @@ export function useTheme() {
     setFontSize: (px: number) => updateFont("text", px),
     setCodeFontSize: (px: number) => updateFont("code", px),
     setTerminalFontSize: (px: number) => updateFont("terminal", px),
+    resetFontSizes,
   };
 }

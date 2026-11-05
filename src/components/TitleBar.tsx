@@ -26,7 +26,7 @@ export default function TitleBar() {
       data-platform={darwin ? "darwin" : "windows"}
       className={`flex shrink-0 select-none items-center justify-between ${height} pl-4 pr-2`}
       style={{
-        backgroundColor: "var(--dsw-alias-bg-base)",
+        backgroundColor: "var(--chrome-bg)",
         color: "var(--dsw-alias-label-primary)",
       }}
     >

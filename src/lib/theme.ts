@@ -79,11 +79,11 @@ export function resolveTheme(preference: ThemePreference): "light" | "dark" {
 export function resolvedFontSizeVariable(role: FontRole): string {
   switch (role) {
     case "text":
-      return "--dsh-content-font-size";
+      return "--dsw-alias-font-size-content";
     case "code":
-      return "--dsh-code-font-size";
+      return "--dsw-alias-font-size-code";
     case "terminal":
-      return "--dsh-terminal-font-size";
+      return "--dsw-alias-font-size-terminal";
   }
 }
 

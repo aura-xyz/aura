@@ -8,11 +8,11 @@ import {
 
 describe("主题字号变量", () => {
   it("三角色变量名必须与 useTheme 写入 body 的名字一致", () => {
-    // 旧实现拼出 --dsh-font-size-text，而 useTheme 写的是
-    // --dsh-content-font-size —— 两个名字对不上，设置页调了也不会生效。
-    expect(resolvedFontSizeVariable("text")).toBe("--dsh-content-font-size");
-    expect(resolvedFontSizeVariable("code")).toBe("--dsh-code-font-size");
-    expect(resolvedFontSizeVariable("terminal")).toBe("--dsh-terminal-font-size");
+    // 旧实现把字号、动效、圆角拆成 --dsh-* / --ds-* / --dsw-* 四套前缀，
+    // 现在统一到 --dsw-alias-*，写入端与消费端必须同名。
+    expect(resolvedFontSizeVariable("text")).toBe("--dsw-alias-font-size-content");
+    expect(resolvedFontSizeVariable("code")).toBe("--dsw-alias-font-size-code");
+    expect(resolvedFontSizeVariable("terminal")).toBe("--dsw-alias-font-size-terminal");
   });
 
   it("字号字段映射与上下限钳制", () => {
