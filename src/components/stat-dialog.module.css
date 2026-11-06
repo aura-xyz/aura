@@ -1,58 +1,85 @@
+/* 统计详情浮层的表面皮肤（v0.8.0，对齐 dsh stat-dialog.module.css）。
+   由 TurnUsagePanel 与 StatsPills 共用；定位来自 useAnchoredPanel，
+   所以这里只管表面，不写 position/left/top —— portal 面板由 inline style
+   固定在视口里，普通 absolute 会被输入框或窗口边缘裁掉。 */
+
 .panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  min-width: 240px;
+  box-sizing: border-box;
+  /* 以最宽的一行定宽，但不超过视口；固定下限不能顶破定位钳制 */
+  width: max-content;
+  min-width: min(300px, calc(100vw - 24px));
+  max-width: min(440px, calc(100vw - 24px));
+  padding: 16px;
+  border-radius: var(--dsw-alias-radius-lg);
+  background: var(--dsw-alias-bg-base);
+  box-shadow:
+    0 8px 28px rgb(0 0 0 / 14%),
+    0 0 0 1px var(--dsw-alias-border-l2);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: default;
 }
 
+/* 标题行：分区名在左、该分区的主值在右，都是主字重 */
 .title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--dsw-alias-border-l3);
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
 }
 
 .titleLabel {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.titleLabel svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
 
 .titleValue {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .titleRule {
-  height: 1px;
-  background: var(--dsw-alias-border-l3);
-  border: none;
-  margin: 0.5rem 0;
+  margin-bottom: 10px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
+/* 关键差异：dt/dd 是两列网格、值右对齐且等宽数字，不是上下竖排 */
 .details {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: minmax(76px, auto) minmax(0, 1fr);
+  gap: 6px 16px;
   margin: 0;
-  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
 }
 
-.details dt {
-  font-size: 13px;
-  color: var(--dsw-alias-label-secondary);
+.details dt,
+.details dd {
+  min-width: 0;
   margin: 0;
 }
 
 .details dd {
-  font-size: 13px;
-  color: var(--dsw-alias-label-primary);
-  margin: 0 0 0 1rem;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.details .route {
+  overflow-wrap: anywhere;
 }
 
 .reasoning {
-  font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
 }

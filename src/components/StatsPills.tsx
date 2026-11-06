@@ -57,8 +57,10 @@ export const StatsPills = memo(function StatsPills() {
 
   return (
     <span className="flex items-center gap-2">
+      {/* 与旁边的本轮用量 pill 同为无边框透明信息按钮；此前一个带边框
+          卡片、一个透明，两个挨在一起像两种不同层级的控件。 */}
       <span
-        className="inline-flex items-center gap-2 rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-subtle"
+        className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs text-subtle transition-colors hover:bg-bubble"
         title={`共 ${stats.turns} 轮对话，${stats.steps} 条助手回复；模型 ${formatDuration(stats.llmMs)}，工具 ${formatDuration(stats.toolMs)}`}
       >
         <span className="flex items-center gap-1">

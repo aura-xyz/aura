@@ -1,15 +1,40 @@
+/* Icon-row 用量 pill：dsh 的信息 pill 是无边框透明按钮，悬停才出底色。
+   此前带 border + 背景，和旁边的统计 pill 挤在一起像两个小卡片。 */
 .root {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.trigger {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--dsw-alias-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.dialog {
-  width: 360px;
-  background: var(--dsw-alias-bg-base);
-  border: 0.5px solid var(--dsw-alias-border-l3);
-  border-radius: var(--dsw-alias-radius-md);
-  padding: 1.5rem;
-  color: var(--dsw-alias-label-primary);
-  box-shadow: var(--shadow-md);
+.trigger svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trigger:hover,
+.trigger[aria-expanded="true"] {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
