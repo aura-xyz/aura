@@ -179,6 +179,9 @@ export default function MarkdownEditor({
   onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => void;
   placeholder: ReactNode;
 }) {
+  // 占位层必须与 contentEditable 的首行文本盒完全重合：同样的 py-0.5 与
+  // leading-6，top 从 0 起。此前用 top-2（8px）而首行从 py-0.5（2px）起，
+  // 浏览器光标于是比占位文字高出一截，看起来像竖杠悬在提示文字上方。
   return (
     <LexicalComposer
       initialConfig={{
@@ -215,7 +218,7 @@ export default function MarkdownEditor({
             />
           }
           placeholder={
-            <div className="pointer-events-none absolute left-0 top-2 text-base text-subtle">
+            <div className="pointer-events-none absolute left-0 top-0 py-0.5 text-base leading-6 text-subtle">
               {placeholder}
             </div>
           }

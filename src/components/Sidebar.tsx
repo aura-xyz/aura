@@ -9,9 +9,6 @@ import { useStore } from "../store";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
 
-// 折叠后宽内容淡出的等待时间，与宽度过渡同步，避免中间重排。
-const COLLAPSE_SETTLE_MS = 150;
-
 export type View = "chat" | "settings" | "skills" | "mcp" | "timeline";
 
 /** 左侧导航区块：由外部注入，Sidebar 只负责渲染与折叠动画。 */
@@ -77,18 +74,9 @@ export default function Sidebar({
   );
   const collapsed = controlledCollapsed ?? innerCollapsed;
 
-  // 折叠动画：内容先保持宽度淡出，宽度收窄后再切到 rail 布局。
-  const [settled, setSettled] = useState(collapsed);
+  // 是否曾经展开过：折叠态靠它决定是否显示「展开侧边栏」按钮。
   const everWide = useRef(!collapsed);
   if (!collapsed) everWide.current = true;
-
-  useEffect(() => {
-    if (!collapsed) { setSettled(false); return }
-    const timer = window.setTimeout(() => { setSettled(true) }, COLLAPSE_SETTLE_MS)
-    return () => { window.clearTimeout(timer) }
-  }, [collapsed]);
-
-  const wide = !collapsed || !settled
 
   // 工作区列表异步加载完毕后默认全部展开一次，之后完全交给用户控制。
   // 不再像以前那样跟随「当前工作区」自动展开：工作区已不再是切换目标，
@@ -128,22 +116,20 @@ function toggleExpand(w: string) {
   const labelOn = "max-w-40 opacity-100";
 
   return (
-    // 展开态：与顶部标题栏同色连成一片（DSH 外壳），不要悬浮卡片；
-    // 收起态：回到原来的四周留白 + 圆角 + 细边框 + 轻阴影。
+    // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
+    // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
+    // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
+    // 两态都保留 1px 边框（展开态透明），避免 border-width 跳变。
     //
-    // 高度：self-start + min-height 控制。展开态撑满内容区，
-    // 折叠态收成内容高，设置按钮下方不再留白。
-    // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡；
-    // max-height 同步限高，圆点很多时列表区内部滚动而不溢出窗口。
+    // 高度：self-start + min-height 控制，展开态撑满、折叠态收成内容高；
+    // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡。
     <aside
-      className={`flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height] duration-200 ease-in-out ${
+      className={`aura-sidebar flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height,max-height,margin,background-color,border-color,border-radius,box-shadow] duration-200 ease-in-out ${
         collapsed
           ? "m-2 max-h-[calc(100%-1rem)] w-14 min-h-0 rounded-card border border-line bg-surface shadow-sm"
-          : "m-0 max-h-full min-h-full w-64 rounded-none border-0 bg-chrome"
-      } ${!wide && everWide.current ? "railIn" : ""} ${collapsed && wide ? "fading" : ""}`}
-      style={{
-        width: collapsed ? (wide ? (width ?? 240) : undefined) : (width ?? undefined),
-      }}
+          : "m-0 max-h-full min-h-full w-64 rounded-none border border-transparent bg-chrome shadow-none"
+      }`}
+      style={{ width: collapsed ? undefined : (width ?? undefined) }}
     >
       <header className="flex h-[49px] shrink-0 items-center gap-2 px-3">
         {/* 折叠态下 logo 即展开入口，不再 disabled，避免用户无法展开。 */}
@@ -192,9 +178,7 @@ function toggleExpand(w: string) {
 
           pb-3 是刻意留的：此前 nav 与下方会话列表之间一点空隙都没有，
           「轨迹」的下边缘几乎贴着第一条会话，视觉上像挤在一起（实测反馈）。 */}
-      <nav
-        className={`shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}
-      >
+      <nav className="shrink-0 px-3 pb-3">
         {navBlocks.map((block) => {
           const active = block.panel
             ? activePanel === block.panel
@@ -246,7 +230,7 @@ function toggleExpand(w: string) {
       <div
         className={`scrollbar-hidden min-h-0 overflow-y-auto ${
           collapsed ? "pb-0" : "flex-1 pb-2"
-        } ${collapsed && wide ? "fading" : ""}`}
+        }`}
       >
         {collapsed ? (
           <div className="px-2 py-1">
@@ -393,7 +377,7 @@ const isOpen = expanded.has(w);
           过渡中慢慢上升——表现为「先提按钮、再收边缘」。有了 mt-auto，
           过渡中产生的自由空间被它吸收，按钮钉在底边随下边缘一起上升；
           静态两态没有自由空间，表现与此前完全一致。 */}
-      <footer className={`mt-auto shrink-0 px-3 pb-3 ${collapsed && wide ? "fading" : ""}`}>
+      <footer className="mt-auto shrink-0 px-3 pb-3">
         <button
           type="button"
           onClick={onOpenSettings}

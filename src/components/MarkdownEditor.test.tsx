@@ -30,6 +30,28 @@ describe("MarkdownEditor", () => {
     expect(editorRef.current).not.toBeNull();
   });
 
+  /// 光标与占位文字必须落在同一行盒上。占位层若用 top-2 而首行从
+  /// py-0.5 起，浏览器画的竖杠会比「输入消息…」高出一截（实测反馈）。
+  it("占位层与首行文本盒共用 padding、行高与起点", () => {
+    render(
+      <MarkdownEditor
+        initialValue=""
+        editorRef={{ current: null }}
+        onChange={vi.fn()}
+        onKeyDown={vi.fn()}
+        placeholder="输入消息…"
+      />,
+    );
+    const box = screen.getByRole("textbox", { name: "消息输入框" });
+    const placeholder = screen.getByText("输入消息…");
+    for (const token of ["py-0.5", "leading-6"]) {
+      expect(box.className).toContain(token);
+      expect(placeholder.className).toContain(token);
+    }
+    expect(placeholder.className).toContain("top-0");
+    expect(placeholder.className).not.toContain("top-2");
+  });
+
   it("初始 Markdown 与程序写入都按原始 Markdown 往返，不发 HTML", async () => {
     const onChange = vi.fn<(s: EditorSnapshot, programmatic: boolean) => void>();
     const editorRef = { current: null as LexicalEditor | null };

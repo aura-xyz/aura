@@ -734,44 +734,14 @@
    侧边栏折叠动画（v0.8.0）
    --------------------------------------------------------------- */
 
-/* 折叠时内容先保持宽度、只淡出，宽度收窄由 grid/width 过渡承载，
-   避免文字在宽度骤变时换行重排。 */
-.fading > * {
-  opacity: 0;
-  transition: opacity 150ms var(--dsw-alias-motion-ease);
-}
-
-/* 展开时内容淡入。 */
-.wide {
-  animation: wide-in 200ms var(--dsw-alias-motion-ease);
-}
-
-@keyframes wide-in {
-  from { opacity: 0; }
-}
-
-/* 折叠后的 rail 图标从右侧滑入，与宽度收窄同步。 */
-.railIn .iconButton,
-.railIn .panelList,
-.railIn .regionArea {
-  animation: rail-in 150ms var(--dsw-alias-motion-ease) backwards;
-}
-
-@keyframes rail-in {
-  from {
-    opacity: 0;
-    transform: translateX(49px);
-  }
-}
-
+/* 展开态灰底、悬浮卡片白底、margin、圆角、边框、阴影与宽高由
+   Sidebar 上的 transition-[...] 统一过渡，这里只处理 reduced-motion。
+   旧的 .fading / .railIn / .wide 三套关键帧面向已经不存在的
+   iconButton / panelList / regionArea 节点，全部移除——它们会让
+   折叠瞬间把整块内容 opacity 打到 0，看起来就是「闪了一下」。 */
 @media (prefers-reduced-motion: reduce) {
-  .fading > *,
-  .wide,
-  .railIn .iconButton,
-  .railIn .panelList,
-  .railIn .regionArea {
+  .aura-sidebar {
     transition: none;
-    animation: none;
   }
 }
 
@@ -832,17 +802,14 @@
   -webkit-user-modify: read-write-plaintext-only;
 }
 
+/* 空段落的上下 margin 归零，占位层才能与首行文本盒严格重合。
+   THEME.paragraph 带 my-1，不归零会把首行（含光标）整体下推 4px。
+   也不要再往空段落里塞 inline-block 撑高：它的 baseline 落在底边，
+   同样会把光标推得比占位文字高一截；min-h-12 已保证空输入框高度。 */
 .aura-md-editor p:first-child {
   margin-top: 0;
 }
 
 .aura-md-editor p:last-child {
   margin-bottom: 0;
-}
-
-/* Lexical 的空白段落也要撑出与 textarea 一致的最小高度 */
-.aura-md-editor [contenteditable] > p:only-child:empty::after {
-  content: "";
-  display: inline-block;
-  min-height: 1.5rem;
 }

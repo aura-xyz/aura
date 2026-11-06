@@ -161,11 +161,44 @@ describe("Sidebar", () => {
   it("侧边栏宽度带过渡动画", async () => {
     const { container } = await mount();
     const aside = container.querySelector("aside");
-    expect(aside?.className).toContain("transition-[width,min-height]");
+    expect(aside?.className).toContain("transition-[width,min-height");
     expect(aside?.className).toContain("w-64");
     await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
     expect(aside?.className).toContain("w-14");
     expect(aside?.className).toContain("min-h-0");
+  });
+
+  /// 灰色外壳与白色悬浮卡片之间必须平滑过渡。此前只过渡宽高，
+  /// bg-chrome→bg-surface、margin、圆角、边框、阴影都是瞬间切换，
+  /// 折叠一开始灰色块就「啪」地消失（实测反馈的闪一下）。
+  it("折叠时灰底、外边距、圆角、边框与阴影一并过渡", async () => {
+    const { container } = await mount();
+    const aside = container.querySelector("aside");
+    expect(aside?.className).toContain("bg-chrome");
+    expect(aside?.className).toContain("border-transparent");
+    for (const prop of [
+      "background-color",
+      "margin",
+      "border-color",
+      "border-radius",
+      "box-shadow",
+      "max-height",
+    ]) {
+      expect(aside?.className).toContain(prop);
+    }
+    await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
+    expect(aside?.className).toContain("bg-surface");
+    expect(aside?.className).toContain("border-line");
+    // 两态都保留 1px 边框，避免 border-width 跳变
+    expect(aside?.className).toContain("border ");
+  });
+
+  it("不再使用会瞬间清空内容的旧折叠动画", async () => {
+    const { container } = await mount();
+    await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
+    const names = container.querySelector("aside")?.className ?? "";
+    expect(names).not.toContain("fading");
+    expect(names).not.toContain("railIn");
   });
 
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），
