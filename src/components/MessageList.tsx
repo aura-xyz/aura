@@ -29,8 +29,10 @@ const UserBubble = memo(function UserBubble({
   userIndex: number;
 }) {
   const { beginEdit } = useStore();
+  // data-turn 是右侧时间线的跳转锚点，序号与 turnRail.buildTurnItems
+  // 的 1-based 轮次一一对应。别改成 0-based，否则点击会跳错一轮。
   return (
-    <div className="group flex flex-col items-end gap-1">
+    <div className="group flex flex-col items-end gap-1" data-turn={userIndex}>
       <div
         data-ctx-message={content}
         className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"

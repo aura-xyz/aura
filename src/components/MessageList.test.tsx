@@ -134,3 +134,36 @@ describe("思考折叠行的生成中状态", () => {
     expect(container.textContent).toContain("已就绪");
   });
 });
+
+describe("右侧时间线的轮次锚点", () => {
+  /// 时间线点击后靠 [data-turn] 定位消息。序号必须与 turnRail 的
+  /// 1-based 轮次一致，且每条用户消息恰好一个锚点，否则会跳错一轮。
+  it("每条用户消息带递增的 data-turn", async () => {
+    vi.doMock("./Markdown", () => ({
+      default: ({ content }: { content: string }) => <div>{content}</div>,
+    }));
+    const messages = [
+      { id: "u1", role: "user" as const, content: "第一问" },
+      { id: "a1", role: "assistant" as const, blocks: [{ kind: "text" as const, text: "答一" }] },
+      { id: "u2", role: "user" as const, content: "第二问" },
+      { id: "a2", role: "assistant" as const, blocks: [{ kind: "text" as const, text: "答二" }] },
+    ];
+    const store = {
+      get activeSession() {
+        return { messages };
+      },
+      get busy() {
+        return false;
+      },
+      resendFrom: vi.fn(),
+      switchMessageVersion: vi.fn(),
+      beginEdit: vi.fn(),
+    };
+    vi.doMock("../store", () => ({ useStore: () => store }));
+
+    const { default: MessageList } = await import("./MessageList");
+    const { container } = render(<MessageList />);
+    const anchors = Array.from(container.querySelectorAll("[data-turn]"));
+    expect(anchors.map((a) => a.getAttribute("data-turn"))).toEqual(["1", "2"]);
+  });
+});

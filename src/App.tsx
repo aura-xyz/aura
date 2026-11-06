@@ -38,6 +38,8 @@ import {
 import { copyText } from "./lib/clipboard";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
+import TurnNavigator from "./components/TurnNavigator";
+import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
 import SessionSearch from "./components/SessionSearch";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
@@ -171,6 +173,11 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [activeTurn, setActiveTurn] = useState(0);
+  const turnItems = useMemo(
+    () => buildTurnItems(activeSession?.messages ?? []),
+    [activeSession?.messages],
+  );
   const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
   const [rightbarTab, setRightbarTab] = useState<string>("files");
   const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
@@ -272,6 +279,44 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       el.scrollTop = el.scrollHeight;
     }
   }, [activeSession?.messages, view]);
+
+  // 右侧时间线：滚动时反推当前轮次。锚点位置用 getBoundingClientRect
+  // 相对滚动视口计算，不用 offsetTop —— 后者相对最近的 positioned 祖先，
+  // 在这个布局里并不等于内容坐标。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || view !== "chat") return;
+    const update = () => {
+      const base = el.getBoundingClientRect().top;
+      const anchors = Array.from(
+        el.querySelectorAll<HTMLElement>("[data-turn]"),
+      );
+      const positions = anchors.map(
+        (a) => a.getBoundingClientRect().top - base + el.scrollTop,
+      );
+      setActiveTurn(activeTurnAt(positions, el.scrollTop, el.clientHeight));
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    return () => el.removeEventListener("scroll", update);
+  }, [activeSession?.messages, view]);
+
+  const navigateToTurn = useCallback((turn: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchor = el.querySelector<HTMLElement>(`[data-turn="${turn}"]`);
+    if (!anchor) return;
+    const base = el.getBoundingClientRect().top;
+    const top = Math.max(
+      0,
+      anchor.getBoundingClientRect().top - base + el.scrollTop - 16,
+    );
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ top, behavior: "smooth" });
+    } else {
+      el.scrollTop = top;
+    }
+  }, []);
 
   // v0.6.3：拦截刷新快捷键。
   // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
@@ -554,11 +599,20 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
             </>
           ) : (
             <>
-              {/* relative 让回到底部按钮以滚动区为定位基准 */}
+              {/* relative 让回到底部按钮、右侧时间线以滚动区为定位基准 */}
               <div className="relative min-h-0 flex-1">
+                {/* 右上角常驻「在…中打开 / 展开面板」按钮，消息区上边缘
+                    必须下移让出它们的高度，否则第一条消息会被盖住。 */}
                 <div ref={scrollRef} className="h-full overflow-y-auto">
-                  <MessageList />
+                  <div className="pt-11">
+                    <MessageList />
+                  </div>
                 </div>
+                <TurnNavigator
+                  items={turnItems}
+                  activeTurn={activeTurn}
+                  onNavigate={navigateToTurn}
+                />
                 <ScrollToBottom
                   scrollRef={scrollRef}
                   messagesLength={activeSession?.messages.length ?? 0}
