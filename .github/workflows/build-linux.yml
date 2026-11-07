@@ -2,6 +2,9 @@ name: Build Linux
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - build/linux-support
 
 jobs:
   build-linux:
