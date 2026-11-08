@@ -36,6 +36,7 @@ import {
   type CommandItem,
 } from "../lib/commandItems";
 import { downloadSessionZip } from "../lib/exportSession";
+import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import MarkdownEditor, {
   insertAtCaret,
@@ -195,7 +196,6 @@ export default function InputArea({
   const [skills, setSkills] = useState<SkillView[]>([]);
   const [goal, setGoal] = useState("");
   const goalRef = useRef("");
-  const [notice, setNotice] = useState<string | null>(null);
 
   // 切会话：装入该会话的草稿，同时把富文本编辑器内容一起换掉。
   useEffect(() => {
@@ -454,9 +454,9 @@ export default function InputArea({
   async function runExport() {
     try {
       const ok = await downloadSessionZip(sessionId, sessionTitle);
-      if (ok) setNotice("日志已导出");
+      if (ok) notify("ok", "日志已导出");
     } catch (e) {
-      setNotice(`导出失败：${String(e)}`);
+      notify("error", `导出失败：${String(e)}`);
     }
   }
 
@@ -467,7 +467,7 @@ export default function InputArea({
       goalRef.current = trimmed;
       setGoal(trimmed);
     } catch (e) {
-      setNotice(`目标保存失败：${String(e)}`);
+      notify("error", `目标保存失败：${String(e)}`);
     }
     finishCommand("");
   }
@@ -627,19 +627,6 @@ export default function InputArea({
               取消
             </button>
           )}
-        </div>
-      )}
-      {notice && (
-        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-tag border border-line bg-surface px-3 py-1.5 text-xs">
-          <span className="min-w-0 flex-1 text-foreground">{notice}</span>
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            aria-label="关闭提示"
-            className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle hover:border-brand"
-          >
-            关闭
-          </button>
         </div>
       )}
       <GoalBar

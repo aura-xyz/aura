@@ -38,6 +38,7 @@ import {
   SOURCE_LABEL,
   toolsLabel,
 } from "../lib/skill";
+import { notify } from "../lib/notices";
 import SkillDetailDialog from "../components/SkillDetailDialog";
 import Switch from "../components/Switch";
 import { useConfirm } from "../hooks/useConfirm";
@@ -68,9 +69,6 @@ type MarketState =
       paged: boolean;
     }
   | { kind: "error"; message: string };
-
-/** 顶部提示。成功与失败用同一处展示，但要能区分颜色——装成功却飘一条红字很怪。 */
-type Notice = { kind: "ok" | "error"; text: string };
 
 function Tabs({
   tab,
@@ -232,7 +230,6 @@ export default function SkillsPage({ onClose }: Props) {
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [addingSource, setAddingSource] = useState(false);
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceBusy, setSourceBusy] = useState(false);
@@ -347,13 +344,12 @@ export default function SkillsPage({ onClose }: Props) {
   async function toggle(skill: SkillView) {
     if (busyName) return;
     setBusyName(skill.name);
-    setNotice(null);
     const next = !skill.enabled;
     try {
       await setSkillEnabled(skill.name, next);
       patchSkill(skill.name, { enabled: next });
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setBusyName(null);
     }
@@ -362,7 +358,6 @@ export default function SkillsPage({ onClose }: Props) {
   async function remove(skill: SkillView) {
     if (busyName) return;
     setBusyName(skill.name);
-    setNotice(null);
     try {
       await deleteSkill(skill.name);
       setConfirming(null);
@@ -378,9 +373,9 @@ export default function SkillsPage({ onClose }: Props) {
             }
           : s,
       );
-      setNotice({ kind: "ok", text: `已删除技能「${skill.name}」` });
+      notify("ok", `已删除技能「${skill.name}」`);
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setBusyName(null);
     }
@@ -390,12 +385,11 @@ export default function SkillsPage({ onClose }: Props) {
   async function openDetail(item: MarketSkillView) {
     if (inspecting || installing) return;
     setInspecting(item.id);
-    setNotice(null);
     setInstallError(null);
     try {
       setDetail(await inspectMarketSkill(item.id));
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setInspecting(null);
     }
@@ -415,12 +409,12 @@ export default function SkillsPage({ onClose }: Props) {
       setDetail(null);
       await refresh();
       await loadMarket();
-      setNotice({
-        kind: "ok",
-        text: update
+      notify(
+        "ok",
+        update
           ? `已更新「${label}」到 v${summary.version}`
           : `已安装「${label}」（v${summary.version}）`,
-      });
+      );
     } catch (e) {
       // 弹窗不关：用户可能想直接重试，或先看清错误再决定
       setInstallError(String(e));
@@ -523,17 +517,6 @@ export default function SkillsPage({ onClose }: Props) {
           }}
           onChange={setTab}
         />
-
-        {notice && (
-          <p
-            className={`mt-3 flex items-start gap-2 rounded-card border border-line px-3 py-2 text-xs ${
-              notice.kind === "error" ? "text-danger" : "text-success"
-            }`}
-          >
-            <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-            <span className="min-w-0 break-words">{notice.text}</span>
-          </p>
-        )}
 
         {/* 搜索框常驻：三个页签共用一处，切页签不丢输入 */}
         <div className="relative mt-4">

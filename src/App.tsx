@@ -20,6 +20,7 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
+import NoticeStack from "./components/NoticeStack";
 import Sidebar from "./components/Sidebar";
 import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
@@ -750,6 +751,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
+
+      {/* 全局轻提示：右下角堆叠，三处自建横条已归一到这里 */}
+      <NoticeStack />
 
       {searchOpen && (
         <SessionSearch

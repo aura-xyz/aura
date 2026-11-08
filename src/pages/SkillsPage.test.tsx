@@ -47,6 +47,8 @@ import type {
   SkillView,
 } from "../lib/api";
 import SkillsPage from "./SkillsPage";
+import NoticeStack from "../components/NoticeStack";
+import { resetNotices } from "../lib/notices";
 
 function skill(
   partial: Partial<SkillView> & Pick<SkillView, "name" | "source">,
@@ -134,6 +136,7 @@ async function openMarket() {
 }
 
 beforeEach(() => {
+  resetNotices();
   listSkillsMock.mockReset();
   setEnabledMock.mockReset();
   deleteSkillMock.mockReset();
@@ -160,7 +163,7 @@ beforeEach(() => {
 describe("SkillsPage", () => {
   it("三个分区是标签页，标签上带数量，默认停在已安装", async () => {
     listSkillsMock.mockResolvedValue([BUILTIN, LOCAL, WORKSPACE]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
     expect(screen.getByText("ws-skill")).toBeInTheDocument();
@@ -185,7 +188,7 @@ describe("SkillsPage", () => {
   /// C05：搜索框常驻，本地两档按名称与说明过滤；切页签保留输入。
   it("本地列表可按名称与说明搜索", async () => {
     listSkillsMock.mockResolvedValue([BUILTIN, LOCAL, WORKSPACE]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("搜索技能"), "helper");
@@ -206,7 +209,7 @@ describe("SkillsPage", () => {
 
   it("开关切换调用命令并就地更新状态", async () => {    listSkillsMock.mockResolvedValue([BUILTIN, LOCAL]);
     setEnabledMock.mockResolvedValue(undefined);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     // LOCAL 默认禁用，按钮语义是「启用」
     const sw = await screen.findByRole("switch", { name: "启用 my-helper" });
@@ -226,7 +229,7 @@ describe("SkillsPage", () => {
   it("开关失败时回滚并提示原因", async () => {
     listSkillsMock.mockResolvedValue([LOCAL]);
     setEnabledMock.mockRejectedValue("技能不存在，可能已被移动或删除");
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     await userEvent.click(await screen.findByRole("switch", { name: "启用 my-helper" }));
     expect(await screen.findByText(/技能不存在，可能已被移动或删除/)).toBeInTheDocument();
@@ -239,7 +242,7 @@ describe("SkillsPage", () => {
 
   it("只有本地/市场技能能删，内置与工作区显示不可删除", async () => {
     listSkillsMock.mockResolvedValue([BUILTIN, LOCAL, WORKSPACE]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     await screen.findByText("my-helper");
     expect(screen.getByRole("button", { name: "删除 my-helper" })).toBeInTheDocument();
@@ -256,7 +259,7 @@ describe("SkillsPage", () => {
   it("删除需二次确认，确认后调用命令并刷新列表", async () => {
     listSkillsMock.mockResolvedValue([LOCAL]);
     deleteSkillMock.mockResolvedValue(undefined);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     await userEvent.click(await screen.findByRole("button", { name: "删除 my-helper" }));
     // 第一次点击只是进入确认态，不能立刻删
@@ -271,7 +274,7 @@ describe("SkillsPage", () => {
 
   it("取消删除不调用命令", async () => {
     listSkillsMock.mockResolvedValue([LOCAL]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     await userEvent.click(await screen.findByRole("button", { name: "删除 my-helper" }));
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
@@ -281,7 +284,7 @@ describe("SkillsPage", () => {
 
   it("空列表给出目录引导", async () => {
     listSkillsMock.mockResolvedValue([]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     expect(await screen.findByText(/还没有安装任何技能/)).toBeInTheDocument();
     // 目录引导
@@ -292,7 +295,7 @@ describe("SkillsPage", () => {
 
   it("读取失败给出原因与重试", async () => {
     listSkillsMock.mockRejectedValueOnce("数据库被占用").mockResolvedValueOnce([LOCAL]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     expect(await screen.findByText(/读取失败：数据库被占用/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重试" }));
@@ -319,7 +322,7 @@ describe("SkillsPage", () => {
       ],
       errors: [],
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText("MCP 服务器构建")).toBeInTheDocument();
@@ -356,7 +359,7 @@ describe("SkillsPage", () => {
       total_pages: 0,
       paged: false,
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     // 初始是聚合拉取
@@ -388,7 +391,7 @@ describe("SkillsPage", () => {
       ],
       errors: [],
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText("无完整性校验")).toBeInTheDocument();
@@ -404,7 +407,7 @@ describe("SkillsPage", () => {
       total_pages: 40191,
       paged: true,
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText(/第 1 \/ 40191 页/)).toBeInTheDocument();
@@ -425,7 +428,7 @@ describe("SkillsPage", () => {
     });
     inspectMarketMock.mockResolvedValue(inspection());
     installMarketMock.mockResolvedValue(SUMMARY);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
@@ -478,7 +481,7 @@ describe("SkillsPage", () => {
       }),
     );
     installMarketMock.mockResolvedValue(SUMMARY);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
@@ -514,7 +517,7 @@ describe("SkillsPage", () => {
       }),
     );
     installMarketMock.mockResolvedValue(SUMMARY);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
@@ -539,7 +542,7 @@ describe("SkillsPage", () => {
       errors: [],
     });
     inspectMarketMock.mockRejectedValue("技能包校验失败（sha256 不匹配）");
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
@@ -559,7 +562,7 @@ describe("SkillsPage", () => {
     });
     inspectMarketMock.mockResolvedValue(inspection({ id: "x", name: "X 技能" }));
     installMarketMock.mockRejectedValue("检测到 1 条高危内容，确认后才会安装");
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "安装" }));
@@ -591,7 +594,7 @@ describe("SkillsPage", () => {
       inspection({ version: "2.0.0", already_installed: true, installed_version: "1.0.0" }),
     );
     installMarketMock.mockResolvedValue({ ...SUMMARY, version: "2.0.0" });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(
@@ -611,7 +614,7 @@ describe("SkillsPage", () => {
     listMarketMock
       .mockRejectedValueOnce("连接超时")
       .mockResolvedValueOnce({ skills: [], errors: [] });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
 
     // 本地列表照常可用（默认标签）
     expect(await screen.findByText("my-helper")).toBeInTheDocument();
@@ -631,7 +634,7 @@ describe("SkillsPage", () => {
       skills: [],
       errors: ["官方：连接超时 / HTTP 404"],
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText(/市场暂时拉不到清单（官方：连接超时/)).toBeInTheDocument();
@@ -649,7 +652,7 @@ describe("SkillsPage", () => {
       skills: [marketItem({ id: "ok", name: "可用条目" })],
       errors: ["团队：https://… 返回 HTTP 404"],
     });
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText("可用条目")).toBeInTheDocument();
@@ -666,7 +669,7 @@ describe("SkillsPage", () => {
     };
     addSourceMock.mockResolvedValue([OFFICIAL_SOURCE, custom]);
     removeSourceMock.mockResolvedValue([OFFICIAL_SOURCE]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     expect(await screen.findByText("官方")).toBeInTheDocument();
@@ -704,7 +707,7 @@ describe("SkillsPage", () => {
       repo: "https://raw.githubusercontent.com/team/skills/HEAD/",
     };
     listSourcesMock.mockResolvedValue([OFFICIAL_SOURCE, custom]);
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await userEvent.click(await screen.findByRole("button", { name: "移除来源 skills" }));
@@ -718,7 +721,7 @@ describe("SkillsPage", () => {
   it("添加源失败时在源区块内提示原因", async () => {
     listSkillsMock.mockResolvedValue([]);
     addSourceMock.mockRejectedValue("目前只支持 GitHub 仓库，请填 github.com/owner/repo");
-    render(<SkillsPage onClose={vi.fn()} />);
+    render(<><SkillsPage onClose={vi.fn()} /><NoticeStack /></>);
     await openMarket();
 
     await screen.findByText("官方");

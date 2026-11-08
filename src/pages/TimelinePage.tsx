@@ -17,6 +17,7 @@ import {
   type TimelineKind,
 } from "../lib/api";
 import { useStore } from "../store";
+import { notify } from "../lib/notices";
 
 /** 类型 → 图标与配色。失败由渲染层的 ok 判断覆盖为 text-danger。 */
 const KIND_META: Record<
@@ -81,7 +82,6 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   /** 展开详情的条目 seq。 */
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [copied, setCopied] = useState(false);
 
   const activeSession = sessions.find((s) => s.id === activeId);
 
@@ -146,10 +146,14 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
 
   async function copyMarkdown() {
     if (!activeId) return;
-    const md = await exportTimeline(activeId, activeSession?.title);
-    await navigator.clipboard.writeText(md);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      const md = await exportTimeline(activeId, activeSession?.title);
+      await navigator.clipboard.writeText(md);
+      notify("ok", "已复制 Markdown");
+    } catch (e) {
+      // 剪贴板在少数环境会拒绝写入，别让按钮静默无反应
+      notify("error", `复制失败：${String(e)}`);
+    }
   }
 
   async function downloadMarkdown() {
@@ -207,7 +211,7 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
             className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
           >
             <Copy size={11} />
-            {copied ? "已复制" : "复制 Markdown"}
+            复制 Markdown
           </button>
           <button
             type="button"
