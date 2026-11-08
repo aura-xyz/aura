@@ -12,19 +12,22 @@ function saveCatalogBody(): string {
 }
 
 /**
- * 实测反馈：模型列表能显示，但勾选后保存报「供应商不存在或未启用」，
- * 收藏一直写不进去。根因是 saveCatalog 在 setPinnedModels 之前无条件
- * 调了 refreshProviderModels —— 它走 router.executor_for，供应商未启用
- * 或未填 Key 就直接抛错，把整个 try 打断。
+ * 实测反馈：模型列表能显示，但勾选后保存报「供应商不存在或未启用」。
+ * 第一轮误判为「前置刷新多余」把它删了，结果目录里新勾选的模型
+ * 永远收藏不上 —— 后端 set_pinned 只给已有条目打标记，必须先把远端
+ * 模型合并进配置。现在改走 save_provider_catalog 一次完成合并+收藏，
+ * 既不再联网、不依赖 executor_for，也不会漏掉新增模型。
  *
  * ModelSection 依赖大量 Tauri API，渲染成本高；这条链路的关键不变量
- * 「保存收藏不依赖远端刷新」用源码契约钉住即可（同 cssTokens.test.ts）。
+ * 用源码契约钉住即可（同 cssTokens.test.ts）。
  */
 describe("模型收藏保存链路", () => {
-  it("只做持久化与收藏写入，不再前置刷新远端模型", () => {
+  it("走原子目录保存，不再前置刷新远端、也不单独调 setPinnedModels", () => {
     const body = saveCatalogBody();
     expect(body).toContain("persistProviders(");
-    expect(body).toContain("setPinnedModels(");
+    expect(body).toContain("saveProviderCatalog(");
+    expect(body).toContain("catalogList[p.id]");
     expect(body).not.toContain("refreshProviderModels(");
+    expect(body).not.toContain("setPinnedModels(");
   });
 });

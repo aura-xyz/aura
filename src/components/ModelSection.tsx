@@ -21,7 +21,7 @@ import {
   getProviderStatuses,
   getProviders,
   pullOllamaModel,
-  setPinnedModels,
+  saveProviderCatalog,
   setProviders,
   type ProviderConfig,
   type ProviderKind,
@@ -375,13 +375,11 @@ export default function ModelSection() {
     setCatalogBusy((b) => ({ ...b, [p.id]: true }));
     setCatalogError((e) => ({ ...e, [p.id]: "" }));
     try {
-      // 保存收藏只做持久化，不再顺带刷新远端模型列表。
-      // refreshProviderModels 走 router.executor_for，供应商尚未启用或
-      // 未填 Key 时会抛「供应商不存在或未启用」，把整段 try 提前打断，
-      // setPinnedModels 根本执行不到 —— 表现为「列表能显示但收藏不了」。
-      // 目录列表由 fetchRemoteModels（按草稿、只读）单独负责拉取。
+      // 先保存供应商草稿（改过 Key / 地址才生效），再用同一份目录列表
+      // 原子完成「合并远端模型 + 写收藏」。后端 set_pinned 只给已存在条目
+      // 打标记，不新增模型；少了合并这一步，目录里新勾选的模型永远收藏不上。
       await persistProviders();
-      await setPinnedModels(p.id, keys);
+      await saveProviderCatalog(p.id, catalogList[p.id] ?? [], keys);
       await refreshModels();
       setCatalogSaved((s) => ({ ...s, [p.id]: true }));
       window.setTimeout(
