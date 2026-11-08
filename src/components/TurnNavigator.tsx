@@ -75,6 +75,8 @@ export default function TurnNavigator({ items, activeTurn, onNavigate }: Props) 
     onNavigate(turn);
   }
 
+  // 预览面板用 top-1/2 + -translate-y-1/2 让**中心**与刻度轨中心重合。
+  // 只有 top-1/2 时上边缘落在中线上，整块面板会下坠半身高（实测反馈）。
   const railItems = items.slice(railRange.start, railRange.end);
   const panelItems = items.slice(panelRange.start, panelRange.end);
 
@@ -95,7 +97,7 @@ export default function TurnNavigator({ items, activeTurn, onNavigate }: Props) 
         <div
           role="listbox"
           aria-label="对话时间线"
-          className="absolute top-1/2 rounded-card border border-line bg-surface py-1 shadow-lg"
+          className="absolute top-1/2 -translate-y-1/2 rounded-card border border-line bg-surface py-1 shadow-lg"
           style={{ right: "calc(100% + 10px)", width: "min(330px, 40vw)" }}
         >
           <div

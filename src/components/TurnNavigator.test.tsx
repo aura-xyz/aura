@@ -70,6 +70,17 @@ describe("右侧虚拟滚动时间线", () => {
     expect(onNavigate).toHaveBeenLastCalledWith(1);
   });
 
+  /// 面板中心必须与刻度轨中心重合。此前只写 top-1/2，上边缘落在中线上
+  /// 导致整块下坠，看起来「消息列表上下没有居中」（实测反馈）。
+  it("预览面板相对刻度轨垂直居中", () => {
+    mount(items(6), 6);
+    const rail = screen.getByRole("navigation", { name: "对话轮次刻度" }).parentElement!;
+    fireEvent.pointerEnter(rail);
+    const panel = screen.getByRole("listbox", { name: "对话时间线" });
+    expect(panel.className).toContain("top-1/2");
+    expect(panel.className).toContain("-translate-y-1/2");
+  });
+
   it("指针离开后收起预览", () => {
     mount(items(4), 4);
     const rail = screen.getByRole("navigation", { name: "对话轮次刻度" }).parentElement!;
