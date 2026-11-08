@@ -26,24 +26,30 @@ export default function CodeBlockShell({
 
   return (
     <div className="md-code" data-ctx-codeblock={code}>
-      {lang && <span className="md-code-lang">{langLabel(lang)}</span>}
-      <CopyButton text={code} className="md-code-copy" label="复制代码" />
-      {foldable && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          aria-label={expanded ? "折叠代码" : "展开代码"}
-          className="md-code-fold"
-        >
-          {expanded ? (
-            <ChevronDown size={12} className="shrink-0" />
-          ) : (
-            <ChevronRight size={12} className="shrink-0" />
+      {/* 32px 工具条带：语言标签常驻在左，折叠与复制固定在右。
+          此前两者都是绝对定位浮在代码上，长代码滚动时会盖住内容。 */}
+      <div className="md-code-bar">
+        <span className="md-code-lang">{lang ? langLabel(lang) : "纯文本"}</span>
+        <div className="md-code-tools">
+          {foldable && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-label={expanded ? "折叠代码" : "展开代码"}
+              className="md-code-fold"
+            >
+              {expanded ? (
+                <ChevronDown size={12} className="shrink-0" />
+              ) : (
+                <ChevronRight size={12} className="shrink-0" />
+              )}
+              <span>{expanded ? "折叠" : `展开全部 ${countLines(code)} 行`}</span>
+            </button>
           )}
-          <span>{expanded ? "折叠" : `展开全部 ${countLines(code)} 行`}</span>
-        </button>
-      )}
+          <CopyButton text={code} className="md-code-copy" label="复制代码" />
+        </div>
+      </div>
       {open ? (
         <pre>{children}</pre>
       ) : (

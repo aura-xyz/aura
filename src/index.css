@@ -117,6 +117,8 @@
 
   --surface: #ffffff;
   --surface-sunken: #f5f5f7;
+  /* 代码块工具条带：比 surface-sunken 深一档 */
+  --code-bar: #ececf0;
   --foreground: #3a3a3c;
   --subtle: #6e6e73;
   --line: #e5e5ea;
@@ -188,6 +190,7 @@
 
   --surface: #0a0a0a;
   --surface-sunken: #1c1c1e;
+  --code-bar: #232325;
   --foreground: #f5f5f7;
   --subtle: #98989d;
   --line: #454547;
@@ -493,69 +496,72 @@
     padding: 0.1em 0.35em;
   }
 
-  /* 代码块容器：负责把语言标签绝对定位到右上角，
-     padding-top 留出标签的净空，避免压住首行代码 */
+  /* 代码块：32px 工具条带 + 代码区，整体一个圆角容器。
+     此前语言标签与复制按钮都绝对定位浮在代码上，长代码横向滚动时会盖住内容；
+     改成条带后它们有了自己的行，代码区也不必再靠 padding-top 让位。 */
   .md .md-code {
-    position: relative;
     margin-top: 0.25rem;
     margin-bottom: 0.25rem;
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  .md .md-code-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    height: 32px;
+    padding: 0 0.4rem 0 0.75rem;
+    /* 比代码区（surface-sunken）再深一档，条带才有「工具区」的层次 */
+    background-color: var(--code-bar);
+    border-bottom: 1px solid var(--line);
   }
 
   .md .md-code-lang {
-    position: absolute;
-    top: 0.45rem;
-    left: 0.7rem;
-    z-index: 1;
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--subtle);
-    pointer-events: none;
     user-select: none;
   }
 
-  /* 复制按钮：右上角，悬停整块才渐现。
-     与语言标签同在顶部，靠 padding-top 让位，不压首行代码。 */
+  .md .md-code-tools {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  /* 复制按钮常驻在条带里：不再悬停才出现，也就不必给代码区让位 */
   .md .md-code-copy {
-    position: absolute;
-    top: 0.35rem;
-    right: 0.5rem;
-    z-index: 1;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-    background-color: var(--surface);
+    background-color: transparent;
+    border-color: transparent;
+    padding: 0.15rem 0.4rem;
+    font-size: 10px;
   }
 
-  .md .md-code:hover .md-code-copy,
-  .md .md-code-copy:focus-visible {
-    opacity: 1;
-  }
-
-  /* 折叠入口：右上角靠左一点，给复制按钮让位。
-     折叠时是唯一的操作入口，所以常驻显示（不像复制按钮那样悬停才现）。 */
   .md .md-code-fold {
-    position: absolute;
-    top: 0.3rem;
-    right: 6.5rem;
-    z-index: 1;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
     padding: 0.15rem 0.4rem;
     border-radius: 0.375rem;
-    border: 1px solid var(--line);
-    background-color: var(--surface);
+    border: 1px solid transparent;
+    background-color: transparent;
     color: var(--subtle);
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1;
-    transition: color 0.15s ease, border-color 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease,
+      background-color 0.15s ease;
   }
 
   .md .md-code-fold:hover {
-    border-color: var(--brand);
+    border-color: var(--line);
+    background-color: var(--surface);
     color: var(--brand);
   }
 
@@ -574,9 +580,10 @@
     margin: 0;
   }
 
-  /* 有语言标签时，首行代码下压一点让位 */
-  .md .md-code:has(.md-code-lang) pre {
-    padding-top: 1.6rem;
+  /* 条带已经承担了边框与圆角，代码区退回纯背景 */
+  .md .md-code pre {
+    border: none;
+    border-radius: 0;
   }
 
   .md pre code {

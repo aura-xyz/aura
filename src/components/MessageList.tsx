@@ -36,7 +36,7 @@ const UserBubble = memo(function UserBubble({
     <div className="group flex flex-col items-end gap-1" data-turn={userIndex}>
       <div
         data-ctx-message={content}
-        className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"
+        className="max-w-[min(75%,75ch)] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"
       >
         {content}
       </div>
