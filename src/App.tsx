@@ -40,6 +40,7 @@ import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
 import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
+import { shouldBlockDevtools } from "./lib/devtools";
 import SessionSearch from "./components/SessionSearch";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
@@ -342,6 +343,20 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // v0.8.0：正式版吞掉 F12 / Ctrl+Shift+I/J/C，避免终端用户误开检查器。
+  // 开发模式（pnpm tauri dev，import.meta.env.PROD=false）**完全不注册**
+  // 这个监听，调试能力原样保留。用捕获阶段，抢在 WebView 处理之前。
+  useEffect(() => {
+    if (!import.meta.env.PROD) return;
+    const block = (e: KeyboardEvent) => {
+      if (!shouldBlockDevtools(true, e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", block, true);
+    return () => window.removeEventListener("keydown", block, true);
   }, []);
 
   // 搜索数据：把会话里的消息转成纯文本

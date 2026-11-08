@@ -21,7 +21,6 @@ import {
   getProviderStatuses,
   getProviders,
   pullOllamaModel,
-  refreshProviderModels,
   setPinnedModels,
   setProviders,
   type ProviderConfig,
@@ -376,9 +375,11 @@ export default function ModelSection() {
     setCatalogBusy((b) => ({ ...b, [p.id]: true }));
     setCatalogError((e) => ({ ...e, [p.id]: "" }));
     try {
-      if ((catalogList[p.id] ?? []).length > 0) {
-        await refreshProviderModels(p.id);
-      }
+      // 保存收藏只做持久化，不再顺带刷新远端模型列表。
+      // refreshProviderModels 走 router.executor_for，供应商尚未启用或
+      // 未填 Key 时会抛「供应商不存在或未启用」，把整段 try 提前打断，
+      // setPinnedModels 根本执行不到 —— 表现为「列表能显示但收藏不了」。
+      // 目录列表由 fetchRemoteModels（按草稿、只读）单独负责拉取。
       await persistProviders();
       await setPinnedModels(p.id, keys);
       await refreshModels();

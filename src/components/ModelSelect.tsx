@@ -48,7 +48,11 @@ export default function ModelSelect({ models, selectedModel, onChange }: Props) 
     return [...map].map(([provider, list]) => ({ provider, models: list }));
   }, [models]);
 
-  const selected = models.find((m) => m.key === selectedModel);
+  // 复合 key 是主键，但旧配置里可能存着 v0.1.x 的裸 id；两种都要认，
+  // 否则明明有模型却找不到选中项，界面一直显示「加载中…」。
+  const selected =
+    models.find((m) => m.key === selectedModel) ??
+    models.find((m) => m.id === selectedModel);
 
   /** 模型显示名：优先后端维护的 label，回退到完整 id */
   function displayName(m: ModelInfo): string {
@@ -65,8 +69,15 @@ export default function ModelSelect({ models, selectedModel, onChange }: Props) 
         disabled={models.length === 0}
         className="flex items-center gap-1.5 py-1 text-xs text-subtle transition-colors hover:text-foreground disabled:opacity-60"
       >
+        {/* 「加载中…」把三种状态混成一个：模型没加载完、一个模型都没配、
+            以及有模型但还没选（或选中项已失效）。后两种是稳定状态，
+            永远显示加载中会让人以为模型服务坏了（实测反馈）。 */}
         <span className="break-words text-left">
-          {selected ? displayName(selected) : "加载中…"}
+          {selected
+            ? displayName(selected)
+            : models.length === 0
+              ? "无可用模型"
+              : "选择模型"}
         </span>
         <ChevronUp
           size={12}
