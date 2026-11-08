@@ -201,6 +201,34 @@ describe("Sidebar", () => {
     expect(names).not.toContain("railIn");
   });
 
+  /// 实测反馈：删除是唯一不可撤销的动作，误触一下整个对话就没了。
+  /// 点删除按钮只能弹确认，真正落库必须再点一次「删除」。
+  describe("删除会话二次确认", () => {
+    it("点删除按钮不立即删除，先弹确认框并点名会话", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      expect(store.deleteSession).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "删除对话？" })).toBeInTheDocument();
+      expect(screen.getByRole("dialog").textContent).toContain("修 bug");
+    });
+
+    it("取消后不删除且关闭确认框", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      await userEvent.click(screen.getByRole("button", { name: "取消" }));
+      expect(store.deleteSession).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("确认后才删除对应会话", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      await userEvent.click(screen.getByRole("button", { name: "删除" }));
+      expect(store.deleteSession).toHaveBeenCalledWith("s1");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），
   /// 合并 DOM 时漏掉任何一个，右键会静默失效
   it("保留右键菜单锚点属性", async () => {

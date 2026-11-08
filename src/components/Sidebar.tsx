@@ -5,7 +5,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
 
@@ -69,6 +71,12 @@ export default function Sidebar({
   } = useStore();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // 删除是唯一不可撤销的动作，误触一下整个对话就没了（实测反馈）。
+  // 点删除只记下目标，真正调 deleteSession 必须过二次确认。
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [innerCollapsed, setInnerCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
@@ -115,14 +123,12 @@ function toggleExpand(w: string) {
   const labelOff = "max-w-0 opacity-0";
   const labelOn = "max-w-40 opacity-100";
 
+  // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
+  // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
+  // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
+  // 两态都保留 1px 边框（展开态透明）避免 border-width 跳变。
   return (
-    // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
-    // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
-    // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
-    // 两态都保留 1px 边框（展开态透明），避免 border-width 跳变。
-    //
-    // 高度：self-start + min-height 控制，展开态撑满、折叠态收成内容高；
-    // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡。
+    <>
     <aside
       className={`aura-sidebar flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height,max-height,margin,background-color,border-color,border-radius,box-shadow] duration-200 ease-in-out ${
         collapsed
@@ -350,8 +356,10 @@ const isOpen = expanded.has(w);
                             {renamingId !== s.id && (
                               <button
                                 type="button"
-                                onClick={() => deleteSession(s.id)}
-                                aria-label="删除对话"
+                                onClick={() =>
+                                  setPendingDelete({ id: s.id, title: s.title })
+                                }
+                                aria-label={`删除对话：${s.title}`}
                                 className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
                               >
                                 <Trash2 size={13} />
@@ -395,5 +403,24 @@ const isOpen = expanded.has(w);
         </button>
       </footer>
     </aside>
+    {pendingDelete &&
+      createPortal(
+        <ConfirmDialog
+          title="删除对话？"
+          confirmText="删除"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            deleteSession(pendingDelete.id);
+            setPendingDelete(null);
+          }}
+        >
+          <p className="text-sm leading-relaxed text-subtle">
+            将永久删除「{pendingDelete.title}」及其全部消息记录，此操作不可撤销。
+          </p>
+        </ConfirmDialog>,
+        document.body,
+      )}
+    </>
   );
 }
