@@ -11,6 +11,30 @@ import { RotateCcw } from "lucide-react";
 
 type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 
+/**
+ * 12px 主题预览小方块：半边亮半边暗，跟随系统用 45° 斜分。
+ * 纯 CSS，不引图片；描边用 ring 保证在亮暗两种背景下都能看见边界。
+ */
+function ThemeSwatch({ id }: { id: ThemeApi["theme"] }) {
+  if (id === "system") {
+    return (
+      <span
+        aria-hidden
+        className="aura-theme-swatch-system h-3 w-3 shrink-0 rounded-[3px] ring-1 ring-line"
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      className="relative h-3 w-3 shrink-0 overflow-hidden rounded-[3px] ring-1 ring-line"
+    >
+      <span className="absolute inset-y-0 left-0 w-1/2 bg-white" />
+      <span className="absolute inset-y-0 right-0 w-1/2 bg-[#1c1c1e]" />
+    </span>
+  );
+}
+
 const THEMES: { id: ThemeApi["theme"]; label: string }[] = [
   { id: "light", label: "亮色" },
   { id: "dark", label: "暗色" },
@@ -46,12 +70,13 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
               type="button"
               onClick={() => theme.setTheme(t.id)}
               aria-pressed={theme.theme === t.id}
-              className={`rounded-full px-4 py-1 text-sm transition-colors ${
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-sm transition-colors ${
                 theme.theme === t.id
                   ? "bg-brand text-white"
                   : "text-subtle hover:text-foreground"
               }`}
             >
+              <ThemeSwatch id={t.id} />
               {t.label}
             </button>
           ))}

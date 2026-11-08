@@ -71,4 +71,22 @@ describe("外观设置", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe(before);
   });
+
+  /// A8：三档主题各带一枚 12px 预览方块，跟随系统用斜分。
+  it("主题选项内带预览方块，跟随系统为斜分", () => {
+    const t = api();
+    const { container } = render(<AppearanceSection theme={t} />);
+    for (const name of ["亮色", "暗色", "跟随系统"]) {
+      const btn = screen.getByRole("button", { name });
+      expect(btn.querySelector("span[aria-hidden]")).not.toBeNull();
+    }
+    const system = screen.getByRole("button", { name: "跟随系统" });
+    const swatch = system.querySelector("span[aria-hidden]") as HTMLElement;
+    // 斜分用 CSS 类里的 135deg 渐变实现（jsdom 不支持渐变，只断言类名）
+    expect(swatch.className).toContain("aura-theme-swatch-system");
+    // 亮/暗两档是竖分：方块内再套两个半边
+    const lightBtn = screen.getByRole("button", { name: "亮色" });
+    expect(lightBtn.querySelectorAll("span[aria-hidden] span").length).toBe(2);
+    expect(container).toBeTruthy();
+  });
 });

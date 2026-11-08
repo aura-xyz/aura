@@ -6,7 +6,14 @@
  */
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowLeft } from "lucide-react";
+import {
+  ArrowLeft,
+  Cpu,
+  Info,
+  Palette,
+  SlidersHorizontal,
+  type LucideIcon,
+} from "lucide-react";
 import type { useTheme } from "../hooks/useTheme";
 import { getGlobalRules } from "../lib/api";
 import { settingsSections } from "../lib/settingsSections";
@@ -14,6 +21,14 @@ import AboutSection from "./AboutSection";
 import AppearanceSection from "../components/AppearanceSection";
 import GeneralSection from "../components/GeneralSection";
 import ModelSection from "../components/ModelSection";
+
+/** 分区图标：与左栏导航同语言（15px，未选中 subtle，选中随文字变深）。 */
+const SECTION_ICONS: Record<string, LucideIcon> = {
+  appearance: Palette,
+  model: Cpu,
+  general: SlidersHorizontal,
+  about: Info,
+};
 
 interface Props {
   onClose: () => void;
@@ -71,22 +86,26 @@ export default function SettingsPage({ onClose, theme }: Props) {
         <div className="mt-6 flex gap-6">
           <nav aria-label="设置分区" className="w-36 shrink-0">
             <ul className="space-y-0.5">
-              {settingsSections().map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSection(s.id)}
-                    aria-current={section === s.id ? "page" : undefined}
-                    className={`w-full rounded-tag px-3 py-1.5 text-left text-sm transition-colors ${
-                      section === s.id
-                        ? "bg-bubble font-medium text-foreground"
-                        : "text-subtle hover:bg-bubble hover:text-foreground"
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                </li>
-              ))}
+              {settingsSections().map((s) => {
+                const Icon = SECTION_ICONS[s.id];
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSection(s.id)}
+                      aria-current={section === s.id ? "page" : undefined}
+                      className={`flex w-full items-center gap-2 rounded-tag px-2.5 py-1.5 text-left text-sm transition-colors ${
+                        section === s.id
+                          ? "bg-bubble font-medium text-foreground"
+                          : "text-subtle hover:bg-bubble hover:text-foreground"
+                      }`}
+                    >
+                      {Icon && <Icon size={15} className="shrink-0" aria-hidden />}
+                      {s.label}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </nav>
 
