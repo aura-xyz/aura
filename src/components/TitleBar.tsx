@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { APP_VERSION } from "../lib/version";
 
 const appWindow = getCurrentWindow();
 
@@ -9,12 +10,14 @@ const IS_MAC =
   typeof navigator !== "undefined" && /Macintosh/.test(navigator.platform ?? "");
 
 export default function TitleBar() {
-  const [version, setVersion] = useState("");
+  // 首帧直接用构建期常量（同源自 package.json），避免先闪一个空的 "v"。
+  const [version, setVersion] = useState(APP_VERSION);
 
   useEffect(() => {
     getVersion()
       .then((v) => setVersion(v))
-      .catch(() => setVersion("0.7.2-rc.2"));
+      // 运行时版本读不出来就明说 "dev"，不要再兜底一个可能早已过期的版本号。
+      .catch(() => setVersion("dev"));
   }, []);
 
   const darwin = IS_MAC;
@@ -36,7 +39,9 @@ export default function TitleBar() {
         <span className="text-[13px] font-semibold tracking-[-0.02em]">
           Aura
         </span>
-        <span className="font-mono text-[11px] text-subtle">v{version}</span>
+        <span className="font-mono text-[11px] text-subtle">
+          {version === "dev" ? "dev" : `v${version}`}
+        </span>
       </div>
 
       <div className="flex h-full gap-0.5">

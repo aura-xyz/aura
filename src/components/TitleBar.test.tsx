@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getVersion } from "@tauri-apps/api/app";
 import TitleBar from "./TitleBar";
 
 // TitleBar 直接调用 Tauri 的 window/app API，单测里替换成可控桩。
@@ -11,7 +12,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 vi.mock("@tauri-apps/api/app", () => ({
-  getVersion: () => Promise.resolve("0.8.0"),
+  getVersion: vi.fn(() => Promise.resolve("0.8.0")),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -26,5 +27,17 @@ describe("标题栏贴边", () => {
     const header = container.querySelector("header");
     expect(header?.className).not.toMatch(/(?:^|\s)pr-\d/);
     expect(screen.getByRole("button", { name: "关闭" })).toBeInTheDocument();
+  });
+});
+
+describe("标题栏版本号", () => {
+  /// 硬编码兜底 0.7.2-rc.2 曾在升版后继续显示，等于对用户谎报版本。
+  /// 读不到运行时版本时应显示 dev，且不得再出现那个过期号。
+  it("读不到运行时版本时显示 dev", async () => {
+    vi.mocked(getVersion).mockRejectedValueOnce(new Error("no runtime version"));
+    const { container } = render(<TitleBar />);
+
+    await screen.findByText("dev");
+    expect(container.textContent).not.toContain("0.7.2-rc.2");
   });
 });

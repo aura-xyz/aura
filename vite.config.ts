@@ -3,11 +3,18 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+import pkg from "./package.json";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
+
+  // 版本号只有一个来源：package.json。标题栏此前手抄一份硬编码兜底，
+  // 每次升版忘记同步就会显示一个从未发布过的版本（v0.7.2-rc.2 残留到 v0.8.0）。
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
