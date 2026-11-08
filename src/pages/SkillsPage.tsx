@@ -40,6 +40,7 @@ import {
 } from "../lib/skill";
 import SkillDetailDialog from "../components/SkillDetailDialog";
 import Switch from "../components/Switch";
+import { useConfirm } from "../hooks/useConfirm";
 
 interface Props {
   onClose: () => void;
@@ -247,6 +248,7 @@ export default function SkillsPage({ onClose }: Props) {
   const [providerFilter, setProviderFilter] = useState("");
   /** 市场页码（仅分页源有效） */
   const [marketPage, setMarketPage] = useState(1);
+  const { confirm, dialog } = useConfirm();
 
   async function refresh() {
     try {
@@ -445,12 +447,24 @@ export default function SkillsPage({ onClose }: Props) {
     }
   }
 
-  async function dropSource(url: string) {
+  async function dropSource(source: SkillSourceView) {
     if (sourceBusy) return;
+    // 移除是不可逆的（要加回来得重新填地址），先问一句。
+    const ok = await confirm({
+      title: "移除技能源",
+      message: (
+        <span>
+          移除来源「{source.name}」？该源提供的技能不会随之卸载。
+        </span>
+      ),
+      confirmText: "移除",
+      danger: true,
+    });
+    if (!ok) return;
     setSourceBusy(true);
     setSourceError(null);
     try {
-      setSources(await removeSkillSource(url));
+      setSources(await removeSkillSource(source.url));
       void loadMarket();
     } catch (e) {
       setSourceError(String(e));
@@ -613,7 +627,7 @@ export default function SkillsPage({ onClose }: Props) {
                         type="button"
                         aria-label={`移除来源 ${s.name}`}
                         disabled={sourceBusy}
-                        onClick={() => void dropSource(s.url)}
+                        onClick={() => void dropSource(s)}
                         className="text-subtle transition-colors hover:text-danger disabled:opacity-40"
                       >
                         <X size={11} />
@@ -885,6 +899,8 @@ export default function SkillsPage({ onClose }: Props) {
           onConfirm={() => void confirmInstall()}
         />
       )}
+
+      {dialog}
     </div>
   );
 }

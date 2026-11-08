@@ -684,10 +684,35 @@ describe("SkillsPage", () => {
     await waitFor(() => expect(listMarketMock).toHaveBeenCalledTimes(2));
 
     await userEvent.click(await screen.findByRole("button", { name: "移除来源 skills" }));
+    // 确认前不动作：移除要重新填地址才能加回来
+    expect(removeSourceMock).not.toHaveBeenCalled();
+    const confirmDialog = await screen.findByRole("dialog", { name: "移除技能源" });
+    expect(confirmDialog).toHaveTextContent("skills");
+    await userEvent.click(within(confirmDialog).getByRole("button", { name: "移除" }));
     expect(removeSourceMock).toHaveBeenCalledWith(custom.url);
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "移除来源 skills" })).toBeNull(),
     );
+  });
+
+  it("取消移除来源时不调用命令", async () => {
+    listSkillsMock.mockResolvedValue([]);
+    const custom: SkillSourceView = {
+      name: "skills",
+      url: "https://raw.githubusercontent.com/team/skills/HEAD/",
+      removable: true,
+      repo: "https://raw.githubusercontent.com/team/skills/HEAD/",
+    };
+    listSourcesMock.mockResolvedValue([OFFICIAL_SOURCE, custom]);
+    render(<SkillsPage onClose={vi.fn()} />);
+    await openMarket();
+
+    await userEvent.click(await screen.findByRole("button", { name: "移除来源 skills" }));
+    const confirmDialog = await screen.findByRole("dialog", { name: "移除技能源" });
+    await userEvent.click(within(confirmDialog).getByRole("button", { name: "取消" }));
+
+    expect(removeSourceMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "移除来源 skills" })).toBeInTheDocument();
   });
 
   it("添加源失败时在源区块内提示原因", async () => {
