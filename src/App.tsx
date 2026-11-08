@@ -26,6 +26,7 @@ import TitleBar from "./components/TitleBar";
 import { useTheme } from "./hooks/useTheme";
 import { useRightbarTransition } from "./hooks/useRightbarTransition";
 import { useDropZone } from "./hooks/useDropZone";
+import { useConfirm } from "./hooks/useConfirm";
 import { checkAllowlistPath } from "./lib/api";
 import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
 import {
@@ -170,7 +171,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     [newSession, setView],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [confirmWs, setConfirmWs] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -401,7 +402,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     const wsEl = target.closest<HTMLElement>("[data-ctx-workspace]");
     if (wsEl) {
       const path = wsEl.dataset.ctxWorkspace ?? "";
-      const items = workspaceMenuItems(path, workspace, (p) => setConfirmWs(p));
+      const items = workspaceMenuItems(path, workspace, (p) => {
+        void confirm({
+          title: "删除工作区",
+          message: `将移除「${basename(p)}」的全部对话记录，磁盘文件不受影响。`,
+          confirmText: "删除",
+          danger: true,
+        }).then((ok) => {
+          if (ok) void removeWorkspace(p);
+        });
+      });
       // 当前工作区没有可提供的操作（不能删除自己）。
       // 此处必须放行原生菜单：若先 preventDefault 再判断，用户右键第一个
       // 工作区时会「自定义菜单不显示、系统菜单也不显示」——什么都不会发生。
@@ -752,44 +762,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         />
       )}
 
-      {confirmWs && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
-          onClick={() => setConfirmWs(null)}
-        >
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="删除工作区"
-            className="w-80 rounded-card border border-line bg-surface p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-semibold">删除工作区</h3>
-            <p className="mt-2 text-sm leading-relaxed text-subtle">
-              将移除「{basename(confirmWs)}」的全部对话记录，磁盘文件不受影响。
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmWs(null)}
-                className="rounded-full border border-line px-4 py-1.5 text-sm text-subtle transition-colors hover:text-foreground"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  removeWorkspace(confirmWs);
-                  setConfirmWs(null);
-                }}
-                className="rounded-full bg-danger px-4 py-1.5 text-sm text-white transition-colors hover:opacity-90 dark:text-surface"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 删除工作区走统一确认（useConfirm），与删除会话、移除技能源同一基准线 */}
+      {confirmDialog}
 
       {sideEffectPrompt && (
         <ConfirmDialog
