@@ -68,6 +68,8 @@ tauri-plugin-notification = "2.7.0"
 # url：构造 updater 的下载地址（Update::download_url 是 url::Url）。
 # 0.2.1 已在依赖树中（updater 插件带入），声明为直接依赖不增加编译量。
 url = "2"
+# Linux 上 API Key 加密使用 SecretService（keyring crate）。Windows 保留 DPAPI。
+keyring = "1"
 
 [dev-dependencies]
 # 发布校验工具用：验安装包的 minisign 签名（examples/verify_sig.rs）。

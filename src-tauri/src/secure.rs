@@ -17,13 +17,27 @@
 //! FFI 直接调 crypt32.dll，与 `lib.rs` 的 `win_icon` 同一先例——
 //! 两个函数一个结构体，自己声明比引 `windows` crate 轻。
 //!
-//! 非 Windows 平台未验证（本项目打包与验证仅覆盖 Windows x64）：
-//! 直穿明文，仅保证编译通过，**不要在其它平台当作已加密**。
+//! 非 Windows 平台使用 SecretService（keyring crate）做加密，不再明文直穿。
+//! Windows 保留 DPAPI。
 
-/// 附加熵，加解密必须一致。
+#[cfg(not(windows))]
+use keyring::Keyring;
+
+/// 附加熵，Windows DPAPI 加解密必须一致。
 const ENTROPY: &[u8] = b"aura-local-secret-v1";
 
-/// 加密，输出 hex 字符串。
+/// Linux 上标记密文由 keyring 保管的前缀。`protect` 输出此标记，
+/// 实际密文存在 SecretService 中；`unprotect` 识别此前缀后从 keyring 读取。
+#[cfg(not(windows))]
+const KEYRING_MARKER: &str = "keyring:";
+
+/// keyring 的服务名与账户名。
+#[cfg(not(windows))]
+const KEYRING_SERVICE: &str = "aura";
+#[cfg(not(windows))]
+const KEYRING_USER: &str = "api_key";
+
+/// 加密，输出 hex 字符串（Windows）或 keyring 标记（Linux）。
 ///
 /// 失败时返回 Err 而非回落明文：调用方（`save_config`）应让保存失败，
 /// 静默写成明文等于悄悄拆掉这道防线。
@@ -35,11 +49,14 @@ pub fn protect(plain: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     {
         let _ = ENTROPY;
-        Ok(plain.to_string())
+        let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
+        kr.set_password(plain)
+            .map_err(|e| format!("keyring 保存密码失败: {e}"))?;
+        Ok(KEYRING_MARKER.to_string())
     }
 }
 
-/// 解密 hex 密文。
+/// 解密 hex 密文（Windows）或 keyring 标记（Linux）。
 ///
 /// 输入不是合法 hex、或不是本应用加密的 blob 时返回 Err——调用方
 /// （`load_config`）据此走「旧版明文」兼容分支。
@@ -52,6 +69,11 @@ pub fn unprotect(blob: &str) -> Result<String, String> {
     }
     #[cfg(not(windows))]
     {
+        if let Some(_rest) = blob.strip_prefix(KEYRING_MARKER) {
+            let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
+            return kr.get_password().map_err(|e| format!("keyring 读取密码失败: {e}"));
+        }
+        // 非 keyring 标记：旧版明文兼容，按明文返回
         Ok(blob.to_string())
     }
 }
@@ -178,6 +200,7 @@ mod win {
     }
 }
 
+#[cfg(windows)]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -187,6 +210,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+#[cfg(windows)]
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
     if s.len() % 2 != 0 {
@@ -204,6 +228,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+#[cfg(windows)]
 fn hex_val(b: u8) -> Result<u8, String> {
     match b {
         b'0'..=b'9' => Ok(b - b'0'),
@@ -217,7 +242,8 @@ fn hex_val(b: u8) -> Result<u8, String> {
 mod tests {
     use super::*;
 
-    /// 往返：加密后必须能解回原文，且密文里看不到明文。
+    /// Windows：往返，DPAPI 密文不含明文且为纯 hex。
+    #[cfg(windows)]
     #[test]
     fn protect_then_unprotect_round_trips() {
         let secret = "sk-or-v1-0123456789abcdef";
@@ -227,13 +253,30 @@ mod tests {
             !blob.contains(secret),
             "密文不能包含明文片段: {blob}"
         );
-        // 纯 hex：落进 TEXT 列不引入转义问题
         assert!(blob.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(unprotect(&blob).unwrap(), secret);
     }
 
-    /// 熵参与加解密：同一进程内换熵应解不开。
-    /// （直接测内部函数，避开模块常量的间接性。）
+    /// Linux：往返，keyring 标记不含明文，解密能读回原文。
+    /// SecretService 不可用时（如无 D-Bus 的头less CI）静默跳过。
+    #[cfg(not(windows))]
+    #[test]
+    fn protect_then_unprotect_round_trips() {
+        let secret = "sk-or-v1-0123456789abcdef";
+        let blob = match protect(secret) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skip keyring test (SecretService unavailable): {e}");
+                return;
+            }
+        };
+        assert_ne!(blob, secret);
+        assert!(!blob.contains(secret));
+        assert_eq!(blob, KEYRING_MARKER);
+        assert_eq!(unprotect(&blob).unwrap(), secret);
+    }
+
+    /// Windows：熵参与加解密，换熵应解不开。
     #[cfg(windows)]
     #[test]
     fn entropy_must_match_to_decrypt() {
@@ -244,8 +287,8 @@ mod tests {
         );
     }
 
-    /// 非 hex 输入（如旧版明文 JSON）必须干净地失败，
-    /// 调用方靠这个信号走明文兼容分支。
+    /// Windows：非 hex 输入必须干净地失败，走明文兼容分支。
+    #[cfg(windows)]
     #[test]
     fn unprotect_rejects_non_hex() {
         assert!(unprotect("").is_err());
@@ -254,21 +297,40 @@ mod tests {
         assert!(unprotect(r#"{"api_key":"sk-x"}"#).is_err()); // 明文 JSON
     }
 
-    /// 合法 hex 但不是 DPAPI blob 时同样必须失败——
-    /// 否则会把随机字节当明文密钥用下去。
+    /// Windows：合法 hex 但非 DPAPI blob 必须失败。
+    #[cfg(windows)]
     #[test]
     fn unprotect_rejects_non_dpapi_bytes() {
         let fake = hex_encode(b"this is not a dpapi blob at all!!");
         assert!(unprotect(&fake).is_err());
     }
 
-    /// 空串是合法明文：加密解密都要能处理（清除密钥的路径会存空值）。
+    /// Linux：空串往返（keyring 标记）。
+    /// SecretService 不可用时静默跳过。
+    #[cfg(not(windows))]
     #[test]
     fn empty_string_round_trips() {
-        let blob = protect("").unwrap();
+        let blob = match protect("") {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skip keyring test (SecretService unavailable): {e}");
+                return;
+            }
+        };
+        assert_eq!(blob, KEYRING_MARKER);
         assert_eq!(unprotect(&blob).unwrap(), "");
     }
 
+    /// Linux：非 keyring 标记的 blob 按旧版明文兼容返回。
+    #[cfg(not(windows))]
+    #[test]
+    fn unprotect_returns_plaintext_for_non_keyring_blob() {
+        let plain = r#"{"api_key":"sk-x"}"#;
+        assert_eq!(unprotect(plain).unwrap(), plain);
+    }
+
+    /// Windows：hex 编解码全字节往返。
+    #[cfg(windows)]
     #[test]
     fn hex_codec_round_trips_all_bytes() {
         for b in 0u16..=255 {
