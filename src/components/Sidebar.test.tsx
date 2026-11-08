@@ -35,18 +35,23 @@ const DEFAULT_NAV_BLOCKS = [
  * Sidebar 依赖 store，这里 mock 掉 useStore 而不是渲染真实 Provider。
  * 真实 Provider 会拉起 Tauri 的 invoke/listen，在单测里没有意义。
  */
-async function mount(props: Partial<Record<string, unknown>> = {}) {
+async function mount(
+  props: Partial<Record<string, unknown>> = {},
+  storeOverrides: Partial<Record<string, unknown>> = {},
+) {
   const store = {
     workspaces: WORKSPACES,
     workspace: "E:/dev/aura",
     sessions: SESSIONS,
     activeId: "s1",
     switchWorkspace: vi.fn(),
+    newSession: vi.fn(),
     openSession: vi.fn(),
     deleteSession: vi.fn(),
     renamingId: null,
     cancelRename: vi.fn(),
     renameSession: vi.fn(),
+    ...storeOverrides,
   };
   vi.doMock("../store", () => ({ useStore: () => store }));
   const navBlocks = (props.navBlocks as typeof DEFAULT_NAV_BLOCKS) ?? DEFAULT_NAV_BLOCKS;
@@ -76,7 +81,10 @@ describe("Sidebar", () => {
   it("导航项按新建对话 / Skills / MCP / 轨迹 的顺序渲染", async () => {
     await mount();
     const nav = screen.getByRole("navigation");
-    const labels = Array.from(nav.querySelectorAll("span")).map((s) => s.textContent);
+    // 每个导航项里还有一条 2px 竖线占位 span（无文字），按文字过滤掉
+    const labels = Array.from(nav.querySelectorAll("span"))
+      .map((s) => s.textContent)
+      .filter((t) => t);
     expect(labels).toEqual(["新建对话", "Skills", "MCP", "轨迹"]);
   });
 
@@ -345,5 +353,36 @@ describe("Sidebar", () => {
     const bar = current?.querySelector("span");
     expect(bar?.className).toContain("bg-brand");
     expect(bar?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  /// C14：导航项与会话项共用一套选中语言（浅底 + 2px 品牌竖线），
+  /// 竖线常驻占位只换颜色，否则激活瞬间图标会横移。
+  it("导航项激活时用浅底加品牌竖线", async () => {
+    const blocks = DEFAULT_NAV_BLOCKS.map((b) => ({ ...b, panel: b.id }));
+    await mount({ activePanel: "mcp", navBlocks: blocks });
+    const mcp = screen.getByRole("button", { name: "MCP" });
+    expect(mcp).toHaveAttribute("aria-current", "page");
+    expect(mcp.className).toContain("bg-bubble-user");
+    expect(mcp.querySelector("span.bg-brand")).not.toBeNull();
+
+    const skills = screen.getByRole("button", { name: "Skills" });
+    expect(skills).not.toHaveAttribute("aria-current");
+    expect(skills.querySelector("span.bg-brand")).toBeNull();
+    // 未激活也留一条透明竖线，保证横向不位移
+    expect(skills.querySelector("span.bg-transparent")).not.toBeNull();
+  });
+
+  /// C14：空工作区不能只留一句「暂无对话」——空态要给出口。
+  it("当前工作区没有对话时提供新建对话入口", async () => {
+    const { store } = await mount({}, { sessions: [] });
+    // 两个工作区都是空的，各给一处空态
+    expect(await screen.findAllByText("暂无对话")).toHaveLength(2);
+    // 导航区也有一个「新建对话」按钮，空态里的那个带加号图标与下划线文字
+    const emptyAction = screen
+      .getAllByRole("button", { name: /新建对话/ })
+      .find((b) => b.textContent?.trim() === "新建对话");
+    expect(emptyAction).toBeDefined();
+    await userEvent.click(emptyAction!);
+    expect(store.newSession).toHaveBeenCalled();
   });
 });

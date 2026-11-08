@@ -1,6 +1,7 @@
 import {
   ChevronRight,
   PanelLeft,
+  Plus,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -63,6 +64,7 @@ export default function Sidebar({
     sessions,
     activeId,
     switchWorkspace,
+    newSession,
     openSession,
     deleteSession,
     renamingId,
@@ -199,17 +201,26 @@ function toggleExpand(w: string) {
               aria-current={active ? "page" : undefined}
               title={isNew ? "新建对话 · Ctrl + N" : collapsed ? block.label : undefined}
               className={`group flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
-                collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
+                collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
               } ${
                 isNew && !collapsed
                   ? "mb-2 border border-line bg-surface shadow-sm hover:border-brand"
                   : ""
               } ${
                 active
-                  ? "bg-bubble font-medium text-foreground"
+                  ? "bg-bubble-user font-medium text-foreground"
                   : "text-subtle hover:bg-bubble hover:text-foreground"
               }`}
             >
+              {/* 竖线常驻占位，只切换颜色：否则激活瞬间图标会横移 2px */}
+              {!collapsed && (
+                <span
+                  aria-hidden="true"
+                  className={`ml-1 h-4 w-0.5 shrink-0 rounded-full ${
+                    active ? "bg-brand" : "bg-transparent"
+                  }`}
+                />
+              )}
               <block.icon size={15} className="shrink-0" />
               <span className={`${label} ${collapsed ? labelOff : labelOn}`}>
                 {block.label}
@@ -369,7 +380,24 @@ const isOpen = expanded.has(w);
                         </li>
                       ))}
                       {wsSessions.length === 0 && (
-                        <li className="px-2 py-1.5 text-xs text-subtle">暂无对话</li>
+                        <li className="px-2 py-1.5">
+                          <p className="text-xs text-subtle">暂无对话</p>
+                          {/* 只在当前工作区给出口：新会话落在当前工作区，
+                              在别的分组里点会「凭空跑到别处去」。 */}
+                          {isCurrent && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void newSession();
+                                onNavigate?.();
+                              }}
+                              className="mt-1 flex items-center gap-1 text-xs text-brand hover:underline"
+                            >
+                              <Plus size={11} aria-hidden />
+                              新建对话
+                            </button>
+                          )}
+                        </li>
                       )}
                     </ul>
                   )}
@@ -391,13 +419,21 @@ const isOpen = expanded.has(w);
           onClick={onOpenSettings}
           aria-current={view === "settings" ? "page" : undefined}
           className={`flex w-full items-center rounded-tag py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
-            collapsed ? "justify-center gap-0 px-0" : "gap-2 px-2"
+            collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
           } ${
             view === "settings"
-              ? "bg-bubble font-medium text-foreground"
+              ? "bg-bubble-user font-medium text-foreground"
               : "text-subtle"
           }`}
         >
+          {!collapsed && (
+            <span
+              aria-hidden="true"
+              className={`ml-1 h-4 w-0.5 shrink-0 rounded-full ${
+                view === "settings" ? "bg-brand" : "bg-transparent"
+              }`}
+            />
+          )}
           <Settings size={14} className="shrink-0" />
           <span className={`${label} ${collapsed ? labelOff : labelOn}`}>设置</span>
         </button>
