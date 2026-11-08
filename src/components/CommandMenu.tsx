@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { CommandItem } from "../lib/commandItems";
-import { CONTENT_WIDTH } from "../lib/layout";
+import MenuPopup from "./MenuPopup";
 
 /**
  * 统一的鼠标可点命令面板。键盘上下/回车由输入框统一处理，
@@ -27,13 +27,15 @@ export default function CommandMenu({
   emptyText?: string;
 }) {
   return (
-    <div
-      role="listbox"
-      aria-label={title}
-      className={`mx-auto mb-2 ${CONTENT_WIDTH} max-h-72 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg`}
+    <MenuPopup
+      label={title}
+      header={
+        <>
+          <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
+          {header}
+        </>
+      }
     >
-      <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
-      {header}
       {items.map((item, i) => (
         <button
           key={item.id}
@@ -61,6 +63,6 @@ export default function CommandMenu({
         </p>
       )}
       {hint && <div className="border-t border-line px-3 py-1 text-[10px] text-subtle">{hint}</div>}
-    </div>
+    </MenuPopup>
   );
 }

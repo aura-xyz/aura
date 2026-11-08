@@ -7,7 +7,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
-import { ArrowUp, Plus, Square } from "lucide-react";
+import { ArrowUp, Pencil, Plus, Square } from "lucide-react";
 import type { LexicalEditor } from "lexical";
 import type { ModelInfo, SkillView } from "../lib/api";
 import type { Mode } from "../lib/mode";
@@ -46,6 +46,7 @@ import MarkdownEditor, {
   type EditorSnapshot,
 } from "./MarkdownEditor";
 import CommandMenu from "./CommandMenu";
+import AlertBar from "./AlertBar";
 import GoalBar from "./GoalBar";
 import GoalPanel from "./GoalPanel";
 import MentionMenu from "./MentionMenu";
@@ -617,18 +618,24 @@ export default function InputArea({
     <div className={variant === "inline" ? "w-full" : "px-6 pb-5 pt-3"}>
       {/* 编辑历史消息时的提示条 */}
       {editing && (
-        <div className={`mx-auto mb-2 flex ${CONTENT_WIDTH} items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs`}>
+        <AlertBar
+          variant="edit"
+          className={`mx-auto mb-2 ${CONTENT_WIDTH}`}
+          icon={<Pencil size={12} />}
+          action={
+            onCancelEdit && (
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded-md border border-line px-2 py-0.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
+              >
+                取消
+              </button>
+            )
+          }
+        >
           <span className="text-foreground">正在编辑之前的消息，发送后将替换它</span>
-          {onCancelEdit && (
-            <button
-              type="button"
-              onClick={onCancelEdit}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
-            >
-              取消
-            </button>
-          )}
-        </div>
+        </AlertBar>
       )}
       <GoalBar
         goal={goal}
@@ -684,7 +691,9 @@ export default function InputArea({
         />
       )}
       {/* 不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感。 */}
-      <div className={`mx-auto flex ${CONTENT_WIDTH} flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs`}>
+      <div
+        className={`mx-auto flex ${CONTENT_WIDTH} flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-[border-color,box-shadow] duration-200 focus-within:border-brand/30 focus-within:shadow-sm`}
+      >
         {markdownLive ? (
           <MarkdownEditor
             initialValue={value}
