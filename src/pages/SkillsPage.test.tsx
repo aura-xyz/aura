@@ -328,7 +328,9 @@ describe("SkillsPage", () => {
     expect(await screen.findByText("MCP 服务器构建")).toBeInTheDocument();
     expect(screen.getByText("代码审查")).toBeInTheDocument();
     // 已安装同版本：只给角标，不再给按钮
-    expect(screen.getByText("已安装", { selector: "span" })).toBeInTheDocument();
+    // 页头概览条里也有「已安装」，这里限定在这张市场卡内断言
+    const installedCard = screen.getByText("MCP 服务器构建").closest("div.h-full");
+    expect(within(installedCard as HTMLElement).getByText("已安装")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "安装" })).toHaveLength(1);
 
     // 按标签命中

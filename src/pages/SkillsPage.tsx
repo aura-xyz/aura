@@ -35,7 +35,10 @@ import {
   filterMarket,
   filterSkills,
   groupSkills,
+  skillInitial,
   SOURCE_LABEL,
+  SOURCE_TINT,
+  tagChips,
   toolsLabel,
 } from "../lib/skill";
 import { notify } from "../lib/notices";
@@ -142,74 +145,182 @@ function SkillCard({
 }) {
   return (
     <div
-      className={`rounded-card border border-line bg-surface p-4 transition-opacity ${
+      className={`flex h-full items-start gap-3 rounded-card border border-line bg-surface p-3 transition-opacity ${
         skill.enabled ? "" : "opacity-60"
       }`}
     >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{skill.name}</span>
-            <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-              {SOURCE_LABEL[skill.source]}
-            </span>
-            <span className="font-mono text-[11px] text-subtle">v{skill.version}</span>
-            {!skill.enabled && <span className="text-[11px] text-subtle">已禁用</span>}
-          </div>
-          <p className="mt-1.5 text-xs leading-relaxed text-subtle">{skill.description}</p>
-          <p className="mt-1.5 text-[11px] text-subtle">工具：{toolsLabel(skill)}</p>
-          <p className="mt-0.5 truncate text-[11px] text-subtle" title={skill.dir}>
-            {skill.dir}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 pt-0.5">
-          {confirming ? (
-            <>
-              <button
-                type="button"
-                onClick={onConfirmDelete}
-                disabled={busy}
-                className="text-xs text-danger transition-opacity hover:opacity-80 disabled:opacity-40"
-              >
-                确认删除
-              </button>
-              <button
-                type="button"
-                onClick={onCancelDelete}
-                className="text-xs text-subtle transition-colors hover:text-foreground"
-              >
-                取消
-              </button>
-            </>
-          ) : (
-            <>
-              {canDelete(skill.source) ? (
-                <button
-                  type="button"
-                  onClick={onAskDelete}
-                  disabled={busy}
-                  aria-label={`删除 ${skill.name}`}
-                  className="rounded-tag p-1 text-subtle transition-colors hover:text-danger disabled:opacity-40"
-                >
-                  <Trash2 size={13} />
-                </button>
-              ) : (
-                <span
-                  title={deleteBlockedReason(skill.source)}
-                  className="cursor-help text-[11px] text-subtle/70"
-                >
-                  不可删除
-                </span>
-              )}
-              <Switch
-                checked={skill.enabled}
-                disabled={busy}
-                label={`${skill.enabled ? "禁用" : "启用"} ${skill.name}`}
-                onChange={onToggle}
-              />
-            </>
+      {/* 首字块：来源色一眼可辨，替代一半「来源徽章」的职能 */}
+      <span
+        aria-hidden
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-tag text-sm font-semibold ${SOURCE_TINT[skill.source]}`}
+      >
+        {skillInitial(skill.name)}
+      </span>
+
+      <div className="min-w-0 flex-1" title={`工具：${toolsLabel(skill)}\n目录：${skill.dir}`}>
+        {/* 第一行：名称 + 版本 + 来源 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{skill.name}</span>
+          <span className="font-mono text-[11px] text-subtle">v{skill.version}</span>
+          <span className="rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle">
+            {SOURCE_LABEL[skill.source]}
+          </span>
+          {!skill.enabled && (
+            <span className="text-[11px] text-subtle">已禁用</span>
           )}
         </div>
+        {/* 第二行：描述最多两行 */}
+        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-subtle">
+          {skill.description}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {confirming ? (
+          <>
+            <button
+              type="button"
+              onClick={onConfirmDelete}
+              disabled={busy}
+              className="text-xs text-danger transition-opacity hover:opacity-80 disabled:opacity-40"
+            >
+              确认删除
+            </button>
+            <button
+              type="button"
+              onClick={onCancelDelete}
+              className="text-xs text-subtle transition-colors hover:text-foreground"
+            >
+              取消
+            </button>
+          </>
+        ) : (
+          <>
+            {canDelete(skill.source) ? (
+              <button
+                type="button"
+                onClick={onAskDelete}
+                disabled={busy}
+                aria-label={`删除 ${skill.name}`}
+                className="rounded-tag p-1 text-subtle transition-colors hover:text-danger disabled:opacity-40"
+              >
+                <Trash2 size={13} />
+              </button>
+            ) : (
+              <span
+                title={deleteBlockedReason(skill.source)}
+                className="cursor-help text-[11px] text-subtle/70"
+              >
+                不可删除
+              </span>
+            )}
+            <Switch
+              checked={skill.enabled}
+              disabled={busy}
+              label={`${skill.enabled ? "禁用" : "启用"} ${skill.name}`}
+              onChange={onToggle}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/** 市场卡：与本地卡同一套首字块 + 三行层级，CTA 用品牌实底主按钮。 */
+function MarketCard({
+  item,
+  inspecting,
+  installing,
+  onOpen,
+}: {
+  item: MarketSkillView;
+  inspecting: string | null;
+  installing: boolean;
+  onOpen: () => void;
+}) {
+  const chips = tagChips(item.tags);
+  const busy = inspecting !== null || installing;
+  const label = item.name || item.id;
+  return (
+    <div className="flex h-full flex-col rounded-card border border-line bg-surface p-3">
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-tag text-sm font-semibold ${SOURCE_TINT.market}`}
+        >
+          {skillInitial(label)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-sm font-medium">{label}</span>
+            {item.version && (
+              <span className="font-mono text-[11px] text-subtle">v{item.version}</span>
+            )}
+            <span className="rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle">
+              {item.registry || "官方"}
+            </span>
+            {/* 上游不提供哈希时必须标出来——用户有权知道自己装的东西没被验证过 */}
+            {!item.integrity_verified && (
+              <span
+                className="cursor-help rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle"
+                title="该来源不提供包的完整性校验，安装前会做完整静态审查"
+              >
+                无完整性校验
+              </span>
+            )}
+          </div>
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-subtle">
+            {item.description}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-auto flex items-end justify-between gap-2 pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {chips.shown.map((tag) => (
+            <span
+              key={tag}
+              className="max-w-[8rem] truncate rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle"
+            >
+              {tag}
+            </span>
+          ))}
+          {chips.rest > 0 && (
+            <span className="text-[10px] text-subtle">+{chips.rest}</span>
+          )}
+          {item.author && (
+            <span className="truncate text-[10px] text-subtle">{item.author}</span>
+          )}
+        </div>
+
+        {canUpdate(item) ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 rounded-full bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:text-surface"
+          >
+            <Download size={11} />
+            {inspecting === item.id ? "检查中…" : `更新到 v${item.version}`}
+          </button>
+        ) : item.installed ? (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-subtle">
+            <Check size={12} className="text-success" />
+            已安装
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 rounded-full bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:text-surface"
+          >
+            <Download size={11} />
+            {inspecting === item.id ? "检查中…" : "安装"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -472,6 +583,9 @@ export default function SkillsPage({ onClose }: Props) {
   const shownBuiltin = groups ? filterSkills(groups.builtin, query) : [];
   const shownInstalled = groups ? filterSkills(groups.installed, query) : [];
   const marketItems = market.kind === "ready" ? market.items : null;
+  /** 市场「提供」的总数：分页源给 total，聚合模式只能给本页条数 */
+  const marketTotal =
+    market.kind === "ready" ? market.total || market.items.length : null;
   // 判空与渲染共用同一份结果：先前两处各调一次，同一次渲染白跑两遍。
   const filteredMarket = useMemo(
     () => (marketItems ? filterMarket(marketItems, query) : []),
@@ -507,6 +621,25 @@ export default function SkillsPage({ onClose }: Props) {
         <p className="mt-2 text-sm text-subtle">
           技能是给模型的工作指引，模型判断场景匹配时按需加载；禁用后模型看不到它。
         </p>
+
+        {/* 概览条：三个数字一眼看清手里的家底，数据都是现成的 */}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
+          {[
+            ["内置", groups ? groups.builtin.length : null],
+            ["已安装", groups ? groups.installed.length : null],
+            ["市场提供", marketTotal],
+          ].map(([label, value]) => (
+            <span
+              key={String(label)}
+              className="flex items-center gap-1 rounded-full bg-bubble px-2 py-0.5 text-subtle"
+            >
+              {label}
+              <span className="font-medium tabular-nums text-foreground">
+                {value ?? "—"}
+              </span>
+            </span>
+          ))}
+        </div>
 
         <Tabs
           tab={tab}
@@ -570,7 +703,11 @@ export default function SkillsPage({ onClose }: Props) {
                 ) : shownBuiltin.length === 0 ? (
                   <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  shownBuiltin.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    {shownBuiltin.map((s) => (
+                      <SkillCard key={s.name} {...cardProps(s)} />
+                    ))}
+                  </div>
                 )
               ) : groups.installed.length === 0 ? (
                 <EmptyState>
@@ -587,7 +724,11 @@ export default function SkillsPage({ onClose }: Props) {
               ) : shownInstalled.length === 0 ? (
                 <EmptyState>没有匹配的技能。</EmptyState>
               ) : (
-                shownInstalled.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {shownInstalled.map((s) => (
+                    <SkillCard key={s.name} {...cardProps(s)} />
+                  ))}
+                </div>
               ))}
           </div>
         )}
@@ -750,80 +891,17 @@ export default function SkillsPage({ onClose }: Props) {
                 {filteredMarket.length === 0 ? (
                   <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  filteredMarket.map((item) => (
-                    <div key={item.id} className="rounded-card border border-line bg-surface p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium">{item.name || item.id}</span>
-                            <span className="font-mono text-[11px] text-subtle">{item.id}</span>
-                            {item.version && (
-                              <span className="font-mono text-[11px] text-subtle">
-                                v{item.version}
-                              </span>
-                            )}
-                            <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-                              {item.registry || "官方"}
-                            </span>
-                            {/* 上游不提供哈希时必须标出来——用户有权知道自己
-                                装的���西没被验证过 */}
-                            {!item.integrity_verified && (
-                              <span
-                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
-                                title="该来源不提供包的完整性校验，安装前会做完整静态审查"
-                              >
-                                无完整性校验
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-                            {item.description}
-                          </p>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            {item.tags.map((t) => (
-                              <span
-                                key={t}
-                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
-                              >
-                                {t}
-                              </span>
-                            ))}
-                            {item.author && (
-                              <span className="text-[11px] text-subtle">{item.author}</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="shrink-0 pt-0.5">
-                          {canUpdate(item) ? (
-                            <button
-                              type="button"
-                              onClick={() => void openDetail(item)}
-                              disabled={inspecting !== null || installing}
-                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                            >
-                              <Download size={12} />
-                              {inspecting === item.id ? "检查中…" : `更新到 v${item.version}`}
-                            </button>
-                          ) : item.installed ? (
-                            <span className="flex items-center gap-1 text-xs text-subtle">
-                              <Check size={12} className="text-brand" />
-                              已安装
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => void openDetail(item)}
-                              disabled={inspecting !== null || installing}
-                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                            >
-                              <Download size={12} />
-                              {inspecting === item.id ? "检查中…" : "安装"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    {filteredMarket.map((item) => (
+                      <MarketCard
+                        key={item.id}
+                        item={item}
+                        inspecting={inspecting}
+                        installing={installing}
+                        onOpen={() => void openDetail(item)}
+                      />
+                    ))}
+                  </div>
                 )}
               </>
             )}

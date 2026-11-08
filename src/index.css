@@ -133,6 +133,9 @@
   /* 品牌色。亮色与 --link 同值，但语义不同：link 管可点击，
      brand 管品牌锚点（发送按钮、进行中指示、选中态）。 */
   --brand: #0066cc;
+  /* 市场来源的标识色（技能卡首字块）。只在 10% tint 下使用，
+     不参与文字与边框对比度门禁。 */
+  --skill-market: #7c5cff;
   /* 用户消息气泡底：品牌蓝 20% tint。
      AI 侧仍用 --bubble 灰底，对话归属一眼可辨。
      注：方案文档建议 8%，实测 8% 与灰底对比度仅 1.03:1，肉眼
@@ -197,6 +200,7 @@
      暗色下的成功提示只能借用灰阶。 */
   --success: #30d158;
   --warning: #ff9f0a;
+  --skill-market: #a78bfa;
   /* 与 --link 暗色值同源：品牌蓝在暗色下必须提亮才能达到 AA。 */
   --brand: #4da3ff;
   /* 暗色底（#1c1c1e）混入 15% 品牌蓝 */
@@ -240,6 +244,7 @@
   --color-brand: var(--brand);
   --color-bubble-user: var(--bubble-user);
   --color-chrome: var(--chrome-bg);
+  --color-skill-market: var(--skill-market);
 }
 
 /* ---------------------------------------------------------------
