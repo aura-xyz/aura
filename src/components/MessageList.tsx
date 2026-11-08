@@ -165,6 +165,14 @@ export default function MessageList() {
 
   const lastIndex = messages.length - 1;
 
+  /**
+   * 离屏消息跳过布局与绘制（v0.8.0 的止血措施）。
+   *
+   * 最后一条是正在流式写入的目标：给它上 content-visibility 会让每次
+   * 追加都触发一次重新布局，占位高度也会跟着跳，所以只对历史消息生效。
+   */
+  const virtualClass = (i: number) => (i === lastIndex ? "" : "aura-msg-virtual");
+
   return (
     <div className={`mx-auto flex ${CONTENT_WIDTH} flex-col gap-6 px-6 py-6`}>
       {messages.map((m, i) => {
@@ -175,7 +183,9 @@ export default function MessageList() {
 
         if (m.role === "user") {
           return (
-            <UserBubble key={i} content={m.content} userIndex={userIndex} />
+            <div key={i} className={virtualClass(i)}>
+              <UserBubble content={m.content} userIndex={userIndex} />
+            </div>
           );
         }
         // 该回答由第几条用户消息触发，以及那个问题的原文。
@@ -186,7 +196,7 @@ export default function MessageList() {
         // group 让 MessageActions 的 group-hover 生效：指针进入这条消息
         // 整块才显示操作条，而不是只在按钮那一行生效
         return (
-          <div key={i} className="group">
+          <div key={i} className={`group ${virtualClass(i)}`}>
             <AssistantMessage
               blocks={m.blocks}
               pending={busy && i === lastIndex}
