@@ -750,6 +750,31 @@
 }
 
 /* ---------------------------------------------------------------
+   内置浏览器加载进度
+   --------------------------------------------------------------- */
+/* 不确定态的来回扫动：iframe 拿不到真实进度，只能表示「还在等」。
+   轨道高 2px，由组件用 h-0.5 + overflow-hidden 提供。 */
+@keyframes aura-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.aura-progress-bar {
+  animation: aura-progress 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-progress-bar {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------
    右栏展开 / 收起
    --------------------------------------------------------------- */
 /* 条件渲染本身播不了退出动画，卸载由 useRightbarTransition 延迟到动画结束；
