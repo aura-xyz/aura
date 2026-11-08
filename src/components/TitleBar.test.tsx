@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getVersion } from "@tauri-apps/api/app";
 import TitleBar from "./TitleBar";
@@ -39,5 +40,38 @@ describe("标题栏版本号", () => {
 
     await screen.findByText("dev");
     expect(container.textContent).not.toContain("0.7.2-rc.2");
+  });
+});
+
+describe("标题栏搜索位与版本徽标", () => {
+  /// A2：把 Ctrl+K 这个隐藏快捷键变成看得见的入口，点击要真的能开面板。
+  it("点击搜索胶囊触发回调", async () => {
+    const onSearch = vi.fn();
+    render(<TitleBar onSearch={onSearch} />);
+    await screen.findByText(/v0\.8\.0/);
+
+    const capsule = screen.getByRole("button", { name: /搜索会话、技能与命令/ });
+    expect(capsule).toHaveTextContent("Ctrl K");
+    await userEvent.click(capsule);
+    expect(onSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("不传 onSearch 时不渲染搜索胶囊", async () => {
+    render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0/);
+    expect(screen.queryByRole("button", { name: /搜索会话/ })).toBeNull();
+  });
+
+  /// rc 期要标出来：预发布通道的用户该知道自己在哪条通道上。
+  it("预发布版本号追加 RC 徽标，正式版没有", async () => {
+    vi.mocked(getVersion).mockResolvedValueOnce("0.8.0-rc.1");
+    const { unmount } = render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0-rc\.1/);
+    expect(screen.getByText("RC")).toBeInTheDocument();
+    unmount();
+
+    render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0$/);
+    expect(screen.queryByText("RC")).toBeNull();
   });
 });

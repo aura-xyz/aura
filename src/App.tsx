@@ -336,9 +336,14 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         setView("chat");
         return;
       }
-      if (e.ctrlKey && e.key.toLowerCase() === "f") {
+      // Ctrl+F / Ctrl+K 都开搜索：顶栏胶囊提示的是 Ctrl+K，
+      // 统一命令面板（C27）落地前先用同一个面板兜住两个入口。
+      if (
+        (e.ctrlKey && e.key.toLowerCase() === "f") ||
+        (e.ctrlKey && e.key.toLowerCase() === "k")
+      ) {
         e.preventDefault();
-        setSearchOpen((v) => !v);
+        setSearchOpen(true);
         return;
       }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
@@ -552,7 +557,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
       onContextMenu={onContextMenu}
     >
-      <TitleBar />
+      <TitleBar onSearch={() => setSearchOpen(true)} />
 
       <div className="flex min-h-0 flex-1 relative">
         <Sidebar

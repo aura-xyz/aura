@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X } from "lucide-react";
+import { Minus, Search, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { APP_VERSION } from "../lib/version";
 
@@ -9,7 +9,7 @@ const appWindow = getCurrentWindow();
 const IS_MAC =
   typeof navigator !== "undefined" && /Macintosh/.test(navigator.platform ?? "");
 
-export default function TitleBar() {
+export default function TitleBar({ onSearch }: { onSearch?: () => void }) {
   // 首帧直接用构建期常量（同源自 package.json），避免先闪一个空的 "v"。
   const [version, setVersion] = useState(APP_VERSION);
 
@@ -20,6 +20,7 @@ export default function TitleBar() {
       .catch(() => setVersion("dev"));
   }, []);
 
+  const isRc = /-rc\./i.test(version);
   const darwin = IS_MAC;
   const height = darwin ? "h-10" : "h-9";
   // 右侧不留内边距：无边框窗口的关闭按钮必须贴到窗口边缘。
@@ -29,7 +30,7 @@ export default function TitleBar() {
     <header
       data-tauri-drag-region
       data-platform={darwin ? "darwin" : "windows"}
-      className={`flex shrink-0 select-none items-center justify-between ${height} pl-4`}
+      className={`relative flex shrink-0 select-none items-center justify-between ${height} pl-4`}
       style={{
         backgroundColor: "var(--chrome-bg)",
         color: "var(--dsw-alias-label-primary)",
@@ -42,7 +43,30 @@ export default function TitleBar() {
         <span className="font-mono text-[11px] text-subtle">
           {version === "dev" ? "dev" : `v${version}`}
         </span>
+        {/* rc 期标出来：预发布通道的用户该知道自己在哪条通道上 */}
+        {isRc && (
+          <span className="rounded border border-brand/40 px-1 text-[9px] font-medium leading-[14px] text-brand">
+            RC
+          </span>
+        )}
       </div>
+
+      {/* 中部搜索位：把 Ctrl+K 这个隐藏快捷键变成看得见的入口。
+          窄窗口下藏起来，否则会和右侧窗口按钮挤在一起。 */}
+      {onSearch && (
+        <button
+          type="button"
+          onClick={onSearch}
+          title="搜索会话 · Ctrl + K"
+          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-foreground md:flex"
+        >
+          <Search size={12} aria-hidden />
+          <span>搜索会话、技能与命令</span>
+          <kbd className="rounded border border-line px-1 text-[10px] leading-[14px]">
+            Ctrl K
+          </kbd>
+        </button>
+      )}
 
       <div className="flex h-full gap-0.5">
         <button
