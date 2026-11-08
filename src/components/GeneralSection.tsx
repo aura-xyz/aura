@@ -1,9 +1,10 @@
 /**
  * 通用设置区块（v0.8.0，从 SettingsPage 拆分）。
  *
- * 包含路径白名单与全局规则。状态通过 props 传入，供 SettingsShell 调用。
+ * 包含系统集成、路径白名单与全局规则。状态通过 props 传入，供 SettingsShell 调用。
  */
 import AllowlistSection from "./AllowlistSection";
+import SystemSettingsSection from "./SystemSettingsSection";
 
 interface Props {
   rules: string;
@@ -39,7 +40,11 @@ export default function GeneralSection({
     <section className="rounded-card border border-line p-6">
       <h2 className="eyebrow">通用</h2>
 
-      <div className="mt-4 border-b border-line pb-5">
+      <div className="mt-4">
+        <SystemSettingsSection />
+      </div>
+
+      <div className="mt-5 border-b border-line pb-5">
         <AllowlistSection />
       </div>
 
