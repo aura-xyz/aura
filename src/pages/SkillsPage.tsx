@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Check,
@@ -464,6 +464,11 @@ export default function SkillsPage({ onClose }: Props) {
   const shownBuiltin = groups ? filterSkills(groups.builtin, query) : [];
   const shownInstalled = groups ? filterSkills(groups.installed, query) : [];
   const marketItems = market.kind === "ready" ? market.items : null;
+  // 判空与渲染共用同一份结果：先前两处各调一次，同一次渲染白跑两遍。
+  const filteredMarket = useMemo(
+    () => (marketItems ? filterMarket(marketItems, query) : []),
+    [marketItems, query],
+  );
   const marketErrors = market.kind === "ready" ? market.errors : [];
   /** 市场里既没有条目又有报错：整块失败，给重试入口 */
   const marketDown = marketItems !== null && marketItems.length === 0 && marketErrors.length > 0;
@@ -745,10 +750,10 @@ export default function SkillsPage({ onClose }: Props) {
 
             {marketItems !== null && marketItems.length > 0 && (
               <>
-                {filterMarket(marketItems, query).length === 0 ? (
+                {filteredMarket.length === 0 ? (
                   <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  filterMarket(marketItems, query).map((item) => (
+                  filteredMarket.map((item) => (
                     <div key={item.id} className="rounded-card border border-line bg-surface p-4">
                       <div className="flex items-start gap-3">
                         <div className="min-w-0 flex-1">
