@@ -1,4 +1,5 @@
 import { Target, X } from "lucide-react";
+import { CONTENT_WIDTH } from "../lib/layout";
 
 /**
  * 长期目标条（`/goal`）。只展示与清除，不自动续跑——
@@ -16,7 +17,7 @@ export default function GoalBar({
 }) {
   if (!goal) return null;
   return (
-    <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-start gap-2 rounded-tag border border-brand/40 bg-bubble px-3 py-1.5 text-xs">
+    <div className={`mx-auto mb-2 flex ${CONTENT_WIDTH} items-start gap-2 rounded-tag border border-brand/40 bg-bubble px-3 py-1.5 text-xs`}>
       <Target size={13} className="mt-0.5 shrink-0 text-brand" aria-hidden />
       <button
         type="button"

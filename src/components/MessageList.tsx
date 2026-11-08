@@ -2,6 +2,7 @@ import { memo, useCallback } from "react";
 import { Pencil } from "lucide-react";
 import { useStore, type Block, type ChatMessage } from "../store";
 import { plainTextOf } from "../lib/messageText";
+import { CONTENT_WIDTH } from "../lib/layout";
 import { originalQuestion, userIndexForAssistant } from "../lib/history";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
@@ -165,7 +166,7 @@ export default function MessageList() {
   const lastIndex = messages.length - 1;
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-6 xl:max-w-5xl 2xl:max-w-6xl">
+    <div className={`mx-auto flex ${CONTENT_WIDTH} flex-col gap-6 px-6 py-6`}>
       {messages.map((m, i) => {
         // 序号：界面消息的 1-based 位置（分角色各自计数）。
         // 重新生成/编辑都要用它们定位到对应的用户消息。

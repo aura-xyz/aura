@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { CommandItem } from "../lib/commandItems";
+import { CONTENT_WIDTH } from "../lib/layout";
 
 /**
  * 统一的鼠标可点命令面板。键盘上下/回车由输入框统一处理，
@@ -29,7 +30,7 @@ export default function CommandMenu({
     <div
       role="listbox"
       aria-label={title}
-      className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl max-h-72 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
+      className={`mx-auto mb-2 ${CONTENT_WIDTH} max-h-72 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg`}
     >
       <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
       {header}

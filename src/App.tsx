@@ -38,6 +38,7 @@ import {
   textMenuItems,
 } from "./lib/contextMenuItems";
 import { copyText } from "./lib/clipboard";
+import { CONTENT_WIDTH } from "./lib/layout";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
@@ -504,7 +505,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
    * 模型一定能读，实际可能读不到。
    */
   const dropBanner = dropNotice ? (
-    <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+    <div className={`mx-auto mb-2 ${CONTENT_WIDTH}`}>
       <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
         <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
         <span className="min-w-0 flex-1">{dropNotice}</span>

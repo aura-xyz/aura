@@ -82,6 +82,10 @@
    Pinguo Design System — static tokens
    --------------------------------------------------------------- */
 
+/* 图标三档标尺（v0.8.0）：导航 16 / 行内 14 / 装饰 12。
+   低于 12 在高分屏上会糊，高于 16 会把行高撑开；新图标先对号入座，
+   不要为单个组件的观感临时加减 1px。 */
+
 @theme {
   --font-sans: "DM Sans", "Source Han Sans SC", ui-sans-serif, system-ui,
     -apple-system, "Segoe UI", sans-serif;

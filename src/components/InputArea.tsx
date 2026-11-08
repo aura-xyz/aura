@@ -36,6 +36,7 @@ import {
   type CommandItem,
 } from "../lib/commandItems";
 import { downloadSessionZip } from "../lib/exportSession";
+import { CONTENT_WIDTH } from "../lib/layout";
 import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import MarkdownEditor, {
@@ -616,7 +617,7 @@ export default function InputArea({
     <div className={variant === "inline" ? "w-full" : "px-6 pb-5 pt-3"}>
       {/* 编辑历史消息时的提示条 */}
       {editing && (
-        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs">
+        <div className={`mx-auto mb-2 flex ${CONTENT_WIDTH} items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs`}>
           <span className="text-foreground">正在编辑之前的消息，发送后将替换它</span>
           {onCancelEdit && (
             <button
@@ -683,7 +684,7 @@ export default function InputArea({
         />
       )}
       {/* 不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感。 */}
-      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs">
+      <div className={`mx-auto flex ${CONTENT_WIDTH} flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs`}>
         {markdownLive ? (
           <MarkdownEditor
             initialValue={value}
@@ -754,7 +755,7 @@ export default function InputArea({
           </div>
         </div>
       </div>
-      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
+      <div className={`mx-auto mt-2 flex ${CONTENT_WIDTH} items-center justify-between gap-3`}>
         <StatsPills />
         <TurnUsagePanel />
         {value.trim() && (
