@@ -26,6 +26,7 @@ struct OpenApp {
 }
 
 /// JetBrains 产品：id / 显示名 / 可执行文件候选名 / 目录名关键词 / Toolbox 启动脚本名。
+#[cfg(windows)]
 const JETBRAINS: &[(&str, &str, &[&str], &[&str], &[&str])] = &[
     ("idea", "IntelliJ IDEA", &["idea64.exe", "idea.exe"], &["idea", "intellij"], &["idea"]),
     ("pycharm", "PyCharm", &["pycharm64.exe", "pycharm.exe"], &["pycharm"], &["pycharm"]),
@@ -39,12 +40,14 @@ const JETBRAINS: &[(&str, &str, &[&str], &[&str], &[&str])] = &[
 ];
 
 /// 目录名是否命中产品关键词（大小写不敏感）。
+#[cfg(windows)]
 fn matches_product(dir: &str, keywords: &[&str]) -> bool {
     let lower = dir.to_lowercase();
     keywords.iter().any(|k| lower.contains(k))
 }
 
 /// 收集 root 下有限深度内名为 `bin` 的目录，并只保留产品关键词命中的祖先链。
+#[cfg(windows)]
 fn collect_bin_dirs(root: &Path, keywords: &[&str], depth: usize, out: &mut Vec<PathBuf>) {
     if depth == 0 || !root.is_dir() {
         return;
@@ -81,6 +84,7 @@ fn collect_bin_dirs(root: &Path, keywords: &[&str], depth: usize, out: &mut Vec<
 }
 
 /// 在一组 bin 目录里找第一个存在的可执行文件。
+#[cfg(windows)]
 fn find_exe(bin_dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     for dir in bin_dirs {
         for name in names {
@@ -93,7 +97,8 @@ fn find_exe(bin_dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// 候选根：按用户目录 / 程序目录 / PATH 拼出来，供检测与单测注入。
+/// Windows 候选根：按用户目录 / 程序目录 / PATH 拼出来，供检测与单测注入。
+#[cfg(windows)]
 pub fn candidate_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
@@ -131,6 +136,7 @@ pub fn candidate_roots() -> Vec<PathBuf> {
 }
 
 /// Toolbox 启动脚本（.cmd/.bat/.exe）；Windows 下 .cmd 需要交给 cmd /C。
+#[cfg(windows)]
 fn find_toolbox_script(roots: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     for root in roots {
         for name in names {
@@ -146,6 +152,7 @@ fn find_toolbox_script(roots: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
 }
 
 /// VS Code：优先 `Code.exe`（直接 spawn，不经 cmd），PATH 里的 `bin/code` 也可推断安装根。
+#[cfg(windows)]
 fn find_vscode(roots: &[PathBuf]) -> Option<PathBuf> {
     for root in roots {
         for rel in ["Microsoft VS Code/Code.exe", "Code.exe", "bin/code.cmd"] {
@@ -165,7 +172,8 @@ fn find_vscode(roots: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-/// 用给定根做检测（单测注入假目录，不碰真实磁盘布局）。
+/// Windows 下用给定根做检测（单测注入假目录，不碰真实磁盘布局）。
+#[cfg(windows)]
 fn detect_in(roots: &[PathBuf]) -> Vec<OpenApp> {
     let mut apps = Vec::new();
     if let Some(exe) = find_vscode(roots) {
@@ -184,7 +192,62 @@ fn detect_in(roots: &[PathBuf]) -> Vec<OpenApp> {
     apps
 }
 
-/// 前端拿到的列表：资源管理器永远在，且是默认项。
+/// Linux 候选根：.desktop 文件目录、常见安装目录、PATH。
+#[cfg(target_os = "linux")]
+pub fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        roots.push(home.join(".local").join("share").join("applications"));
+        roots.push(
+            home.join(".local")
+                .join("share")
+                .join("Flatpak")
+                .join("exports")
+                .join("share")
+                .join("applications"),
+        );
+    }
+    roots.push(PathBuf::from("/usr/share/applications"));
+    roots.push(PathBuf::from("/usr/local/share/applications"));
+    roots.push(PathBuf::from("/opt"));
+    if let Some(path) = std::env::var_os("PATH") {
+        for part in std::env::split_paths(&path) {
+            roots.push(part);
+        }
+    }
+    roots
+}
+
+/// 在一组根目录里找第一个名为 `name` 的可执行文件（Linux 用）。
+#[cfg(target_os = "linux")]
+fn find_exe_in_roots(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    for root in roots {
+        let candidate = root.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Linux 下用给定根做检测：探测常见桌面编辑器可执行文件。
+#[cfg(target_os = "linux")]
+fn detect_in(roots: &[PathBuf]) -> Vec<OpenApp> {
+    let mut apps = Vec::new();
+    for exe in ["code", "code-oss", "subl", "atom", "gedit", "kate", "mousepad"] {
+        if let Some(path) = find_exe_in_roots(roots, exe) {
+            apps.push(OpenApp {
+                id: exe.to_string(),
+                name: exe.to_string(),
+                exe: path,
+            });
+        }
+    }
+    apps
+}
+
+/// Windows 前端拿到的列表：资源管理器永远在，且是默认项。
+#[cfg(windows)]
 pub fn installed_apps() -> Vec<OpenAppView> {
     let mut out = vec![OpenAppView {
         id: "explorer".into(),
@@ -196,7 +259,22 @@ pub fn installed_apps() -> Vec<OpenAppView> {
     out
 }
 
-/// 打开工作区。只接受 `installed_apps()` 里出现过的 id，杜绝任意程序启动。
+/// Linux 前端拿到的列表：文件管理器（xdg-open）永远在，且是默认项；
+/// 其余按常见编辑器可执行文件探测。
+#[cfg(target_os = "linux")]
+pub fn installed_apps() -> Vec<OpenAppView> {
+    let mut out = vec![OpenAppView {
+        id: "xdg-open".into(),
+        name: "文件管理器".into(),
+    }];
+    for app in detect_in(&candidate_roots()) {
+        out.push(OpenAppView { id: app.id, name: app.name });
+    }
+    out
+}
+
+/// Windows 打开工作区。只接受 `installed_apps()` 里出现过的 id，杜绝任意程序启动。
+#[cfg(windows)]
 pub fn open_in(app_id: &str, target: &Path) -> Result<(), String> {
     if !target.is_dir() {
         return Err("工作区目录不存在".into());
@@ -220,6 +298,28 @@ pub fn open_in(app_id: &str, target: &Path) -> Result<(), String> {
         .map_err(|e| format!("启动失败：{e}"))
 }
 
+/// Linux 打开工作区。xdg-open 交给桌面环境打开目录；编辑器直接 spawn。
+#[cfg(target_os = "linux")]
+pub fn open_in(app_id: &str, target: &Path) -> Result<(), String> {
+    if !target.is_dir() {
+        return Err("工作区目录不存在".into());
+    }
+    let program = if app_id == "xdg-open" {
+        PathBuf::from("xdg-open")
+    } else {
+        detect_in(&candidate_roots())
+            .into_iter()
+            .find(|a| a.id == app_id)
+            .map(|a| a.exe)
+            .ok_or_else(|| "未安装该应用".to_string())?
+    };
+    std::process::Command::new(&program)
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("启动失败：{e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +332,11 @@ mod tests {
         root
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Windows 测试
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[cfg(windows)]
     #[test]
     fn explorer_is_always_available_and_first() {
         let apps = installed_apps();
@@ -239,6 +344,7 @@ mod tests {
         assert_eq!(apps[0].name, "文件资源管理器");
     }
 
+    #[cfg(windows)]
     #[test]
     fn detects_vscode_and_jetbrains_from_injected_roots() {
         let root = temp_root("detect");
@@ -258,6 +364,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(windows)]
     #[test]
     fn toolbox_layout_is_found_too() {
         let root = temp_root("toolbox");
@@ -274,6 +381,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(windows)]
     #[test]
     fn open_rejects_missing_workspace_without_spawning() {
         let missing = std::env::temp_dir().join("aura-open-apps-no-such-dir");
@@ -282,6 +390,7 @@ mod tests {
     }
 
     /// 本机实测：五个 IDE 都由 Toolbox scripts 暴露，Program Files 里只有缓存目录。
+    #[cfg(windows)]
     #[test]
     fn toolbox_scripts_are_detected() {
         let root = temp_root("scripts");
@@ -297,6 +406,7 @@ mod tests {
     }
 
     /// IDE 直接装在 D:\CLion 这类盘根目录时也要找到。
+    #[cfg(windows)]
     #[test]
     fn drive_root_layout_is_detected() {
         let root = temp_root("drive");
@@ -307,6 +417,68 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn unknown_app_id_is_rejected() {
+        let root = temp_root("unknown");
+        let err = open_in("not-a-real-app", &root).expect_err("未知 id 必须拒绝");
+        assert!(err.contains("未安装"), "err={err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Linux 测试
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xdg_open_is_always_available_and_first() {
+        let apps = installed_apps();
+        assert_eq!(apps[0].id, "xdg-open");
+        assert_eq!(apps[0].name, "文件管理器");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_common_editors_from_injected_roots() {
+        let root = temp_root("detect");
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("code"), b"").unwrap();
+        let _ = std::os::unix::fs::Permissions::set_mode(&bin.join("code"), 0o755);
+
+        let apps = detect_in(&[root.clone()]);
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&"code"), "应识别 VS Code：{ids:?}");
+        assert!(!ids.contains(&"subl"), "未安装的产品不能出现：{ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_in_uses_xdg_open() {
+        let dir = temp_root("target");
+        fs::create_dir_all(&dir).unwrap();
+        // xdg-open 在 CI 头less 环境下可能不存在，只断言命令被构造并尝试启动；
+        // 失败原因应是「命令未找到」而非「目录不存在」或「未安装应用」。
+        let err = open_in("xdg-open", &dir).unwrap_err();
+        assert!(
+            err.contains("启动失败"),
+            "xdg-open 应尝试启动，err={err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_rejects_missing_workspace_without_spawning() {
+        let missing = std::env::temp_dir().join("aura-open-apps-no-such-dir");
+        let err = open_in("xdg-open", &missing).expect_err("目录不存在必须拒绝");
+        assert!(err.contains("不存在"), "err={err}");
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn unknown_app_id_is_rejected() {
         let root = temp_root("unknown");
