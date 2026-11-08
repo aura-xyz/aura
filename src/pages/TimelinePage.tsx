@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  Clock,
   Copy,
   Download,
   History,
@@ -18,6 +19,7 @@ import {
 } from "../lib/api";
 import { useStore } from "../store";
 import { notify } from "../lib/notices";
+import { turnSummary } from "../lib/timeline";
 
 /** 类型 → 图标与配色。失败由渲染层的 ok 判断覆盖为 text-danger。 */
 const KIND_META: Record<
@@ -232,14 +234,28 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {/* 统计概览 */}
+      {/* 统计概览：与输入框下方 StatsPills 同一套 pill 语言（图标 + 数字） */}
       {entries.length > 0 && (
-        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-card border border-line px-3 py-2 text-[11px] text-subtle">
-          <span>{stats.turns} 轮</span>
-          <span>{stats.tools} 次工具调用</span>
-          <span>{stats.errors} 次错误</span>
-          <span>{stats.denied} 次拒绝</span>
-          <span>工具耗时 {fmtDuration(stats.toolMs)}</span>
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-line px-3 py-2 text-[11px] text-subtle">
+          {[
+            { icon: History, label: "轮", value: String(stats.turns), cls: "text-brand" },
+            { icon: Terminal, label: "次工具", value: String(stats.tools), cls: "text-success" },
+            { icon: CircleAlert, label: "次错误", value: String(stats.errors), cls: "text-danger" },
+            { icon: CircleAlert, label: "次拒绝", value: String(stats.denied), cls: "text-danger" },
+            { icon: Clock, label: "工具耗时", value: fmtDuration(stats.toolMs), cls: "text-subtle" },
+          ].map((item, i) => {
+            const Icon = item.icon;
+            return (
+              <span key={item.label} className="flex items-center gap-2">
+                {i > 0 && <span aria-hidden className="h-3 w-px bg-line" />}
+                <span className="flex items-center gap-1">
+                  <Icon size={12} className={item.cls} aria-hidden />
+                  <span className="tabular-nums text-foreground">{item.value}</span>
+                  {item.label}
+                </span>
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -274,6 +290,7 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
 
         {groups.map(([turn, items]) => {
           const isCollapsed = collapsed.has(turn);
+          const summary = turnSummary(items);
           return (
             <section key={turn} className="mb-3">
               <button
@@ -287,8 +304,16 @@ export default function TimelinePage({ onClose }: { onClose: () => void }) {
                 ) : (
                   <ChevronDown size={12} className="shrink-0" />
                 )}
-                {turn === 0 ? "对话开始" : `第 ${turn} 轮`}
-                <span className="font-normal opacity-70">
+                <span className="w-16 shrink-0">
+                  {turn === 0 ? "对话开始" : `第 ${turn} 轮`}
+                </span>
+                {/* 轮次摘要：该轮首条用户消息前 20 字，省得逐条展开找 */}
+                {summary && (
+                  <span className="min-w-0 flex-1 truncate font-normal opacity-70">
+                    {summary}
+                  </span>
+                )}
+                <span className="ml-auto shrink-0 font-normal opacity-70">
                   {items.length} 条
                 </span>
               </button>

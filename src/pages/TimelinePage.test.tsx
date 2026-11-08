@@ -62,7 +62,8 @@ describe("操作时间线", () => {
     ]);
     render(<TimelinePage onClose={vi.fn()} />);
 
-    expect(await screen.findByText("改一下这个")).toBeInTheDocument();
+    // 出现两处：分组头的轮次摘要 + 列表里的条目正文
+    expect((await screen.findAllByText("改一下这个")).length).toBeGreaterThan(0);
     expect(screen.getByText("Read src/main.rs")).toBeInTheDocument();
     // 轮次标题
     expect(screen.getByText("对话开始")).toBeInTheDocument();
@@ -90,9 +91,11 @@ describe("操作时间线", () => {
     ]);
     render(<TimelinePage onClose={vi.fn()} />);
 
-    expect(await screen.findByText("2 次工具调用")).toBeInTheDocument();
-    expect(screen.getByText("1 次错误")).toBeInTheDocument();
-    expect(screen.getByText("工具耗时 200ms")).toBeInTheDocument();
+    // 统计条改 pill 语言后结构与文字顺序变了：数字在前、口径在后
+    const row = (await screen.findByText("次工具")).closest("div") as HTMLElement;
+    expect(row).toHaveTextContent("2次工具");
+    expect(row).toHaveTextContent("1次错误");
+    expect(row).toHaveTextContent("200ms工具耗时");
   });
 
   /// 对话级隔离：换会话要重新拉该会话的数据。
