@@ -65,6 +65,8 @@ async-trait = "0.1.92"
 # 0.22.1 已在 Tauri 的依赖树中，声明为直接依赖不会新增编译。
 base64 = "0.22"
 tauri-plugin-notification = "2.7.0"
+# 平台判定（Q4）：Windows / macOS / Linux 三态，前端用它决定窗口按钮布局
+tauri-plugin-os = "2"
 # url：构造 updater 的下载地址（Update::download_url 是 url::Url）。
 # 0.2.1 已在依赖树中（updater 插件带入），声明为直接依赖不增加编译量。
 url = "2"

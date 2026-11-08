@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getVersion } from "@tauri-apps/api/app";
-import TitleBar from "./TitleBar";
+import TitleBar, { resetDesktopCache } from "./TitleBar";
 
 // TitleBar 直接调用 Tauri 的 window/app API，单测里替换成可控桩。
 vi.mock("@tauri-apps/api/window", () => ({
@@ -15,8 +15,17 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(() => Promise.resolve("0.8.0")),
 }));
+const { platformMock } = vi.hoisted(() => ({
+  platformMock: vi.fn((): string => "windows"),
+}));
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: platformMock }));
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  platformMock.mockReturnValue("windows");
+  // 平台结果缓存在模块级，用例之间必须清掉
+  resetDesktopCache();
+});
 
 describe("标题栏贴边", () => {
   /// 实测反馈：红色关闭按钮右侧空出约 8px，怀疑是自定义滚动条。
@@ -73,5 +82,59 @@ describe("标题栏搜索位与版本徽标", () => {
     render(<TitleBar />);
     await screen.findByText(/v0\.8\.0$/);
     expect(screen.queryByText("RC")).toBeNull();
+  });
+});
+
+describe("标题栏平台判定", () => {
+  /// C26：平台从 plugin-os 取（启动时已注入，同步），不再依赖 navigator.platform
+  /// 的 UA 字符串——Linux 上 UA 常常是 "Linux x86_64"，mac 上又可能被 WebView 改写。
+  it("linux 显示 data-platform=linux，关闭按钮改淡色悬停", async () => {
+    platformMock.mockReturnValue("linux");
+    resetDesktopCache();
+    const { container } = render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0/);
+
+    const header = container.querySelector("header");
+    expect(header).toHaveAttribute("data-platform", "linux");
+    const close = screen.getByRole("button", { name: "关闭" });
+    expect(close.className).toContain("hover:bg-danger/15");
+  });
+
+  it("windows 保持整块红悬停，按钮仍在右侧", async () => {
+    const { container } = render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0/);
+
+    expect(container.querySelector("header")).toHaveAttribute(
+      "data-platform",
+      "windows",
+    );
+    const close = screen.getByRole("button", { name: "关闭" });
+    expect(close.className).toContain("hover:bg-danger");
+    expect(close.className).not.toContain("hover:bg-danger/15");
+  });
+
+  it("macos 映射成 darwin，标题栏更高一档", async () => {
+    platformMock.mockReturnValue("macos");
+    resetDesktopCache();
+    const { container } = render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0/);
+
+    const header = container.querySelector("header");
+    expect(header).toHaveAttribute("data-platform", "darwin");
+    expect(header?.className).toContain("h-10");
+  });
+
+  /// 插件没注册 / 权限缺失时不能白屏：退回 UA 猜测（jsdom 下按 Windows）。
+  it("plugin-os 抛错时退回 UA 猜测", async () => {
+    platformMock.mockImplementation(() => {
+      throw new Error("plugin not registered");
+    });
+    resetDesktopCache();
+    const { container } = render(<TitleBar />);
+    await screen.findByText(/v0\.8\.0/);
+    expect(container.querySelector("header")).toHaveAttribute(
+      "data-platform",
+      "windows",
+    );
   });
 });

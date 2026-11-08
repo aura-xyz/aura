@@ -129,6 +129,7 @@ pub fn run() {
         // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
         // relaunch 负责重启应用；perms 授予 updater 默认权限集
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
