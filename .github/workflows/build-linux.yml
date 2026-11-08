@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies (Ubuntu only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libsecret-0-dev libnotify-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
