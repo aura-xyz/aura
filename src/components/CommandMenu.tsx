@@ -13,6 +13,7 @@ export default function CommandMenu({
   onPick,
   header,
   hint,
+  emptyText,
 }: {
   title: string;
   items: CommandItem[];
@@ -21,6 +22,8 @@ export default function CommandMenu({
   onPick: (item: CommandItem) => void;
   header?: ReactNode;
   hint?: string;
+  /** 空面板的说明：模型/技能这类数据源为空时不能只说「没有匹配的命令」 */
+  emptyText?: string;
 }) {
   return (
     <div
@@ -52,7 +55,9 @@ export default function CommandMenu({
         </button>
       ))}
       {items.length === 0 && !header && (
-        <p className="px-3 py-2 text-[11px] text-subtle">没有匹配的命令</p>
+        <p className="px-3 py-2 text-[11px] text-subtle">
+          {emptyText ?? "没有匹配的命令"}
+        </p>
       )}
       {hint && <div className="border-t border-line px-3 py-1 text-[10px] text-subtle">{hint}</div>}
     </div>

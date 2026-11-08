@@ -77,6 +77,17 @@ describe("命令面板数据", () => {
     expect(items[0].detail).toContain("当前模型");
   });
 
+  /// 实测反馈：/model 像没触发一样。根因是收藏为空时只剩空面板，
+  /// 首次启动或收藏写入失败必然踩到，必须回退到全部可用模型。
+  it("一个都没收藏时回退到全部模型，/model 不会变成空面板", () => {
+    const unpinned = MODELS.map((m) => ({ ...m, pinned: false }));
+    expect(modelCommandItems(unpinned, "p:a", "").map((i) => i.id)).toEqual([
+      "p:a",
+      "p:b",
+    ]);
+    expect(modelCommandItems([], "p:a", "")).toEqual([]);
+  });
+
   it("模式菜单三档顺序与 ModeTabs 一致，选中项有标注", () => {
     expect(modeCommandItems("chat", "").map((i) => i.id)).toEqual([
       "chat",

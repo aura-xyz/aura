@@ -59,15 +59,21 @@ export function skillCommandItems(
   }));
 }
 
-/** 模型二级菜单：只列已收藏模型（与 ModelSelect 口径一致）。 */
+/**
+ * 模型二级菜单：优先列已收藏模型（与 ModelSelect 口径一致）。
+ *
+ * 一个都没收藏时**回退到全部可用模型**：首次启动、或收藏写入失败时，
+ * `/model` 不能变成一个空面板，否则用户会以为命令没触发（实测反馈）。
+ */
 export function modelCommandItems(
   models: ModelInfo[],
   selectedKey: string,
   query: string,
 ): CommandItem[] {
   const q = query.trim().toLowerCase();
-  return models
-    .filter((m) => m.pinned)
+  const pinned = models.filter((m) => m.pinned);
+  const pool = pinned.length > 0 ? pinned : models;
+  return pool
     .filter((m) => !q || `${m.label} ${m.id}`.toLowerCase().includes(q))
     .map((m) => ({
       id: m.key,

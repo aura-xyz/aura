@@ -126,7 +126,12 @@ const CMD_TITLES: Record<CommandView, string> = {
 const CMD_HINT = "↑↓ 选择 · Enter 确认 · Esc 关闭 · 可直接点击";
 
 /** 文本节点内容 + 光标，供触发判定；textarea 的 line 就是全文。 */
-const EMPTY_SNAPSHOT: EditorSnapshot = { line: "", caret: 0, markdown: "" };
+const EMPTY_SNAPSHOT: EditorSnapshot = {
+  line: "",
+  caret: 0,
+  markdown: "",
+  indentable: false,
+};
 
 /**
  * 输入框消费一次按键：除了阻止默认行为，还要阻止继续冒泡到
@@ -371,7 +376,10 @@ export default function InputArea({
   function handleTextareaChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const text = e.currentTarget.value;
     const caret = e.currentTarget.selectionStart ?? text.length;
-    handleSnapshot({ line: text, caret, markdown: text }, false);
+    handleSnapshot(
+      { line: text, caret, markdown: text, indentable: false },
+      false,
+    );
   }
 
   /**
@@ -582,8 +590,11 @@ export default function InputArea({
       applyText(lastUserMessage);
       return;
     }
-    // 焦点在输入框时 Tab 直接切模式（Chat → Plan → Build → Chat）。
+    // 焦点在输入框时 Tab 切模式（Chat → Plan → Build → Chat）；但光标在
+    // 列表 / 代码块里时 Tab 要留给 Lexical 做缩进，否则 Markdown 编辑器
+    // 里根本没法缩进列表项。
     if (e.key === "Tab") {
+      if (lastSnapshotRef.current.indentable) return;
       consume(e);
       onModeChange(nextMode(mode));
       return;
@@ -676,6 +687,11 @@ export default function InputArea({
             cmd.view === "skill" && skills.length === 0
               ? "正在加载技能…"
               : CMD_HINT
+          }
+          emptyText={
+            cmd.view === "model" && models.length === 0
+              ? "还没有可用模型，请先在设置页添加"
+              : undefined
           }
         />
       )}

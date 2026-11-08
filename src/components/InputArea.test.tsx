@@ -299,6 +299,28 @@ describe("InputArea 的 @ / 触发", () => {
     expect(box).toHaveValue("hello");
   });
 
+  /// 实测反馈「/model 没有正常触发模型选择列表」：收藏为空时二级面板
+  /// 一条都没有，看起来就像命令没生效。回退到全部模型后必须能列出来。
+  it("/model 在未收藏任何模型时仍列出可用模型", async () => {
+    mount({
+      sessionId: "s1",
+      models: [
+        {
+          key: "p:a",
+          id: "a",
+          label: "模型甲",
+          provider: "p",
+          provider_name: "厂商",
+          context_limit: 100,
+          pinned: false,
+        },
+      ],
+    });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/model");
+    expect(await screen.findByText("模型甲")).toBeInTheDocument();
+  });
+
   it("/model 面板列已收藏模型，点选后清掉触发词", async () => {
     const onModelChange = vi.fn();
     mount({
