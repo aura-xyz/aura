@@ -44,6 +44,7 @@ import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
 import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
 import { shouldBlockDevtools } from "./lib/devtools";
+import { nextMode } from "./lib/commandItems";
 import SessionSearch from "./components/SessionSearch";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
@@ -327,6 +328,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
   // 本次只拦截不映射行为，留待后续按需定义应用内语义。
   //
+  /** 供全局快捷键读取最新模式：effect 只注册一次监听，不能依赖 mode。 */
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
   // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -334,6 +341,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         e.preventDefault();
         newSession();
         setView("chat");
+        return;
+      }
+      // 模式循环：Tab 已还给焦点移动（WCAG 无键盘陷阱），改用组合键。
+      // 放在 App 而不是输入框里，焦点在别处时也能切。
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        changeMode(nextMode(modeRef.current));
         return;
       }
       // Ctrl+F / Ctrl+K 都开搜索：顶栏胶囊提示的是 Ctrl+K，

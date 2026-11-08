@@ -30,7 +30,6 @@ import {
   exportCommandItems,
   modelCommandItems,
   modeCommandItems,
-  nextMode,
   rootCommandItems,
   skillCommandItems,
   type CommandItem,
@@ -555,8 +554,9 @@ export default function InputArea({
         dismiss();
         return;
       }
+      // 面板开着时 Tab 只关面板、不拦默认行为：吞掉 Tab 等于把
+      // 键盘用户锁在输入框里（WCAG 2.1.2 无键盘陷阱）。
       if (e.key === "Tab") {
-        consume(e);
         closeCommand();
         return;
       }
@@ -590,15 +590,6 @@ export default function InputArea({
     if (e.key === "ArrowUp" && !valueRef.current && lastUserMessage) {
       consume(e);
       applyText(lastUserMessage);
-      return;
-    }
-    // 焦点在输入框时 Tab 切模式（Chat → Plan → Build → Chat）；但光标在
-    // 列表 / 代码块里时 Tab 要留给 Lexical 做缩进，否则 Markdown 编辑器
-    // 里根本没法缩进列表项。
-    if (e.key === "Tab") {
-      if (lastSnapshotRef.current.indentable) return;
-      consume(e);
-      onModeChange(nextMode(mode));
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -772,7 +763,9 @@ export default function InputArea({
             约 {estimateTokens(value)} tokens
           </span>
         )}
-        <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行 · Tab 切模式</p>
+        <p className="text-xs text-subtle">
+          Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
+        </p>
       </div>
     </div>
   );

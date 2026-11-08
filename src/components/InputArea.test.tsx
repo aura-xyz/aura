@@ -290,13 +290,21 @@ describe("InputArea 的 @ / 触发", () => {
     expect(screen.getByLabelText("给模型设定一个长期目标")).toBeInTheDocument();
   });
 
-  it("焦点在输入框时 Tab 依次切换模式，不会把消息发出去", async () => {
+  /// C24：输入框不再劫持 Tab（WCAG 2.1.2 无键盘陷阱），
+  /// 焦点可以用 Tab 移出输入框，模式切换改由 App 的 Ctrl+Shift+M 负责。
+  it("Tab 不再切模式，也不会把消息发出去", async () => {
     const { props } = mount({ sessionId: "s1", mode: "chat" });
     const box = screen.getByRole("textbox");
     await userEvent.type(box, "hello{Tab}");
-    expect(props.onModeChange).toHaveBeenCalledWith("plan");
+    expect(props.onModeChange).not.toHaveBeenCalled();
     expect(props.onSend).not.toHaveBeenCalled();
     expect(box).toHaveValue("hello");
+  });
+
+  it("底部提示写明组合键，不再宣传 Tab 切模式", () => {
+    mount({ sessionId: "s1" });
+    expect(screen.getByText(/Ctrl\+Shift\+M 切模式/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tab 切模式/)).toBeNull();
   });
 
   /// 实测反馈「/model 没有正常触发模型选择列表」：收藏为空时二级面板
