@@ -11,7 +11,6 @@ import { ArrowUp, Pencil, Plus, Square } from "lucide-react";
 import type { LexicalEditor } from "lexical";
 import type { ModelInfo, SkillView } from "../lib/api";
 import type { Mode } from "../lib/mode";
-import { estimateTokens } from "../lib/tokens";
 import { loadInputDraft, saveInputDraft } from "../lib/draft";
 import { fileItems, findTrigger, type MentionItem, type MentionTrigger } from "../lib/mentions";
 import {
@@ -755,15 +754,14 @@ export default function InputArea({
           </div>
         </div>
       </div>
+      {/* 统计行固定两段：左侧数据、右侧提示。此前按「有没有输入」插入第三个
+          子元素，justify-between 会把两侧一起推着左右跳。 */}
       <div className={`mx-auto mt-2 flex ${CONTENT_WIDTH} items-center justify-between gap-3`}>
-        <StatsPills />
-        <TurnUsagePanel />
-        {value.trim() && (
-          <span className="text-xs text-subtle" title="按后端同口径估算">
-            约 {estimateTokens(value)} tokens
-          </span>
-        )}
-        <p className="text-xs text-subtle">
+        <div className="flex min-w-0 items-center gap-3">
+          <StatsPills />
+          <TurnUsagePanel />
+        </div>
+        <p className="shrink-0 text-xs text-subtle">
           Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
         </p>
       </div>

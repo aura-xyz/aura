@@ -170,21 +170,16 @@ describe("InputArea", () => {
     expect(screen.getByRole("textbox")).toHaveValue("abc");
   });
 
-  /// 令牌计数口径必须与后端一致（lib/tokens.ts 抄的是 context.rs 的实现），
-  /// 两处数字对不上会让用户以为估算坏了。
-  it("有内容时显示 token 计数，空输入框不显示", async () => {
+  /// C25：前端估算是按字符折算的，与计费口径无关，显示得像精确值反而误导。
+  /// 真实用量由 TurnUsagePanel 用后端 usage 展示。
+  it("输入内容不再显示估算 token 数", async () => {
     mount({ sessionId: "s1" });
     expect(screen.queryByText(/tokens/)).toBeNull();
 
-    await userEvent.type(screen.getByRole("textbox"), "hello");
-    // hello：5 个非 CJK 字符 → 5/4=1 + 1 = 2
-    expect(screen.getByText("约 2 tokens")).toBeInTheDocument();
-  });
-
-  it("中文按每字 1 token 计", async () => {
-    mount({ sessionId: "s1" });
-    await userEvent.type(screen.getByRole("textbox"), "你好世界");
-    expect(screen.getByText("约 5 tokens")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox"), "hello 你好世界");
+    expect(screen.queryByText(/tokens/)).toBeNull();
+    // 统计行结构固定：右侧提示始终在，不会因为输入被挤走
+    expect(screen.getByText(/Ctrl\+Shift\+M 切模式/)).toBeInTheDocument();
   });
 });
 
