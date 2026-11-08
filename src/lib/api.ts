@@ -95,6 +95,21 @@ export function setPinnedModels(
   return invoke("set_pinned_models", { provider, keys });
 }
 
+/**
+ * 保存模型目录：把设置页已拉到的远端列表合并进配置并写入收藏。
+ *
+ * 不能只调 setPinnedModels —— 后端只给已有条目打标记，目录里新勾选的
+ * 模型必须先合并。旧链路用 refresh_provider_models 做合并，但它会重新
+ * 联网且依赖已启用的执行器，供应商未就绪就整条失败（实测「收藏不了」）。
+ */
+export function saveProviderCatalog(
+  provider: string,
+  remote: RemoteModel[],
+  keys: string[],
+): Promise<number> {
+  return invoke("save_provider_catalog", { provider, remote, keys });
+}
+
 export function getSelectedModel(): Promise<string> {
   return invoke("get_selected_model");
 }
@@ -290,6 +305,30 @@ export function listOpenApps(): Promise<OpenApp[]> {
 /** 在指定应用里打开当前会话的工作区；目录由后端从会话取，不由前端传。 */
 export function openInApp(appId: string, sessionId: string): Promise<void> {
   return invoke("open_in_app", { appId, sessionId });
+}
+
+/** 系统集成设置：运行时防休眠、开机自启。 */
+export interface SystemSettings {
+  prevent_sleep: boolean;
+  autostart: boolean;
+  /** 当前平台是否支持防休眠（Linux 无进程级电源抑制原语） */
+  prevent_sleep_supported: boolean;
+}
+
+export function getSystemSettings(): Promise<SystemSettings> {
+  return invoke("get_system_settings");
+}
+
+/** 返回系统**实际**状态，前端应直接用它覆盖显示，避免「显示已开、其实没生效」。 */
+export function setSystemSettings(
+  preventSleep: boolean,
+  autostart: boolean,
+): Promise<SystemSettings> {
+  // 显式用 Rust 侧的 snake_case 键名，不依赖 Tauri 的驼峰转换
+  return invoke("set_system_settings", {
+    prevent_sleep: preventSleep,
+    autostart,
+  });
 }
 
 /** `/goal` 长期目标：按会话存 settings 表，每轮注入 system prompt。 */

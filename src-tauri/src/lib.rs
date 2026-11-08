@@ -7,6 +7,7 @@ pub mod db;
 pub mod history;
 pub mod market;
 pub mod paths;
+pub mod power;
 pub mod providers;
 pub mod secure;
 pub mod timeline;
@@ -17,14 +18,16 @@ pub mod updater;
 use commands::{
     add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
-    get_provider_statuses, get_providers, get_selected_model, get_workspace,
+    get_provider_statuses, get_providers, get_selected_model, get_system_settings,
+    get_workspace,
     inspect_market_skill, inspect_side_effects, install_market_skill, list_allowlist_paths, list_directory, list_market_providers,
     list_open_apps, list_workspace_files, open_in_app, read_file_text,
     get_session_goal, set_session_goal, export_session_bundle, write_export_bundle,
     list_market_skills, list_skill_sources, list_skills, list_timeline, load_sessions,
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
-    set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
+    set_api_config, set_global_rules, set_pinned_models, save_provider_catalog,
+    set_providers, set_selected_model, set_system_settings,
     notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
     AppState,
 };
@@ -339,6 +342,9 @@ pub fn run() {
             refresh_provider_models,
             fetch_remote_models,
             set_pinned_models,
+            save_provider_catalog,
+            get_system_settings,
+            set_system_settings,
             pull_ollama_model,
             remove_workspace,
             list_skills,

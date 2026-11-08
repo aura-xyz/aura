@@ -104,6 +104,16 @@ impl AppState {
             .ok()
             .flatten()
             .unwrap_or_default();
+        // 防休眠是「运行时」语义：上次开着，这次启动也要立刻生效，
+        // 不能等用户打开设置页才 apply。
+        let prevent_sleep = db::get_setting(&db, crate::power::SETTING_PREVENT_SLEEP)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("1");
+        if prevent_sleep {
+            crate::power::set_keep_awake(true);
+        }
         let mut config = load_config(&db);
         // 环境变量作为 OpenRouter API Key 兜底（仅当该供应商未填 key 且地址为 openrouter.ai）
         if let Some(env_key) = env_api_key {
@@ -758,6 +768,94 @@ pub async fn fetch_remote_models(
         return Err("请先填写 API Key".into());
     }
     exec.list_models().await.map_err(|e| e.to_string())
+}
+
+/// 一次性保存某供应商的模型目录与收藏（v0.8.0）。
+///
+/// `set_pinned` 只会给**已经存在于 cfg.models** 的条目打标记，不新增模型。
+/// 目录里刚勾选的远端模型必须先 merge_remote_models 写进配置，否则永远收藏不上。
+/// 旧实现用 refresh_provider_models 做这件事，但它走 executor_for 重新拉一次
+/// 远端，供应商未启用/未填 Key 时直接抛错，整条保存链就断了。
+///
+/// 这里直接复用设置页已经拉到、用户亲眼看到的 catalogList，不再联网，
+/// 也不依赖执行器；合并与收藏在同一个配置快照上完成，一次落盘。
+/// 系统集成设置的当前状态。autostart 以**系统实际状态**为准而不是本地缓存，
+/// 否则用户从系统设置里关掉后这里还会显示开着。
+#[derive(serde::Serialize)]
+pub struct SystemSettings {
+    pub prevent_sleep: bool,
+    pub autostart: bool,
+    /// 当前平台是否支持防休眠（Linux 无进程级电源抑制原语）
+    pub prevent_sleep_supported: bool,
+}
+
+#[tauri::command]
+pub fn get_system_settings(state: State<'_, AppState>) -> SystemSettings {
+    let db = state.db.lock();
+    let prevent_sleep = db
+        .ok()
+        .and_then(|conn| db::get_setting(&conn, crate::power::SETTING_PREVENT_SLEEP).ok())
+        .flatten()
+        .as_deref()
+        == Some("1");
+    SystemSettings {
+        prevent_sleep,
+        autostart: crate::power::autostart_enabled(),
+        prevent_sleep_supported: crate::power::keep_awake_supported(),
+    }
+}
+
+/// 一次性写入两个设置。任一步失败都不该留下「界面显示已开、实际没生效」：
+/// 先把能持久化的落库，再分别 apply，最后回读真实状态交给前端覆盖显示。
+#[tauri::command]
+pub fn set_system_settings(
+    state: State<'_, AppState>,
+    prevent_sleep: bool,
+    autostart: bool,
+) -> Result<SystemSettings, String> {
+    // 不支持的平台不能把「已开启」持久化下来，否则下次启动仍会尝试 apply，
+    // 界面也会显示一个实际上没生效的开关。
+    let effective_sleep = prevent_sleep && crate::power::keep_awake_supported();
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::set_setting(
+            &db,
+            crate::power::SETTING_PREVENT_SLEEP,
+            if effective_sleep { "1" } else { "0" },
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    crate::power::set_autostart(autostart)?;
+    crate::power::set_keep_awake(effective_sleep);
+    Ok(get_system_settings(state))
+}
+
+#[tauri::command]
+pub fn save_provider_catalog(
+    state: State<'_, AppState>,
+    provider: String,
+    remote: Vec<crate::api::RemoteModel>,
+    keys: Vec<String>,
+) -> Result<usize, String> {
+    let mut cfg = state.router.config();
+    let is_local = cfg
+        .providers
+        .iter()
+        .find(|p| p.id == provider)
+        .map(|p| p.kind.is_local())
+        .ok_or_else(|| format!("供应商不存在：{}", provider))?;
+    let tags: Vec<String> = if is_local {
+        vec!["local".to_string()]
+    } else {
+        Vec::new()
+    };
+    crate::api::config::merge_remote_models(&mut cfg, &provider, remote, &tags, false);
+    let count = crate::api::config::set_pinned(&mut cfg, &provider, &keys);
+    let cfg = normalize(cfg);
+    state.router.set_config(cfg.clone());
+    let db = state.db.lock().map_err(lock_err)?;
+    save_config(&db, &cfg)?;
+    Ok(count)
 }
 
 /// 设置某供应商的模型收藏：传入完整的已收藏模型 key 列表（幂等覆盖）。
