@@ -8,6 +8,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import { workspaceInitial, workspaceTint } from "../lib/workspaceBadge";
 import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
@@ -251,25 +252,41 @@ function toggleExpand(w: string) {
       >
         {collapsed ? (
           <div className="px-2 py-1">
-            {workspaces.map((w) => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => {
-                  switchWorkspace(w);
-                  onNavigate?.();
-                }}
-                title={w}
-                aria-label={w}
-                className="mx-auto flex w-full items-center justify-center rounded-tag py-2 transition-colors hover:bg-bubble"
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    w === workspace ? "bg-brand" : "bg-line"
-                  }`}
-                />
-              </button>
-            ))}
+            {workspaces.map((w) => {
+              // 只数真正进侧栏的会话（草稿不进列表，也不该进角标）
+              const count = sessions.filter(
+                (x) => x.workspace === w && x.messages.length > 0,
+              ).length;
+              const isCurrent = w === workspace;
+              return (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => {
+                    switchWorkspace(w);
+                    onNavigate?.();
+                  }}
+                  title={count > 0 ? `${w} · ${count} 个对话` : w}
+                  aria-label={w}
+                  className="mx-auto flex w-full items-center justify-center rounded-tag py-1.5 transition-colors hover:bg-bubble"
+                >
+                  {/* 首字方块替代圆点：56px 宽里只有颜色的话三个工作区分不开。
+                      当前工作区用品牌色描边，不抢底色（底色已经表示「是哪一个」）。 */}
+                  <span
+                    className={`relative flex h-4 w-4 items-center justify-center rounded-[5px] text-[9px] font-semibold leading-none ${workspaceTint(
+                      basename(w),
+                    )} ${isCurrent ? "ring-1 ring-brand" : ""}`}
+                  >
+                    {workspaceInitial(basename(w))}
+                    {count > 0 && (
+                      <span className="absolute -bottom-1.5 -right-1.5 rounded-full bg-surface px-1 text-[9px] leading-[12px] text-subtle ring-1 ring-line">
+                        {count}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="px-3">

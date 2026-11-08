@@ -385,4 +385,20 @@ describe("Sidebar", () => {
     await userEvent.click(emptyAction!);
     expect(store.newSession).toHaveBeenCalled();
   });
+
+  /// C15：折叠态只有 56px，圆点分不清三个工作区——改首字方块 + 会话数角标，
+  /// 当前工作区用品牌色描边而不是换底色。
+  it("折叠态工作区显示首字方块与会话数角标", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    await mount();
+    const current = screen.getByRole("button", { name: "E:/dev/aura" });
+    expect(current).toHaveTextContent("A");
+    // 该工作区有 s1/s2 两条真会话，s4 是草稿不计数
+    expect(current.textContent).toContain("2");
+    expect(current.querySelector("span")?.className).toContain("ring-brand");
+
+    const other = screen.getByRole("button", { name: "E:/dev/other" });
+    expect(other).toHaveTextContent("O");
+    expect(other.querySelector("span")?.className).not.toContain("ring-brand");
+  });
 });
