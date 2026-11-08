@@ -33,6 +33,7 @@ import {
   canUpdate,
   deleteBlockedReason,
   filterMarket,
+  filterSkills,
   groupSkills,
   SOURCE_LABEL,
   toolsLabel,
@@ -298,6 +299,20 @@ export default function SkillsPage({ onClose }: Props) {
     void loadMarket({ provider: id, page: 1 });
   }
 
+  /**
+   * 搜索框输入。
+   *
+   * 市场档只有选中单个源时才走**远端**搜索——SkillHub 有 8 万条，
+   * 不可能全拉回来再过滤；聚合模式与本地两档一律前端过滤。
+   */
+  function handleQuery(value: string) {
+    setQuery(value);
+    if (tab === "market" && providerFilter) {
+      setMarketPage(1);
+      void loadMarket({ provider: providerFilter, query: value, page: 1 });
+    }
+  }
+
   /** 源列表与清单分开拉：源是本地的，清单要联网，谁也不该拖累谁。 */
   async function loadSources() {
     try {
@@ -445,6 +460,9 @@ export default function SkillsPage({ onClose }: Props) {
   }
 
   const groups = state.kind === "ready" ? groupSkills(state.skills) : null;
+  // 搜索框三页签共用，本地两档在前端过滤；市场档的语义见 handleQuery。
+  const shownBuiltin = groups ? filterSkills(groups.builtin, query) : [];
+  const shownInstalled = groups ? filterSkills(groups.installed, query) : [];
   const marketItems = market.kind === "ready" ? market.items : null;
   const marketErrors = market.kind === "ready" ? market.errors : [];
   /** 市场里既没有条目又有报错：整块失败，给重试入口 */
@@ -498,6 +516,27 @@ export default function SkillsPage({ onClose }: Props) {
           </p>
         )}
 
+        {/* 搜索框常驻：三个页签共用一处，切页签不丢输入 */}
+        <div className="relative mt-4">
+          <Search
+            size={13}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
+          />
+          <input
+            value={query}
+            onChange={(e) => handleQuery(e.target.value)}
+            placeholder={
+              tab === "market"
+                ? providerFilter
+                  ? "在该源内搜索"
+                  : "搜索名称、说明或标签"
+                : "搜索名称或说明"
+            }
+            aria-label="搜索技能"
+            className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
+          />
+        </div>
+
         {/* ---- 本地列表（内置 / 已安装） ---- */}
         {tab !== "market" && (
           <div className="mt-4 flex flex-col gap-2">
@@ -526,8 +565,10 @@ export default function SkillsPage({ onClose }: Props) {
               (tab === "builtin" ? (
                 groups.builtin.length === 0 ? (
                   <EmptyState>没有内置技能。</EmptyState>
+                ) : shownBuiltin.length === 0 ? (
+                  <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  groups.builtin.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                  shownBuiltin.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
                 )
               ) : groups.installed.length === 0 ? (
                 <EmptyState>
@@ -541,8 +582,10 @@ export default function SkillsPage({ onClose }: Props) {
                     <span className="font-mono">skills/local/</span>，或从「市场」安装。
                   </span>
                 </EmptyState>
+              ) : shownInstalled.length === 0 ? (
+                <EmptyState>没有匹配的技能。</EmptyState>
               ) : (
-                groups.installed.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                shownInstalled.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
               ))}
           </div>
         )}
@@ -702,33 +745,6 @@ export default function SkillsPage({ onClose }: Props) {
 
             {marketItems !== null && marketItems.length > 0 && (
               <>
-                <div className="relative">
-                  <Search
-                    size={13}
-                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
-                  />
-                  <input
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      // 选中单个源时走**远端**搜索（SkillHub 支持 q 参数）；
-                      // 聚合模式下各源搜索语义不同，用本地过滤。
-                      if (providerFilter) {
-                        setMarketPage(1);
-                        void loadMarket({
-                          provider: providerFilter,
-                          query: e.target.value,
-                          page: 1,
-                        });
-                      }
-                    }}
-                    placeholder={
-                      providerFilter ? "在该源内搜索" : "搜索名称、说明或标签"
-                    }
-                    aria-label="搜索市场技能"
-                    className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
-                  />
-                </div>
                 {filterMarket(marketItems, query).length === 0 ? (
                   <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (

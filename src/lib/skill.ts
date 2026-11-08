@@ -81,6 +81,22 @@ export function filterMarket<T extends MarketSkillView>(items: T[], query: strin
   );
 }
 
+/**
+ * 本地技能列表的筛选：匹配名称与说明。
+ *
+ * 与 `filterMarket` 同一取向——空查询返回原列表、顺序不变。
+ * 不含目录路径：路径是内部细节，用户是按名字和用途找技能的。
+ */
+export function filterSkills<
+  T extends Pick<SkillView, "name" | "description">,
+>(skills: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return skills;
+  return skills.filter((s) =>
+    `${s.name}\n${s.description}`.toLowerCase().includes(q),
+  );
+}
+
 // ── 审查报告 ────────────────────────────────────────────────────
 
 export const SEVERITY_LABEL: Record<FindingSeverity, string> = {

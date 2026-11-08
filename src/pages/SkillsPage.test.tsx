@@ -182,8 +182,29 @@ describe("SkillsPage", () => {
     expect(screen.queryByText("my-helper")).toBeNull();
   });
 
-  it("开关切换调用命令并就地更新状态", async () => {
-    listSkillsMock.mockResolvedValue([BUILTIN, LOCAL]);
+  /// C05：搜索框常驻，本地两档按名称与说明过滤；切页签保留输入。
+  it("本地列表可按名称与说明搜索", async () => {
+    listSkillsMock.mockResolvedValue([BUILTIN, LOCAL, WORKSPACE]);
+    render(<SkillsPage onClose={vi.fn()} />);
+
+    expect(await screen.findByText("my-helper")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("搜索技能"), "helper");
+    expect(screen.getByText("my-helper")).toBeInTheDocument();
+    expect(screen.queryByText("ws-skill")).toBeNull();
+
+    // 无匹配时给提示，而不是空白
+    await userEvent.clear(screen.getByLabelText("搜索技能"));
+    await userEvent.type(screen.getByLabelText("搜索技能"), "zzz");
+    expect(screen.getByText("没有匹配的技能。")).toBeInTheDocument();
+
+    // 切到内置页签，搜索词跟着走
+    await userEvent.click(screen.getByRole("tab", { name: /内置/ }));
+    expect(screen.getByText("没有匹配的技能。")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("搜索技能"));
+    expect(screen.getByText("code-explainer")).toBeInTheDocument();
+  });
+
+  it("开关切换调用命令并就地更新状态", async () => {    listSkillsMock.mockResolvedValue([BUILTIN, LOCAL]);
     setEnabledMock.mockResolvedValue(undefined);
     render(<SkillsPage onClose={vi.fn()} />);
 
@@ -308,13 +329,13 @@ describe("SkillsPage", () => {
     expect(screen.getAllByRole("button", { name: "安装" })).toHaveLength(1);
 
     // 按标签命中
-    await userEvent.type(screen.getByLabelText("搜索市场技能"), "review");
+    await userEvent.type(screen.getByLabelText("搜索技能"), "review");
     expect(screen.getByText("代码审查")).toBeInTheDocument();
     expect(screen.queryByText("MCP 服务器构建")).toBeNull();
 
     // 无匹配时给提示，而不是空白
-    await userEvent.clear(screen.getByLabelText("搜索市场技能"));
-    await userEvent.type(screen.getByLabelText("搜索市场技能"), "zzz");
+    await userEvent.clear(screen.getByLabelText("搜索技能"));
+    await userEvent.type(screen.getByLabelText("搜索技能"), "zzz");
     expect(screen.getByText("没有匹配的技能。")).toBeInTheDocument();
   });
 

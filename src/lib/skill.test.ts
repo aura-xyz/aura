@@ -8,6 +8,7 @@ import {
   deleteBlockedReason,
   enabledCount,
   filterMarket,
+  filterSkills,
   formatBytes,
   groupFindings,
   groupSkills,
@@ -159,6 +160,34 @@ describe("filterMarket", () => {
     expect(filterMarket(items, "MCP").length).toBe(1);
     expect(filterMarket(items, "mcp").length).toBe(1);
     expect(filterMarket(items, "zzz")).toEqual([]);
+  });
+});
+
+describe("filterSkills", () => {
+  const list = [BUILTIN, LOCAL, WORKSPACE, MARKET];
+
+  it("空查询原样返回（同一个引用）", () => {
+    expect(filterSkills(list, "")).toBe(list);
+    expect(filterSkills(list, "  ")).toBe(list);
+  });
+
+  it("按名称与说明命中，大小写不敏感", () => {
+    expect(filterSkills(list, "HELPER").map((s) => s.name)).toEqual(["my-helper"]);
+    // 说明都是「说明」，命中全部；这里验证说明确实参与匹配
+    expect(filterSkills(list, "说明").map((s) => s.name)).toEqual([
+      "code-explainer",
+      "my-helper",
+      "ws-skill",
+      "market-skill",
+    ]);
+  });
+
+  it("不匹配目录路径这类内部细节", () => {
+    expect(filterSkills(list, "E:/skills")).toEqual([]);
+  });
+
+  it("无匹配返回空数组", () => {
+    expect(filterSkills(list, "zzz")).toEqual([]);
   });
 });
 
