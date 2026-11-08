@@ -219,93 +219,95 @@ pub fn run() {
 
             // v0.7.0：系统托盘。
             //
-            // 托盘的意义是「应用可以常驻后台」：关掉窗口不等于退出，
-            // 用户从托盘图标能找回窗口。这正是网页做不到的桌面能力。
-            //
-            // 菜单项：显示主窗口 / 退出。关闭窗口不退出（见下面的
-            // on_window_event），退出只能从这里走。
-            {
-                use tauri::menu::{Menu, MenuItem};
-                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+            if cfg!(windows) {
+                // v0.7.0：系统托盘（仅 Windows）。Linux 上按用户确认关闭直接退出，
+                // 不常驻托盘，因此不构建托盘图标。
+                {
+                    use tauri::menu::{Menu, MenuItem};
+                    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-                let quit_i = MenuItem::with_id(app, "quit", "退出 Aura", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+                    let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                    let quit_i = MenuItem::with_id(app, "quit", "退出 Aura", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-                let mut builder = TrayIconBuilder::with_id("main-tray")
-                    .menu(&menu)
-                    .tooltip("Aura")
-                    .on_menu_event(|app, event| match event.id().as_ref() {
-                        "show" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.unminimize();
-                                let _ = w.set_focus();
+                    let mut builder = TrayIconBuilder::with_id("main-tray")
+                        .menu(&menu)
+                        .tooltip("Aura")
+                        .on_menu_event(|app, event| match event.id().as_ref() {
+                            "show" => {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
                             }
-                        }
-                        "quit" => app.exit(0),
-                        _ => {}
-                    })
-                    .on_tray_icon_event(|tray, event| {
-                        // 左键单击：显示/唤起主窗口
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } = event
-                        {
-                            if let Some(w) = tray.app_handle().get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.unminimize();
-                                let _ = w.set_focus();
+                            "quit" => app.exit(0),
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            // 左键单击：显示/唤起主窗口
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                if let Some(w) = tray.app_handle().get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
                             }
-                        }
-                    });
+                        });
 
-                if let Some(icon) = app.default_window_icon() {
-                    builder = builder.icon(icon.clone());
+                    if let Some(icon) = app.default_window_icon() {
+                        builder = builder.icon(icon.clone());
+                    }
+                    let _ = builder.build(app)?;
                 }
-                let _ = builder.build(app)?;
             }
 
             app.manage(AppState::new(api_key, db));
             Ok(())
         })
         .on_window_event(|window, event| {
-            // v0.7.0：关闭按钮 = 隐藏到托盘，不是退出。
-            //
-            // 常驻后台是桌面软件的关键能力（长任务跑完还能收到系统通知）。
-            // 但「关了就找不回来」也是真实的困惑，所以托盘必须有，
-            // 且托盘左键单击能唤回窗口。
-            // v0.7.1：首次关闭时发托盘提示通知，避免用户困惑。
+            // v0.7.0：关闭按钮在 Windows 上 = 隐藏到托盘，不是退出。
+            // Linux 上按用户确认：关闭时直接退出，不常驻托盘。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if let Some(w) = window.get_webview_window("main") {
-                    let _ = w.hide();
-                    // v0.7.1：首次关闭发托盘提示
-                    let app_handle = window.app_handle().clone();
-                    tokio::spawn(async move {
-                        let shown = {
-                            let state = app_handle.state::<AppState>();
-                            let db = state.db.lock().ok();
-                            db.and_then(|conn| db::get_setting(&conn, "tray_hint_shown").ok())
-                                .flatten()
-                        };
-                        if shown.is_none() {
-                            // 发送托盘提示通知
-                            use tauri_plugin_notification::NotificationExt;
-                            let _ = app_handle
-                                .notification()
-                                .builder()
-                                .title("Aura")
-                                .body("Aura 已最小化到托盘，点击图标可唤回窗口")
-                                .show();
-                            // 标记已显示
-                            let state = app_handle.state::<AppState>();
-                            let _ = state.db.lock().ok().and_then(|conn| db::set_setting(&conn, "tray_hint_shown", "true").ok());
-                        }
-                    });
-                    api.prevent_close();
+                if cfg!(windows) {
+                    if let Some(w) = window.get_webview_window("main") {
+                        let _ = w.hide();
+                        // v0.7.1：首次关闭发托盘提示
+                        let app_handle = window.app_handle().clone();
+                        tokio::spawn(async move {
+                            let shown = {
+                                let state = app_handle.state::<AppState>();
+                                let db = state.db.lock().ok();
+                                db.and_then(|conn| db::get_setting(&conn, "tray_hint_shown").ok())
+                                    .flatten()
+                            };
+                            if shown.is_none() {
+                                // 发送托盘提示通知
+                                use tauri_plugin_notification::NotificationExt;
+                                let _ = app_handle
+                                    .notification()
+                                    .builder()
+                                    .title("Aura")
+                                    .body("Aura 已最小化到托盘，点击图标可唤回窗口")
+                                    .show();
+                                // 标记已显示
+                                let state = app_handle.state::<AppState>();
+                                let _ = state
+                                    .db
+                                    .lock()
+                                    .ok()
+                                    .and_then(|conn| db::set_setting(&conn, "tray_hint_shown", "true").ok());
+                            }
+                        });
+                        api.prevent_close();
+                    }
                 }
+                // Linux/macOS：不拦截关闭，允许窗口直接关闭，应用随之退出。
             }
         })
         .invoke_handler(tauri::generate_handler![
