@@ -19,12 +19,14 @@ export default function TitleBar() {
 
   const darwin = IS_MAC;
   const height = darwin ? "h-10" : "h-9";
+  // 右侧不留内边距：无边框窗口的关闭按钮必须贴到窗口边缘。
+  // 原先的 pr-2 让红色按钮右边空出 8px（实测反馈），看着像被滚动条顶开。
 
   return (
     <header
       data-tauri-drag-region
       data-platform={darwin ? "darwin" : "windows"}
-      className={`flex shrink-0 select-none items-center justify-between ${height} pl-4 pr-2`}
+      className={`flex shrink-0 select-none items-center justify-between ${height} pl-4`}
       style={{
         backgroundColor: "var(--chrome-bg)",
         color: "var(--dsw-alias-label-primary)",

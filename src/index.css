@@ -247,6 +247,10 @@
   body,
   #root {
     height: 100%;
+    /* 自绘标题栏要贴窗口右边缘。body 一旦产生哪怕 4px 的滚动条占位，
+       整列内容（含右上角控制按钮）都会被往左推，看起来「没贴边」。
+       App 根容器自带 overflow-hidden，内部各区仍有自己的滚动容器。 */
+    overflow: hidden;
   }
 
   body {
