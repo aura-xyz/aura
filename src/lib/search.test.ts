@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   SNIPPET_PADDING,
+  buildSearchable,
   makeSnippet,
+  messageSearchText,
   searchSessions,
   type SearchableSession,
 } from "./search";
+import type { ChatMessage, Session } from "./store";
 
 function session(
   id: string,
@@ -96,5 +99,50 @@ describe("searchSessions", () => {
     const s = [session("x", "t", ["abcabc"])];
     const hits = searchSessions(s, "abc");
     expect(hits).toHaveLength(1);
+  });
+});
+
+describe("buildSearchable", () => {
+  const user = { id: "m1", role: "user", content: "帮我看下 store" } as ChatMessage;
+  const assistant = {
+    id: "m2",
+    role: "assistant",
+    blocks: [
+      { kind: "text", text: "先读文件" },
+      { kind: "action", text: "read_file" },
+      { kind: "text", text: "读完再改" },
+    ],
+  } as ChatMessage;
+
+  it("用户消息取 content，助手只拼正文块（不含动作卡片）", () => {
+    expect(messageSearchText(user)).toBe("帮我看下 store");
+    expect(messageSearchText(assistant)).toBe("先读文件\n读完再改");
+  });
+
+  /// 消息对象不可变：流式更新会换新对象，缓存才不会吃到旧文本。
+  it("同一条消息换了新对象后立刻反映新文本", () => {
+    const before = messageSearchText(assistant);
+    const grown = {
+      ...assistant,
+      blocks: [
+        { kind: "text", text: "先读文件" },
+        { kind: "action", text: "read_file" },
+        { kind: "text", text: "读完再改，然后又想了想" },
+      ],
+    } as ChatMessage;
+    expect(messageSearchText(assistant)).toBe(before);
+    expect(messageSearchText(grown)).toContain("又想了想");
+  });
+
+  it("整份索引保留会话标题与消息顺序", () => {
+    const sessions = [
+      { id: "s1", title: "重构 store", messages: [user, assistant] },
+    ] as unknown as Session[];
+    const built = buildSearchable(sessions);
+    expect(built).toHaveLength(1);
+    expect(built[0].title).toBe("重构 store");
+    expect(built[0].messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    // 建完索引后仍可正常搜到（只命中用户消息正文，标题不含该词）
+    expect(searchSessions(built, "帮我看下")).toHaveLength(1);
   });
 });

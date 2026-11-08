@@ -4,6 +4,7 @@
  * 抽成纯函数是为了能测：搜索的排序规则（命中标题 vs 命中消息）很容易
  * 在改 UI 时被改坏，而搜索结果对不对用户立刻能感觉到。
  */
+import type { ChatMessage, Session } from "../store";
 
 /** 一条可被搜索的消息 */
 export interface SearchableMessage {
@@ -123,4 +124,44 @@ export function searchSessions(
   });
 
   return hits;
+}
+
+// ── 搜索数据构建（v0.8.0） ───────────────────────────────────────
+
+/**
+ * 消息纯文本的缓存。
+ *
+ * 流式期间 store 每几十毫秒换一批消息对象，整份文本重建是 O(全部块)，
+ * 而这段时间用户根本没在搜索。消息对象是**不可变的**（更新时换新对象），
+ * 所以按对象身份缓存是安全的：每次只需重算「正在写的那一条」。
+ */
+const textCache = new WeakMap<ChatMessage, string>();
+
+/** 取一条消息的可搜索文本：用户看 content，助手只取正文块。 */
+export function messageSearchText(message: ChatMessage): string {
+  const cached = textCache.get(message);
+  if (cached !== undefined) return cached;
+  const text =
+    message.role === "user"
+      ? message.content
+      : message.blocks
+          .filter((b) => b.kind === "text")
+          .map((b) => (b.kind === "text" ? b.text : ""))
+          .join("\n");
+  textCache.set(message, text);
+  return text;
+}
+
+/**
+ * 把会话列表转成搜索数据。
+ *
+ * 只应在**打开搜索面板时**调用——放在 App 顶层会让每次流式更新都重建
+ * 全部会话的纯文本，白白吃掉主线程。
+ */
+export function buildSearchable(sessions: Session[]): SearchableSession[] {
+  return sessions.map((s) => ({
+    id: s.id,
+    title: s.title,
+    messages: s.messages.map((m) => ({ role: m.role, text: messageSearchText(m) })),
+  }));
 }

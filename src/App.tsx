@@ -362,26 +362,6 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     return () => window.removeEventListener("keydown", block, true);
   }, []);
 
-  // 搜索数据：把会话里的消息转成纯文本
-  const searchable = useMemo(
-    () =>
-      sessions.map((sess) => ({
-        id: sess.id,
-        title: sess.title,
-        messages: sess.messages.map((m) => ({
-          role: m.role,
-          text:
-            m.role === "user"
-              ? m.content
-              : m.blocks
-                  .filter((b) => b.kind === "text")
-                  .map((b) => (b.kind === "text" ? b.text : ""))
-                  .join("\n"),
-        })),
-      })),
-    [sessions],
-  );
-
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
 
@@ -758,7 +738,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
       {searchOpen && (
         <SessionSearch
-          sessions={searchable}
+          sessions={sessions}
           onClose={() => setSearchOpen(false)}
           onOpenSession={(sessionId) => {
             void openSession(sessionId);
