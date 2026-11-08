@@ -656,27 +656,36 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                 aria-hidden
               />
             )}
-            <div className="mx-2 mt-2 mb-1 flex items-center gap-0.5">
-              {/* tab 列表由注册表派生，新增面板不必再改外壳 */}
-              {panelList.map((panel) => {
-                const Icon = PANEL_ICONS[panel.id];
-                return (
-                  <button
-                    key={panel.id}
-                    type="button"
-                    onClick={() => setRightbarTab(panel.id)}
-                    aria-current={rightbarTab === panel.id ? "page" : undefined}
-                    className={`flex items-center gap-1 rounded-tag px-2 py-1 text-[11px] font-medium tracking-[0.04em] transition-colors ${
-                      rightbarTab === panel.id
-                        ? "bg-bubble text-foreground"
-                        : "text-subtle hover:bg-bubble hover:text-foreground"
-                    }`}
-                  >
-                    {Icon && <Icon size={12} aria-hidden />}
-                    {panel.label}
-                  </button>
-                );
-              })}
+            <div className="mx-2 mt-2 mb-1 flex items-center gap-1">
+              {/* 页签走胶囊内凹轨道，与输入框 ModeTabs 同一套语言：
+                  外层浅底容器，选中项白底浮块。tab 列表由注册表派生。 */}
+              <div
+                role="tablist"
+                aria-label="右侧面板"
+                className="flex min-w-0 items-center gap-0.5 rounded-full bg-bubble p-0.5"
+              >
+                {panelList.map((panel) => {
+                  const Icon = PANEL_ICONS[panel.id];
+                  return (
+                    <button
+                      key={panel.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={rightbarTab === panel.id}
+                      aria-current={rightbarTab === panel.id ? "page" : undefined}
+                      onClick={() => setRightbarTab(panel.id)}
+                      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tracking-[0.04em] transition-colors ${
+                        rightbarTab === panel.id
+                          ? "bg-surface text-foreground shadow-sm"
+                          : "text-subtle hover:text-foreground"
+                      }`}
+                    >
+                      {Icon && <Icon size={12} aria-hidden />}
+                      {panel.label}
+                    </button>
+                  );
+                })}
+              </div>
               <button
                 type="button"
                 onClick={() => setRightbarFullscreen((v) => !v)}

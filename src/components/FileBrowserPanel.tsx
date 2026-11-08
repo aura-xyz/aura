@@ -9,12 +9,22 @@ import { useEffect, useState } from "react";
 import {
   ChevronRight,
   File as FileIcon,
+  FileCode2,
+  FileJson,
+  FileText,
   Folder,
   FolderOpen,
+  Image as ImageIcon,
   RefreshCw,
   X,
 } from "lucide-react";
 import { listDirectory, readFileText, type DirEntry } from "../lib/api";
+import {
+  FILE_KIND_TINT,
+  fileKindOf,
+  sortEntries,
+  type FileKind,
+} from "../lib/fileIcon";
 
 interface Props {
   /** 会话 id：后端据此定位该会话自己的工作区 */
@@ -31,6 +41,21 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 档位 → 图标组件。目录不在此列，由调用方单独处理。 */
+const KIND_ICON = {
+  markdown: FileText,
+  code: FileCode2,
+  data: FileJson,
+  image: ImageIcon,
+  style: FileCode2,
+  text: FileIcon,
+} as const;
+
+function KindIcon({ kind, size = 13 }: { kind: FileKind; size?: number }) {
+  const Icon = KIND_ICON[kind];
+  return <Icon size={size} className={`shrink-0 ${FILE_KIND_TINT[kind]}`} />;
 }
 
 export function FileBrowserPanel({ sessionId }: Props) {
@@ -130,7 +155,7 @@ export function FileBrowserPanel({ sessionId }: Props) {
       {preview ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex shrink-0 items-center gap-1 border-y border-line px-2 py-1 text-[11px]">
-            <FileIcon size={12} className="shrink-0 text-subtle" />
+            <KindIcon kind={fileKindOf(preview.name)} size={12} />
             <span className="min-w-0 flex-1 truncate" title={preview.name}>
               {preview.name}
             </span>
@@ -156,7 +181,7 @@ export function FileBrowserPanel({ sessionId }: Props) {
           {!error && !loading && entries.length === 0 && (
             <p className="px-2 py-2 text-[11px] text-subtle">空目录</p>
           )}
-          {entries.map((entry) => (
+          {sortEntries(entries).map((entry) => (
             <button
               key={entry.path}
               type="button"
@@ -167,7 +192,7 @@ export function FileBrowserPanel({ sessionId }: Props) {
               {entry.is_dir ? (
                 <Folder size={13} className="shrink-0 text-brand" />
               ) : (
-                <FileIcon size={13} className="shrink-0 text-subtle" />
+                <KindIcon kind={fileKindOf(entry.name)} />
               )}
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
               {!entry.is_dir && (
