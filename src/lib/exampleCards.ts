@@ -10,8 +10,12 @@ import type { SkillView } from "./api";
  * 用户改改就能发。
  */
 
-/** 最多展示几张卡片。技能多了卡片区会过长，反而挡路。 */
-export const MAX_CARDS = 3;
+/**
+ * 最多展示几张卡片（v0.8.0 由 3 提到 6）。
+ *
+ * 双列网格下 6 张正好两行；再多就要滚动，开始界面反而变得难扫。
+ */
+export const MAX_CARDS = 6;
 
 /** 一张示例卡片 */
 export interface ExampleCard {

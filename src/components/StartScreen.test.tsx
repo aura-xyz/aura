@@ -72,4 +72,55 @@ describe("StartScreen", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Aura")).toBeInTheDocument();
   });
+
+  /// A7：把「打开应用 → 找到昨天那个会话」这条高频路径压成一次点击。
+  it("给了最近会话时显示继续上次胶囊，点击回到该会话", async () => {
+    const onOpen = vi.fn();
+    render(
+      <StartScreen
+        onPick={() => {}}
+        recentSession={{ title: "修 bug 的那次", onOpen }}
+      >
+        <textarea aria-label="输入" />
+      </StartScreen>,
+    );
+    const pill = screen.getByRole("button", { name: /继续上次/ });
+    expect(pill).toHaveTextContent("修 bug 的那次");
+    await userEvent.click(pill);
+    expect(onOpen).toHaveBeenCalled();
+  });
+
+  it("给了模型名时在 slogan 下显示徽章", () => {
+    render(
+      <StartScreen onPick={() => {}} modelLabel="Claude Sonnet">
+        <textarea aria-label="输入" />
+      </StartScreen>,
+    );
+    expect(screen.getByText("Claude Sonnet")).toBeInTheDocument();
+  });
+
+  /// 示例卡从 3 张提到 6 张，并带来源色顶边 + 首字小方块。
+  it("示例卡最多 6 张且带顶边与首字块", async () => {
+    const skills = Array.from({ length: 8 }, (_, i) => ({
+      name: `skill-${i}`,
+      description: "说明",
+      version: "1",
+      source: "builtin" as const,
+      allowed_tools: [],
+      enabled: true,
+      dir: "",
+      path: "",
+    }));
+    skillsMock.mockResolvedValue(skills);
+    render(
+      <StartScreen onPick={() => {}}>
+        <textarea aria-label="输入" />
+      </StartScreen>,
+    );
+    const first = await screen.findByText("skill-0");
+    const card = first.closest("button") as HTMLElement;
+    expect(card.className).toContain("border-t-brand");
+    expect(card.textContent).toContain("S");
+    expect(screen.queryByText("skill-6")).toBeNull();
+  });
 });

@@ -460,6 +460,14 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
    * 输入框的 props。开始界面与普通对话区用的是同一个输入框，
    * 只是外边距不同（`variant`），所以 props 抽成一份。
    */
+  /**
+   * 「继续上次」的目标会话。
+   *
+   * 目前会话没有 updated_at（F2 未落地），只能按列表顺序取最后一条有内容的；
+   * 等时间戳补齐后换成按时间倒序，这里只改这一处。
+   */
+  const recentSession = [...sessions].reverse().find((s) => s.messages.length > 0);
+
   const inputProps = {
     busy,
     onSend: sendMessage,
@@ -605,7 +613,25 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                两块离得很远，看着像两个不相干的区域。 */
             <>
               {dropBanner}
-              <StartScreen onPick={(prompt) => insertIntoInput(prompt)}>
+              <StartScreen
+                onPick={(prompt) => insertIntoInput(prompt)}
+                recentSession={
+                  recentSession
+                    ? {
+                        title: recentSession.title,
+                        onOpen: () => {
+                          void openSession(recentSession.id);
+                          setView("chat");
+                        },
+                      }
+                    : undefined
+                }
+                modelLabel={
+                  models.find((m) => m.key === selectedModel)?.label ||
+                  models.find((m) => m.id === selectedModel)?.label ||
+                  selectedModel
+                }
+              >
                 <InputArea {...inputProps} variant="inline" />
               </StartScreen>
             </>

@@ -766,6 +766,55 @@
 }
 
 /* ---------------------------------------------------------------
+   开始界面氛围
+   --------------------------------------------------------------- */
+/* 输入框后方的品牌色径向光晕：亮色 5%、暗色 8%，纯 CSS 无图片资源。
+   用 color-mix 而非写死 rgba，跟随 --brand 的明暗换色。 */
+.aura-start-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    60vh 45vh at 50% 38%,
+    color-mix(in srgb, var(--brand) 5%, transparent),
+    transparent 70%
+  );
+}
+
+.dark .aura-start-glow {
+  background: radial-gradient(
+    60vh 45vh at 50% 38%,
+    color-mix(in srgb, var(--brand) 8%, transparent),
+    transparent 70%
+  );
+}
+
+/* logo 首次入场：scale 0.96 → 1 + 淡入，只播一次（组件侧用模块标记控制） */
+@keyframes aura-logo-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.aura-logo-in {
+  animation: aura-logo-in 2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-start-glow {
+    display: none;
+  }
+  .aura-logo-in {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
    输入辅助浮层入场
    --------------------------------------------------------------- */
 /* 100ms 淡入 + 4px 上移：比右栏的 200ms 更快，输入辅助层要敏捷。 */
