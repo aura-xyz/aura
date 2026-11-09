@@ -30,7 +30,7 @@ use commands::{
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, save_provider_catalog,
     set_providers, set_selected_model, set_system_settings,
-    notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_approval_policy, set_approval_policy, truncate_history,
     AppState,
 };
 use terminal::{
@@ -357,6 +357,9 @@ pub fn run() {
             greet,
             send_message,
             stop_message,
+            resolve_approval,
+            get_approval_policy,
+            set_approval_policy,
             remove_session,
             truncate_history,
             inspect_side_effects,

@@ -758,6 +758,30 @@ pub struct CommandHit {
     pub severity: Severity,
 }
 
+/// 敏感模式（v0.8.0 S-05）。**与规则表分开维护，因为它们问的是另一件事**：
+///
+/// 规则表问「这条命令有多危险」，敏感模式问「这次操作碰没碰凭据」。
+/// 前者决定要不要停，后者决定**哪怕用户选了「别烦我」也得停**——
+/// 凭据泄露不可逆，省事不能省到这一步。
+const SENSITIVE: &[(&str, &str)] = &[
+    (".ssh", "访问 SSH 目录"),
+    ("id_rsa", "读取 SSH 私钥"),
+    (".aws/credentials", "读取云凭据文件"),
+    (".gnupg", "访问 GPG 密钥目录"),
+    (".kube/config", "读取集群凭据"),
+    ("reg query hklm", "查询注册表凭据键"),
+    ("dpapi", "访问 DPAPI 凭据"),
+];
+
+/// 命令是否碰到凭据类敏感目标。命中返回中文说明。
+pub fn check_sensitive(command: &str) -> Option<&'static str> {
+    let lower = command.to_lowercase().replace('\\', "/");
+    SENSITIVE
+        .iter()
+        .find(|(pat, _)| hits(&lower, pat))
+        .map(|(_, reason)| *reason)
+}
+
 /// 按 id 取规则（测试与日志用）。
 pub fn rule(id: &str) -> Option<&'static Rule> {
     RULES.iter().find(|r| r.id == id)
@@ -1062,5 +1086,22 @@ mod tests {
     #[test]
     fn rules_version_is_tracked() {
         assert!(RULES_VERSION >= 1);
+    }
+
+    /// 敏感模式：反斜杠写法也要认（Windows 上模型经常写 `C:\Users\x\.ssh`）。
+    #[test]
+    fn sensitive_patterns_cover_windows_paths() {
+        for cmd in [
+            "type C:/Users/x/.ssh/id_rsa",
+            r"type C:\Users\x\.ssh\id_rsa",
+            "cat ~/.aws/credentials",
+            "gpg --list-keys --homedir ~/.gnupg",
+            "reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion",
+        ] {
+            assert!(check_sensitive(cmd).is_some(), "应命中敏感模式: {cmd}");
+        }
+        for cmd in ["cargo test", "git status", "ls src"] {
+            assert!(check_sensitive(cmd).is_none(), "不应命中: {cmd}");
+        }
     }
 }

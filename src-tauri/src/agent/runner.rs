@@ -224,6 +224,11 @@ pub struct TurnContext<'a> {
     /// 与 `persist_todos` 同一思路：库里查好传进来，agent 层不碰数据库。
     /// 命中者既不进 L1 索引，也不会被登记为激活技能。
     pub disabled_skills: &'a [String],
+    /// 命令审批管理器（v0.8.0 C40）。`None` 表示不启用审批（测试与
+    /// 无界面调用方的兼容路径）——此时按旧行为：命中即拒。
+    pub approvals: Option<&'a crate::agent::approval::ApprovalManager>,
+    /// 本轮生效的审批策略。默认 dangerous，由会话或全局设置决定。
+    pub approval_policy: crate::agent::approval::Policy,
 }
 
 enum Next {
@@ -273,6 +278,91 @@ fn record_timeline(
 
 fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
     let _ = app.emit(event, json!({ "session_id": session_id, "text": text }));
+}
+
+/// 命令首行：审批卡的空间有限，长命令只显示开头，全文另给字段。
+fn first_line(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.chars().count() > 120 {
+        format!("{}…", line.chars().take(120).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+/// 命令审批闸门（v0.8.0 C40）。
+///
+/// 返回 `Some(回填文案)` 表示**不许执行**，`None` 表示放行。
+///
+/// 只有 `run_script` 需要审批：其他工具的作用范围已经被 `ensure_allowed`
+/// 锁在授权目录里，而命令能做的事没有边界。
+async fn approval_gate(
+    ctx: &TurnContext<'_>,
+    name: &str,
+    args: &Value,
+) -> Option<String> {
+    use crate::agent::approval::{decide, Gate, APPROVAL_TIMEOUT, EV_APPROVAL};
+
+    if name != "run_script" {
+        return None;
+    }
+    let command = args.get("command").and_then(|v| v.as_str())?.trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    let mgr = ctx.approvals?;
+
+    match decide(ctx.approval_policy, &command) {
+        Gate::Allow => None,
+        Gate::Reject { reason } => Some(format!(
+            "命令被安全策略拦截（{reason}）：{command}\n\
+             如确需执行，请调整命令写法以避开该模式。"
+        )),
+        Gate::Ask {
+            key,
+            rule_id,
+            reason,
+        } => {
+            // 本会话已经为这条规则点过「别再问」——直接放行
+            if mgr.is_remembered(ctx.session_id, &key) {
+                return None;
+            }
+            let id = crate::agent::approval::next_request_id();
+            let rx = mgr.register(&id, ctx.session_id);
+            let _ = ctx.app.emit(
+                EV_APPROVAL,
+                json!({
+                    "id": id,
+                    "session_id": ctx.session_id,
+                    "tool": name,
+                    "command": command,
+                    "preview": first_line(&command),
+                    "rule_id": rule_id,
+                    "reason": reason,
+                    "timeout_ms": APPROVAL_TIMEOUT.as_millis() as u64,
+                }),
+            );
+            match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+                Ok(Ok(decision)) if decision.approved => {
+                    if decision.remember {
+                        mgr.remember(ctx.session_id, &key);
+                    }
+                    None
+                }
+                Ok(Ok(_)) => Some(format!("用户拒绝了该命令，未执行：{command}")),
+                // 发送端被丢弃：stop_message 兜底决议或会话被清
+                Ok(Err(_)) => Some(format!("审批被取消，命令未执行：{command}")),
+                Err(_) => {
+                    // 超时后必须清理登记，否则 pending 表只增不减
+                    mgr.forget(&id);
+                    Some(format!(
+                        "等待用户确认超时（{} 秒），命令未执行：{command}",
+                        APPROVAL_TIMEOUT.as_secs()
+                    ))
+                }
+            }
+        }
+    }
 }
 
 /// 工具动作事件。`ok` 区分成功与失败；`detail` 携带可折叠的详细输出
@@ -1087,6 +1177,36 @@ if tool_jsons.is_empty() {
                         );
                         "Error: 连续调用次数超限，请尝试其他工具或基于现有信息直接回复。"
                             .to_string()
+                    } else if let Some(feedback) =
+                        approval_gate(ctx, &name, &args).await
+                    {
+                        // 未获批准/被策略拒绝：与「工具执行失败」同一条回填
+                        // 通道，模型能读懂，用户也能在时间线里看到。
+                        record_timeline(
+                            ctx,
+                            tl_seq,
+                            rounds as i64,
+                            crate::timeline::EntryKind::Denied,
+                            format!("{tool_label}（未获批准）"),
+                            Some(feedback.clone()),
+                            false,
+                            None,
+                        );
+                        tl_seq += 1;
+                        emit_action_detail(
+                            ctx.app,
+                            ctx.session_id,
+                            &name,
+                            &format!("{}（未获批准）", tool_label),
+                            false,
+                            Some(feedback.clone()),
+                            None,
+                            None,
+                        );
+                        // 计入拒绝计数：模型反复尝试同一条被拒命令时，
+                        // 与「工具名反复出错」共用同一套刹车。
+                        let _ = rejects.record(&name, max_parse_retries);
+                        feedback
                     } else {
                         let tool_started = std::time::Instant::now();
                         let tool_result = tools::execute(

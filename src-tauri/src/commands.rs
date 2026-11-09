@@ -53,6 +53,9 @@ pub struct AppState {
     /// 清单下发的镜像前缀（v0.7.2-rc.2）。检查更新时拉一次，下载时复用，
     /// 避免同一次更新读两遍清单。
     pub update_mirrors: Mutex<Vec<String>>,
+    /// 命令审批的管理器（v0.8.0 C40）。挂在全局是必须的：
+    /// 决议来自另一条命令（`resolve_approval`），与等待方不在同一个栈上。
+    pub approvals: crate::agent::approval::ApprovalManager,
 }
 
 /// Windows 上 `canonicalize()` 会返回 `\\?\` 扩展前缀路径，若与
@@ -135,6 +138,7 @@ impl AppState {
             db: Mutex::new(db),
             updater: Mutex::new(None),
             update_mirrors: Mutex::new(Vec::new()),
+            approvals: crate::agent::approval::ApprovalManager::new(),
         }
     }
 }
@@ -196,6 +200,13 @@ pub async fn send_message(
         return Err("请先为这个对话选择工作区目录".into());
     }
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
+
+    // 审批策略：会话覆盖 > 全局默认 > 代码默认（仅危险命令询问）。
+    // 每轮读一次，用户在设置里改了下一条命令即生效。
+    let approval_policy = {
+        let db = state.db.lock().map_err(lock_err)?;
+        resolve_approval_policy(&db, &session_id).0
+    };
 
     // 工具访问域：工作区 + 用户授权的额外目录（路径白名单）。
     // 白名单每轮读一次：用户在设置里改了授权，下一轮发送即生效。
@@ -276,6 +287,8 @@ pub async fn send_message(
                 }
             }),
             disabled_skills: &disabled_skills,
+            approvals: Some(&state.approvals),
+            approval_policy,
             persist_timeline: Some(&|entry: crate::timeline::TimelineEntry| {
                 // 时间线落库：每条一次写。
                 // 写失败不阻断对话——时间线是「锦上添花」，不能反过来
@@ -307,7 +320,108 @@ pub async fn stop_message(
         return Ok(());
     }
     state.cancelled.store(true, Ordering::Relaxed);
+    // 正在等审批的请求必须一起否掉：否则 runner 会卡在 120 秒超时上，
+    // 用户看到的是「已经停了但还在转」。
+    let cancelled = state.approvals.cancel_session(&session_id);
+    if cancelled > 0 {
+        crate::update_log::log_event(
+            "approval",
+            &format!("stop_message cancelled {cancelled} pending approvals"),
+        );
+    }
     Ok(())
+}
+
+/// 审批策略的当前取值。
+///
+/// 返回 `scope` 是为了让界面能如实显示「这条是会话级设置」还是
+/// 「继承自全局」——两者混在一起显示，用户改完全局却看不到变化会以为坏了。
+#[derive(serde::Serialize)]
+pub struct ApprovalPolicyView {
+    pub policy: String,
+    pub label: String,
+    pub scope: String,
+}
+
+/// 解析当前会话生效的审批策略：会话覆盖 → 全局默认 → 代码默认。
+fn resolve_approval_policy(
+    db: &Connection,
+    session_id: &str,
+) -> (crate::agent::approval::Policy, &'static str) {
+    use crate::agent::approval::Policy;
+
+    let session_value = db::get_setting(db, &format!("approval_policy:{session_id}"))
+        .ok()
+        .flatten();
+    if let Some(raw) = session_value {
+        return (Policy::parse(&raw), "session");
+    }
+    let global = db::get_setting(db, "approval_policy").ok().flatten();
+    (
+        global
+            .map(|v| Policy::parse(&v))
+            .unwrap_or_else(Policy::default),
+        "global",
+    )
+}
+
+#[tauri::command]
+pub fn get_approval_policy(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<ApprovalPolicyView, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    let (policy, scope) = resolve_approval_policy(&db, &session_id);
+    Ok(ApprovalPolicyView {
+        policy: policy.as_str().to_string(),
+        label: policy.label().to_string(),
+        scope: scope.to_string(),
+    })
+}
+
+/// 设置审批策略。`session_id` 为空时写全局默认。
+#[tauri::command]
+pub fn set_approval_policy(
+    state: State<'_, AppState>,
+    policy: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    use crate::agent::approval::Policy;
+    let parsed = Policy::parse(&policy);
+    // 传进来的值必须是已知档位：写进库里一个拼错的字符串，读的时候会
+    // 静默回落默认档，用户以为设置生效了其实没有。
+    if parsed.as_str() != policy.trim() {
+        return Err(format!("未知的审批策略：{policy}"));
+    }
+    let key = match session_id.filter(|s| !s.is_empty()) {
+        Some(id) => format!("approval_policy:{id}"),
+        None => "approval_policy".to_string(),
+    };
+    let db = state.db.lock().map_err(lock_err)?;
+    db::set_setting(&db, &key, parsed.as_str()).map_err(|e| e.to_string())
+}
+
+/// 决议一次审批请求。
+///
+/// 返回 `false` 表示这个请求已经不在了（超时或已决议）——前端据此提示
+/// 「已超时」而不是假装点了有用。
+#[tauri::command]
+pub fn resolve_approval(
+    state: State<'_, AppState>,
+    id: String,
+    approved: bool,
+    remember: Option<bool>,
+) -> Result<bool, String> {
+    use crate::agent::approval::Decision;
+
+    let decision = if approved {
+        Decision::allow(remember.unwrap_or(false))
+    } else {
+        // 拒绝时不该记住：记住拒绝等于把这条规则永久拉黑，
+        // 而用户只是这次不想跑。
+        Decision::denied()
+    };
+    Ok(state.approvals.resolve(&id, decision))
 }
 
 #[tauri::command]
@@ -2015,6 +2129,7 @@ mod tests {
             db: Mutex::new(db::open(Path::new(":memory:")).unwrap()),
             updater: Mutex::new(None),
             update_mirrors: Mutex::new(Vec::new()),
+            approvals: crate::agent::approval::ApprovalManager::new(),
         };
 
         // 别的会话发起停止：忽略
