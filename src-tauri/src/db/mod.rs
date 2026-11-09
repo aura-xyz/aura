@@ -680,6 +680,23 @@ fn load_messages(conn: &Connection, session_id: &str) -> Result<Vec<Value>, rusq
     Ok(out)
 }
 
+/// 历史会话去重后的工作区列表（空工作区除外）。
+///
+/// C53 用来把已授权的工作区目录注册进 Tauri asset protocol 范围，
+/// 让前端能直接预览其中的图片。只取 `workspace` 一列、不加载消息，
+/// 启动期调用也轻量。
+pub fn list_workspaces(conn: &Connection) -> Result<Vec<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT workspace FROM sessions WHERE workspace != ''",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 pub fn load_sessions(conn: &Connection) -> Result<Vec<SavedSession>, rusqlite::Error> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, title, workspace, updated_at FROM sessions ORDER BY updated_at DESC",

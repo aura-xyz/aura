@@ -152,6 +152,26 @@ mod nav_tests {
     }
 }
 
+/// C53：把工作区与白名单目录注册进 Tauri asset protocol 范围。
+///
+/// 前端图片预览走 `asset://`，目录必须先在协议 scope 内才可被加载；
+/// 安全边界与 `read_file_text` 同一闸门（AccessScope：工作区 + 白名单），
+/// 绝不放大访问范围——只放行已经授权读写的目录，未存在的目录跳过。
+fn register_asset_scope(app: &tauri::AppHandle, db: &rusqlite::Connection) {
+    let scope = app.asset_protocol_scope();
+    if let Ok(ws) = db::list_workspaces(db) {
+        for w in ws {
+            let p = std::path::PathBuf::from(&w);
+            if p.is_dir() {
+                let _ = scope.allow_directory(p, true);
+            }
+        }
+    }
+    for p in crate::commands::allowlist_paths(db) {
+        let _ = scope.allow_directory(p, true);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let api_key = std::env::var("OPENROUTER_API_KEY").ok();
@@ -317,6 +337,10 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&dir);
                 crate::secure_store::set_data_dir(dir);
             }
+
+            // v0.8.0 C53：把历史工作区与白名单目录注册进资产协议范围，
+            // 供文件面板 / 附件的图片预览走 asset:// 直接加载。
+            register_asset_scope(app.handle(), &db);
 
             app.manage(AppState::new(api_key, db));
 

@@ -694,7 +694,11 @@ pub fn save_session(
 }
 
 #[tauri::command]
-pub fn set_workspace(state: State<'_, AppState>, path: String) -> Result<String, String> {
+pub fn set_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
     let p = PathBuf::from(path.trim());
     let meta = std::fs::metadata(&p).map_err(|_| "路径不存在".to_string())?;
     if !meta.is_dir() {
@@ -706,7 +710,10 @@ pub fn set_workspace(state: State<'_, AppState>, path: String) -> Result<String,
         let db = state.db.lock().map_err(lock_err)?;
         let _ = db::set_setting(&db, "last_workspace", &normalized);
     }
-    *state.workspace.lock().map_err(lock_err)? = c;
+    *state.workspace.lock().map_err(lock_err)? = c.clone();
+    // C53：新工作区注册进资产协议范围，文件面板 / 附件的图片预览立即可用。
+    // 安全边界与 read_file_text 同源（AccessScope），不放大访问范围。
+    let _ = app.asset_protocol_scope().allow_directory(c, true);
     Ok(normalized)
 }
 
@@ -1767,6 +1774,7 @@ fn verify_allowlist_add(
 /// 添加白名单路径。
 #[tauri::command]
 pub fn add_allowlist_path(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     label: Option<String>,
@@ -1778,6 +1786,10 @@ pub fn add_allowlist_path(
         db::add_allowlist(&db, &addition.path, &addition.label, false)
             .map_err(|e| e.to_string())?;
     }
+    // C53：新白名单目录注册进资产协议范围（与 read_file_text 同一闸门）。
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(PathBuf::from(&addition.path), true);
     list_allowlist_paths(state)
 }
 
