@@ -10,6 +10,7 @@ pub mod paths;
 pub mod power;
 pub mod providers;
 pub mod secure;
+pub mod terminal;
 pub mod timeline;
 pub mod tools;
 pub mod update_log;
@@ -30,6 +31,9 @@ use commands::{
     set_providers, set_selected_model, set_system_settings,
     notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
     AppState,
+};
+use terminal::{
+    list_shells, terminal_close, terminal_create, terminal_resize, terminal_write, TerminalManager,
 };
 use updater::{check_update, download_update};
 use tauri::Manager;
@@ -303,6 +307,9 @@ pub fn run() {
             }
 
             app.manage(AppState::new(api_key, db));
+            // 终端会话表独立于 AppState：它的生命周期跟着窗口走，
+            // 与会话/工作区状态无关。
+            app.manage(TerminalManager::default());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -403,7 +410,12 @@ pub fn run() {
             add_allowlist_path,
             remove_allowlist_path,
             list_timeline,
-            export_timeline
+            export_timeline,
+            list_shells,
+            terminal_create,
+            terminal_write,
+            terminal_resize,
+            terminal_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

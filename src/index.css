@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* xterm 的样式：终端画布的定位、滚动条与选区都在这里。
+   放在全局而不是组件里，避免终端面板被懒加载时样式后到、闪一下空白。 */
+@import "@xterm/xterm/css/xterm.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 

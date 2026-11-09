@@ -70,9 +70,23 @@ import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
 import TimelinePage from "./pages/TimelinePage";
 import OpenInMenu from "./components/OpenInMenu";
-import { PANEL_BODIES, PANEL_ICONS } from "./components/PanelBodies";
+import SidebarTabBar from "./components/SidebarTabBar";
+import SidebarTabBody from "./components/SidebarTabBody";
 import { StoreProvider, useStore } from "./store";
-import { panelRegistry } from "./lib/panels";
+import {
+  START_CONTENT_ID,
+  activateTab,
+  canCloseTab,
+  closeTab,
+  emptyTabsState,
+  loadTabsState,
+  openTab,
+  saveTabsState,
+  terminalContentId,
+  type SidebarTabKind,
+  type SidebarTabsState,
+} from "./lib/sidebarTabs";
+import { disposeTerminalSession } from "./lib/terminalSessions";
 import {
   RIGHTBAR_DEFAULT,
   RIGHTBAR_MAX_RATIO,
@@ -209,8 +223,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     [activeSession?.messages],
   );
   const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
-  const [rightbarTab, setRightbarTab] = useState<string>("files");
   const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
+  /**
+   * 右栏改成标签页后，状态从「选中的分区」变成「标签集合 + 当前标签」。
+   * 存档只认标签的**内容身份**，终端标签不持久化——shell 进程活不过重启。
+   */
+  const [tabsState, setTabsState] = useState<SidebarTabsState>(() => {
+    const saved = loadTabsState();
+    if (saved) return saved;
+    return openTab(emptyTabsState(), "start", START_CONTENT_ID, "开始页");
+  });
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [narrowExpanded, setNarrowExpanded] = useState(false);
@@ -246,7 +268,63 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const rightbarWidthPx = rightbarFullscreen
     ? Math.max(RIGHTBAR_MIN, viewport - cols.sidebar)
     : cols.rightbar || RIGHTBAR_MIN;
-  const panelList = panelRegistry.list();
+
+  /**
+   * 打开一个标签。
+   *
+   * 同类标签的内容身份决定它是不是同一个：
+   * - 文件 / 任务 / 用量 各只有一个，内容身份固定；
+   * - 网页每次新开一个身份（不同标签各自独立的历史）；
+   * - 终端用进程 id 当身份，所以开几个就是几个 shell。
+   */
+  const terminalSeq = useRef(0);
+  const openSidebarTab = useCallback(
+    (kind: SidebarTabKind, params?: Record<string, string>) => {
+      setTabsState((state) => {
+        switch (kind) {
+          case "start":
+            return openTab(state, "start", START_CONTENT_ID, "开始页");
+          case "files":
+            return openTab(state, "files", "workspace", "文件");
+          case "web":
+            return openTab(state, "web", `web:${crypto.randomUUID()}`, "新标签页");
+          case "terminal": {
+            terminalSeq.current += 1;
+            const id = `term${terminalSeq.current}`;
+            const n = state.tabs.filter((t) => t.kind === "terminal").length + 1;
+            return openTab(
+              state,
+              "terminal",
+              terminalContentId(id),
+              `终端 ${n}`,
+              params,
+            );
+          }
+          case "todo":
+            return openTab(state, "todo", "todo", "任务");
+          case "usage":
+            return openTab(state, "usage", "usage", "用量");
+        }
+      });
+    },
+    [],
+  );
+
+  /** 关闭标签。关掉终端标签要把对应的 shell 进程一并结束。 */
+  const closeSidebarTab = useCallback((tabId: string) => {
+    setTabsState((state) => {
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (!tab) return state;
+      if (tab.kind === "terminal") {
+        void disposeTerminalSession(tab.contentId.replace(/^terminal:/, ""));
+      }
+      return closeTab(state, tabId);
+    });
+  }, []);
+
+  useEffect(() => {
+    saveTabsState(tabsState);
+  }, [tabsState]);
 
   /**
    * v0.7.0：拖入文件 → 把路径附加到输入框。
@@ -387,12 +465,36 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         setPaletteQuery("");
         return;
       }
+      // v0.8.0：侧栏三个入口的快捷键，与开始页卡片上标注的一致。
+      // Ctrl+P 在 WebView 里默认是「打印」，必须拦下来；
+      // Ctrl+T 默认是「恢复刚关闭的标签页」，同理。
+      if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === "p") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("files");
+          return;
+        }
+        if (key === "t") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("web");
+          return;
+        }
+        if (e.key === "`" || e.code === "Backquote") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("terminal");
+          return;
+        }
+      }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
       e.preventDefault();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [newSession, openRightbar, openSidebarTab]);
 
   // v0.8.0：正式版吞掉 F12 / Ctrl+Shift+I/J/C，避免终端用户误开检查器。
   // 开发模式（pnpm tauri dev，import.meta.env.PROD=false）**完全不注册**
@@ -725,7 +827,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         <Sidebar
           view={view}
           navBlocks={navBlocks}
-          activePanel={rightbarShown ? rightbarTab : null}
+          activePanel={
+            rightbarShown
+              ? (tabsState.tabs.find((t) => t.id === tabsState.activeId)?.kind ??
+                null)
+              : null
+          }
           onOpenSettings={() => setView("settings")}
           onNavigate={() => setView("chat")}
           width={cols.sidebar}
@@ -836,73 +943,64 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                 aria-hidden
               />
             )}
-            <div className="mx-2 mt-2 mb-1 flex items-center gap-1">
-              {/* 页签走胶囊内凹轨道，与输入框 ModeTabs 同一套语言：
-                  外层浅底容器，选中项白底浮块。tab 列表由注册表派生。 */}
-              <div
-                role="tablist"
-                aria-label="右侧面板"
-                className="flex min-w-0 items-center gap-0.5 rounded-full bg-bubble p-0.5"
-              >
-                {panelList.map((panel) => {
-                  const Icon = PANEL_ICONS[panel.id];
-                  return (
-                    <button
-                      key={panel.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={rightbarTab === panel.id}
-                      aria-current={rightbarTab === panel.id ? "page" : undefined}
-                      onClick={() => setRightbarTab(panel.id)}
-                      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tracking-[0.04em] transition-colors ${
-                        rightbarTab === panel.id
-                          ? "bg-surface text-foreground shadow-sm"
-                          : "text-subtle hover:text-foreground"
-                      }`}
-                    >
-                      {Icon && <Icon size={12} aria-hidden />}
-                      {panel.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => setRightbarFullscreen((v) => !v)}
-                aria-label={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
-                title={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
-                className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                {rightbarFullscreen ? (
-                  <Minimize2 size={13} aria-hidden />
-                ) : (
-                  <Maximize2 size={13} aria-hidden />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={closeRightbar}
-                aria-label="关闭面板"
-                title="关闭面板"
-                className="rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                <PanelRight size={13} aria-hidden />
-              </button>
+            <SidebarTabBar
+              tabs={tabsState.tabs}
+              activeId={tabsState.activeId}
+              canClose={(tabId) => canCloseTab(tabsState, tabId)}
+              onActivate={(tabId) =>
+                setTabsState((state) => activateTab(state, tabId))
+              }
+              onClose={closeSidebarTab}
+              onNew={openSidebarTab}
+              trailing={
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setRightbarFullscreen((v) => !v)}
+                    aria-label={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                    title={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                    className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+                  >
+                    {rightbarFullscreen ? (
+                      <Minimize2 size={13} aria-hidden />
+                    ) : (
+                      <Maximize2 size={13} aria-hidden />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeRightbar}
+                    aria-label="关闭面板"
+                    title="关闭面板"
+                    className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+                  >
+                    <PanelRight size={13} aria-hidden />
+                  </button>
+                </>
+              }
+            />
+            {/* 标签页的正文区。所有标签都保持挂载，未激活的用 hidden 藏起来——
+                终端进程要继续跑，切回来时屏幕还在；xterm 重建后由会话注册表
+                把此前的输出回放进去。 */}
+            <div className="relative min-h-0 flex-1">
+              {tabsState.tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  className={`absolute inset-0 ${
+                    tab.id === tabsState.activeId ? "" : "hidden"
+                  }`}
+                >
+                  <SidebarTabBody
+                    tab={tab}
+                    sessionId={activeId}
+                    view={view}
+                    model={selectedModel}
+                    active={tab.id === tabsState.activeId}
+                    onOpen={openSidebarTab}
+                  />
+                </div>
+              ))}
             </div>
-            {(() => {
-              const Body = PANEL_BODIES[rightbarTab];
-              return Body ? (
-                <Body
-                  sessionId={activeId}
-                  view={view}
-                  model={selectedModel}
-                />
-              ) : (
-                <p className="px-3 py-4 text-[11px] text-subtle">
-                  未注册的面板：{rightbarTab}
-                </p>
-              );
-            })()}
           </aside>
         )}
         {rightbarShown && (

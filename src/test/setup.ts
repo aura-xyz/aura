@@ -14,3 +14,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
 }));
+
+// jsdom 没有 ResizeObserver。终端面板靠它感知容器尺寸变化以同步 PTY 的行列数，
+// 缺了它组件直接抛错，连渲染都到不了。
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
