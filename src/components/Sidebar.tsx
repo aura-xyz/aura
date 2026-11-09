@@ -5,10 +5,11 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { workspaceInitial, workspaceTint } from "../lib/workspaceBadge";
+import { groupSessionsByTime, relativeTime } from "../lib/history";
 import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
@@ -333,69 +334,86 @@ const isOpen = expanded.has(w);
 
                   {isOpen && (
                     <ul className="ml-5 mt-0.5 space-y-0.5">
-                      {wsSessions.map((s) => (
-                        <li key={s.id}>
-                          <div
-                            data-ctx-session={s.id}
-                            className={`group flex items-center rounded-tag transition-colors ${
-                              // 选中态用品牌蓝浅底 + 左侧品牌色竖线，与页签激活线同源
-                              s.id === activeId
-                                ? "bg-bubble-user font-medium text-foreground"
-                                : "hover:bg-bubble"
-                            }`}
-                          >
-                            {s.id === activeId && (
-                              <span
-                                aria-hidden="true"
-                                className="ml-1 h-4 w-0.5 shrink-0 rounded-full bg-brand"
-                              />
-                            )}
-                            {renamingId === s.id ? (
-                              <input
-                                autoFocus
-                                defaultValue={s.title}
-                                onFocus={(e) => e.target.select()}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    renameSession(s.id, e.currentTarget.value);
-                                    cancelRename();
-                                  } else if (e.key === "Escape") {
-                                    cancelRename();
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  renameSession(s.id, e.currentTarget.value);
-                                  cancelRename();
-                                }}
-                                className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  openSession(s.id);
-                                  onNavigate?.();
-                                }}
-                                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
-                              >
-                                {s.title}
-                              </button>
-                            )}
-                            {renamingId !== s.id && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setPendingDelete({ id: s.id, title: s.title })
-                                }
-                                aria-label={`删除对话：${s.title}`}
-                                className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </div>
-                        </li>
-                      ))}
+                      {/* C52：工作区内再按「今天 / 昨天 / 7 天内 / 更早」分段，
+                          节头用 11px eyebrow；空节不渲染，避免一堆空白分组。 */}
+                      {groupSessionsByTime(wsSessions).map((bucket) =>
+                        bucket.sessions.length === 0 ? null : (
+                          <Fragment key={bucket.key}>
+                            <li className="px-2 pb-0.5 pt-1.5 text-[11px] font-medium tracking-[0.06em] text-subtle">
+                              {bucket.label}
+                            </li>
+                            {bucket.sessions.map((s) => (
+                              <li key={s.id}>
+                                <div
+                                  data-ctx-session={s.id}
+                                  className={`group flex items-center rounded-tag transition-colors ${
+                                    // 选中态用品牌蓝浅底 + 左侧品牌色竖线，与页签激活线同源
+                                    s.id === activeId
+                                      ? "bg-bubble-user font-medium text-foreground"
+                                      : "hover:bg-bubble"
+                                  }`}
+                                >
+                                  {s.id === activeId && (
+                                    <span
+                                      aria-hidden="true"
+                                      className="ml-1 h-4 w-0.5 shrink-0 rounded-full bg-brand"
+                                    />
+                                  )}
+                                  {renamingId === s.id ? (
+                                    <input
+                                      autoFocus
+                                      defaultValue={s.title}
+                                      onFocus={(e) => e.target.select()}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          renameSession(s.id, e.currentTarget.value);
+                                          cancelRename();
+                                        } else if (e.key === "Escape") {
+                                          cancelRename();
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        renameSession(s.id, e.currentTarget.value);
+                                        cancelRename();
+                                      }}
+                                      className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
+                                    />
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        openSession(s.id);
+                                        onNavigate?.();
+                                      }}
+                                      className="min-w-0 flex-1 px-2 py-1 text-left"
+                                    >
+                                      <div className="truncate text-sm">{s.title}</div>
+                                      {/* A1 第二段：会话行第二行 11px 相对时间（C52 补齐） */}
+                                      {relativeTime(s.updated_at * 1000) && (
+                                        <div className="truncate text-[11px] text-subtle">
+                                          {relativeTime(s.updated_at * 1000)}
+                                        </div>
+                                      )}
+                                    </button>
+                                  )}
+                                  {renamingId !== s.id && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPendingDelete({ id: s.id, title: s.title })
+                                      }
+                                      aria-label={`删除对话：${s.title}`}
+                                      className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  )}
+                                </div>
+                              </li>
+                            ))}
+                          </Fragment>
+                        ),
+                      )}
                       {wsSessions.length === 0 && (
                         <li className="px-2 py-1.5">
                           <p className="text-xs text-subtle">暂无对话</p>
