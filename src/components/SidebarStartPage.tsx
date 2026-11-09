@@ -12,11 +12,13 @@ import {
   Check,
   ChevronDown,
   Folder,
+  FolderOpen,
   Globe,
   LayoutGrid,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import AnchoredMenu from "./AnchoredMenu";
+import { getWorkspace } from "../lib/api";
 import { listShells, preferredShell, rememberShell, type ShellProfile } from "../lib/terminal";
 
 interface Props {
@@ -40,9 +42,29 @@ interface CardProps {
   aside?: ReactNode;
 }
 
+/**
+ * 入口卡片：**整卡可点**（v0.8.1）。
+ *
+ * 之前只有标题文字是按钮，卡片右侧一大片空白点了没反应——用户的直觉是
+ * 「这张卡」能点。所以把点击放到外层容器上，内部的 shell/更多 下拉自己
+ * `stopPropagation`，避免点下拉时顺手把标签也切换了。
+ */
 function GuideCard({ icon, title, description, shortcut, onPick, aside }: CardProps) {
   return (
-    <div className="flex w-full items-center gap-3 rounded-card border border-line bg-surface px-3 py-2.5 transition-colors hover:border-brand">
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`打开${title}`}
+      onClick={onPick}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPick();
+        }
+      }}
+      className="flex w-full cursor-pointer items-center gap-3 rounded-card border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-brand hover:bg-brand/[0.03] focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand/40"
+    >
       <span
         aria-hidden
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand"
@@ -51,13 +73,9 @@ function GuideCard({ icon, title, description, shortcut, onPick, aside }: CardPr
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onPick}
-            className="truncate text-[13px] font-medium text-foreground transition-colors hover:text-brand"
-          >
+          <span className="truncate text-[13px] font-medium text-foreground">
             {title}
-          </button>
+          </span>
           {aside}
         </span>
         <span className="mt-0.5 block truncate text-[11px] text-subtle">
@@ -79,6 +97,7 @@ export function SidebarStartPage({
   onOpenTerminal,
   onOpenMore,
 }: Props) {
+  const [workspace, setWorkspace] = useState("");
   const [shellOpen, setShellOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [shells, setShells] = useState<ShellProfile[] | null>(null);
@@ -88,6 +107,11 @@ export function SidebarStartPage({
 
   useEffect(() => {
     setSelected(preferredShell());
+    // 开始页得说清「这是哪个工作区」：同一台机器上可能有好几个项目，
+    // 打开文件前不知道自己在哪一层是很常见的不安。
+    void getWorkspace()
+      .then((path) => setWorkspace(path))
+      .catch(() => {});
   }, []);
 
   // 菜单展开时才去枚举 shell：扫 PATH 不该在每次渲染时都做
@@ -117,6 +141,15 @@ export function SidebarStartPage({
 
   return (
     <div className="scrollbar-thin flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-6">
+      {/* 工作区抬头：开始页最大的信息缺口是「我现在在哪个项目里」 */}
+      {workspace && (
+        <div className="mx-auto mb-3 flex w-full max-w-[380px] items-center gap-1.5 rounded-card border border-line bg-surface px-3 py-2">
+          <FolderOpen size={13} className="shrink-0 text-brand" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-[11px] text-subtle" title={workspace}>
+            {workspace}
+          </span>
+        </div>
+      )}
       <div className="mx-auto flex w-full max-w-[380px] flex-col gap-2">
         <GuideCard
           icon={<Folder size={16} aria-hidden />}
@@ -126,42 +159,30 @@ export function SidebarStartPage({
           onPick={onOpenFiles}
         />
 
-        <div className="flex w-full items-center gap-3 rounded-card border border-line bg-surface px-3 py-2.5 transition-colors hover:border-brand">
-          <span
-            aria-hidden
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand"
-          >
-            <TerminalIcon size={16} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onOpenTerminal(selected ?? undefined)}
-                className="truncate text-[13px] font-medium text-foreground transition-colors hover:text-brand"
-              >
-                新建终端
-              </button>
-              <button
-                type="button"
-                ref={shellAnchor}
-                aria-label="选择终端 shell"
-                aria-haspopup="menu"
-                aria-expanded={shellOpen}
-                onClick={() => setShellOpen((v) => !v)}
-                className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                <ChevronDown size={12} aria-hidden />
-              </button>
-            </span>
-            <span className="mt-0.5 block truncate text-[11px] text-subtle">
-              在会话工作区运行命令
-            </span>
-          </span>
-          <kbd className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-subtle">
-            Ctrl + `
-          </kbd>
-        </div>
+        <GuideCard
+          icon={<TerminalIcon size={16} aria-hidden />}
+          title="新建终端"
+          description="在会话工作区运行命令"
+          shortcut="Ctrl + `"
+          onPick={() => onOpenTerminal(selected ?? undefined)}
+          aside={
+            <button
+              type="button"
+              ref={shellAnchor}
+              aria-label="选择终端 shell"
+              aria-haspopup="menu"
+              aria-expanded={shellOpen}
+              onClick={(e) => {
+                // 卡片整体可点，下拉自己处理，别把「新建终端」也触发掉
+                e.stopPropagation();
+                setShellOpen((v) => !v);
+              }}
+              className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <ChevronDown size={12} aria-hidden />
+            </button>
+          }
+        />
 
         <GuideCard
           icon={<Globe size={16} aria-hidden />}
@@ -171,39 +192,28 @@ export function SidebarStartPage({
           onPick={onOpenWeb}
         />
 
-        <div className="flex w-full items-center gap-3 rounded-card border border-line bg-surface px-3 py-2.5 transition-colors hover:border-brand">
-          <span
-            aria-hidden
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-bubble text-subtle"
-          >
-            <LayoutGrid size={16} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onOpenMore("todo")}
-                className="truncate text-[13px] font-medium text-foreground transition-colors hover:text-brand"
-              >
-                更多工具
-              </button>
-              <button
-                type="button"
-                ref={moreAnchor}
-                aria-label="展开更多工具"
-                aria-haspopup="menu"
-                aria-expanded={moreOpen}
-                onClick={() => setMoreOpen((v) => !v)}
-                className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                <ChevronDown size={12} aria-hidden />
-              </button>
-            </span>
-            <span className="mt-0.5 block truncate text-[11px] text-subtle">
-              任务清单、用量统计
-            </span>
-          </span>
-        </div>
+        <GuideCard
+          icon={<LayoutGrid size={16} aria-hidden />}
+          title="更多工具"
+          description="任务清单、用量统计"
+          onPick={() => onOpenMore("todo")}
+          aside={
+            <button
+              type="button"
+              ref={moreAnchor}
+              aria-label="展开更多工具"
+              aria-haspopup="menu"
+              aria-expanded={moreOpen}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMoreOpen((v) => !v);
+              }}
+              className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+            >
+              <ChevronDown size={12} aria-hidden />
+            </button>
+          }
+        />
       </div>
 
       <AnchoredMenu
