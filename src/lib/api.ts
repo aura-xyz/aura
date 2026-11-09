@@ -372,9 +372,11 @@ export function setSystemSettings(
   preventSleep: boolean,
   autostart: boolean,
 ): Promise<SystemSettings> {
-  // 显式用 Rust 侧的 snake_case 键名，不依赖 Tauri 的驼峰转换
+  // Tauri v2 命令参数按 camelCase 匹配（与全库其它 invoke 一致，如 sessionId）。
+  // 曾误用 snake_case（prevent_sleep），Tauri 找不到 preventSleep 会直接报
+  // 「missing required key preventSleep」——切换开关时必现。
   return invoke("set_system_settings", {
-    prevent_sleep: preventSleep,
+    preventSleep,
     autostart,
   });
 }
