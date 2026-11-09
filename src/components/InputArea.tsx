@@ -51,6 +51,7 @@ import MentionMenu from "./MentionMenu";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
 import { StatsPills } from "./StatsPills";
+import { ContextWaterBar } from "./ContextWaterBar";
 import { TurnUsagePanel } from "./TurnUsagePanel";
 import WorkspaceSelect from "./WorkspaceSelect";
 
@@ -760,6 +761,12 @@ export default function InputArea({
         <div className="flex min-w-0 items-center gap-3">
           <StatsPills />
           <TurnUsagePanel />
+          <ContextWaterBar
+            contextLimit={
+              models.find((m) => m.key === selectedModel)?.context_limit ??
+              models.find((m) => m.id === selectedModel)?.context_limit
+            }
+          />
         </div>
         <p className="shrink-0 text-xs text-subtle">
           Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
