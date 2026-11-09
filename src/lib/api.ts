@@ -744,3 +744,41 @@ export function checkUpdate(): Promise<UpdateInfoView | null> {
 export function downloadUpdate(): Promise<void> {
   return invoke("download_update");
 }
+
+// ── 命令审批（v0.8.0 C40/C41）────────────────────────────────
+
+export type ApprovalPolicyId = "strict" | "dangerous" | "auto";
+
+export interface ApprovalPolicyView {
+  policy: ApprovalPolicyId;
+  /** 中文名，直接显示，避免前端再维护一份文案 */
+  label: string;
+  /** `session` = 本会话覆盖，`global` = 继承全局默认 */
+  scope: "session" | "global";
+}
+
+/**
+ * 决议一次审批。返回 `false` 表示后端已无此请求（超时或已决议）。
+ *
+ * `remember` 只在允许时有意义：记住拒绝等于把这条规则永久拉黑，
+ * 而用户往往只是这次不想跑。
+ */
+export function resolveApproval(
+  id: string,
+  approved: boolean,
+  remember = false,
+): Promise<boolean> {
+  return invoke("resolve_approval", { id, approved, remember });
+}
+
+export function getApprovalPolicy(sessionId: string): Promise<ApprovalPolicyView> {
+  return invoke("get_approval_policy", { sessionId });
+}
+
+/** `sessionId` 省略时写全局默认。 */
+export function setApprovalPolicy(
+  policy: ApprovalPolicyId,
+  sessionId?: string,
+): Promise<void> {
+  return invoke("set_approval_policy", { policy, sessionId: sessionId ?? null });
+}

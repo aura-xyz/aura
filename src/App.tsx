@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
+import ApprovalCard from "./components/ApprovalCard";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
 import NoticeStack from "./components/NoticeStack";
@@ -45,6 +46,7 @@ import {
 } from "./lib/contextMenuItems";
 import { copyText } from "./lib/clipboard";
 import { downloadSessionZip } from "./lib/exportSession";
+import { bindApprovalEvents } from "./lib/approvals";
 import { notify } from "./lib/notices";
 import { recordUse } from "./lib/frecency";
 import { CONTENT_WIDTH } from "./lib/layout";
@@ -242,6 +244,21 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     const onResize = () => setViewport(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // 命令审批事件（v0.8.0 C41）。绑在 Shell 上而不是审批卡里：
+  // 用户可能正在设置页翻东西，后端照样会发请求，卡片挂载时再订阅就漏了。
+  useEffect(() => {
+    let unbind: (() => void) | undefined;
+    let disposed = false;
+    void bindApprovalEvents().then((un) => {
+      if (disposed) un();
+      else unbind = un;
+    });
+    return () => {
+      disposed = true;
+      unbind?.();
+    };
   }, []);
 
   // 面板卸载后复位全屏态，避免下次打开仍是全屏（过渡 hook 不感知全屏）
@@ -918,6 +935,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                 />
               </div>
               {dropBanner}
+              {activeSession && <ApprovalCard sessionId={activeSession.id} />}
               <InputArea {...inputProps} />
             </>
           )}
