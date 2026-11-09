@@ -20,8 +20,9 @@
 //! 非 Windows 平台使用 SecretService（keyring crate）做加密，不再明文直穿。
 //! Windows 保留 DPAPI。
 
+// keyring 1.x 的公开入口是 `Entry`（`Keyring` 只存在于更老的版本）。
 #[cfg(not(windows))]
-use keyring::Keyring;
+use keyring::Entry;
 
 /// 附加熵，Windows DPAPI 加解密必须一致。
 const ENTROPY: &[u8] = b"aura-local-secret-v1";
@@ -57,7 +58,7 @@ pub fn protect(plain: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     {
         let _ = ENTROPY;
-        let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
+        let kr = Entry::new(KEYRING_SERVICE, KEYRING_USER);
         kr.set_password(plain)
             .map_err(|e| format!("保存 API Key 失败：{e}。{KEYRING_HINT}"))?;
         Ok(KEYRING_MARKER.to_string())
@@ -78,7 +79,7 @@ pub fn unprotect(blob: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     {
         if let Some(_rest) = blob.strip_prefix(KEYRING_MARKER) {
-            let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
+            let kr = Entry::new(KEYRING_SERVICE, KEYRING_USER);
             return kr
                 .get_password()
                 .map_err(|e| format!("读取 API Key 失败：{e}。{KEYRING_HINT}"));
