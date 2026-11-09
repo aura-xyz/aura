@@ -72,6 +72,10 @@ tauri-plugin-os = "2"
 url = "2"
 # Linux 上 API Key 加密使用 SecretService（keyring crate）。Windows 保留 DPAPI。
 keyring = "1"
+# 降级档：Linux 上没有 SecretService 时，用 AES-256-GCM 加密整份配置，
+# 主密钥随机生成并以 0600 权限存在应用数据目录。
+aes-gcm = "0.10"
+getrandom = "0.2"
 portable-pty = "0.9.0"
 
 # Unix 下按进程组整树终结（proc_group.rs）：killpg 需要 libc。

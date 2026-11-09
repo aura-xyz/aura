@@ -337,6 +337,32 @@ pub async fn stop_message(
     Ok(())
 }
 
+/// 当前密钥存储后端的状态（v0.8.1 C45/C47）。
+///
+/// 设置页据此显示「你的 Key 存在哪、强度如何」——降级档必须让用户知情。
+#[derive(serde::Serialize)]
+pub struct KeyStoreStatus {
+    /// 后端名（Windows DPAPI / 系统密钥环 / 应用内文件加密）
+    pub name: String,
+    /// 强度说明
+    pub strength: String,
+    /// 是否可用
+    pub available: bool,
+    /// 是否为**降级档**（弱于系统密钥环）
+    pub degraded: bool,
+}
+
+#[tauri::command]
+pub fn get_keystore_status() -> KeyStoreStatus {
+    let store = crate::secure_store::choose_store();
+    KeyStoreStatus {
+        name: store.name().to_string(),
+        strength: store.strength().to_string(),
+        available: store.available(),
+        degraded: store.kind() == crate::secure_store::StoreKind::File,
+    }
+}
+
 /// 审批策略的当前取值。
 ///
 /// 返回 `scope` 是为了让界面能如实显示「这条是会话级设置」还是
@@ -733,7 +759,34 @@ pub fn set_selected_model(state: State<'_, AppState>, id: String) -> Result<(), 
 #[derive(serde::Serialize)]
 pub struct ApiConfig {
     pub provider: String,
+    /// **掩码后的** Key（形如 `sk-***8f2a`），不是真 Key。
+    ///
+    /// v0.8.1 之前这里回传的是完整 Key：设置页一打开，密钥就进了前端
+    /// 的内存与任何一次调试导出。掩码后用户仍能认出「这是哪个 Key」，
+    /// 但拿不到它。
     pub api_key: String,
+    /// 是否已配置 Key（前端据此显示「已保存」而不是空输入框）。
+    pub has_key: bool,
+}
+
+/// 生成 Key 掩码：前 3 后 4，中间用 `***`。
+///
+/// 短 Key（≤ 8 位）只显示前 1 后 1——掩码比原 Key 还长就毫无意义，
+/// 而且会把完整 Key 拼出来。
+pub fn mask_key(key: &str) -> String {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 8 {
+        let head = chars.first().copied().unwrap_or('*');
+        let tail = chars.last().copied().unwrap_or('*');
+        return format!("{head}***{tail}");
+    }
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}***{tail}")
 }
 
 /// 返回全部供应商配置（设置页编辑用）。
@@ -1915,10 +1968,45 @@ pub fn get_api_config(state: State<'_, AppState>) -> ApiConfig {
     let cfg = state.router.config();
     // 取第一个启用的供应商，不再硬编码 OpenRouter
     let target = cfg.providers.iter().find(|p| p.enabled);
+    let key = target.map(|p| p.api_key.clone()).unwrap_or_default();
     ApiConfig {
         provider: target.map(|p| p.id.clone()).unwrap_or_default(),
-        api_key: target.map(|p| p.api_key.clone()).unwrap_or_default(),
+        api_key: mask_key(&key),
+        has_key: !key.trim().is_empty(),
     }
+}
+
+/// 清除某个供应商的 API Key（v0.8.1 C46）。
+///
+/// 单独一条命令，而不是靠 `set_api_config` 传空串——空串在旧语义里表示
+/// 「不变」，用户想删 Key 时分不清自己是没生效还是没触发。
+#[tauri::command]
+pub fn clear_provider_key(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<(), String> {
+    let target_id = {
+        let cfg = state.router.config();
+        cfg.providers
+            .iter()
+            .find(|p| p.id == provider)
+            .map(|p| p.id.clone())
+            .ok_or_else(|| "供应商不存在".to_string())?
+    };
+    state.router.set_provider_key(&target_id, Some(String::new()));
+    let mut cfg = state.router.config();
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::api::config::save_config(&db, &cfg)?;
+    }
+    crate::security::log_simple(
+        crate::security::Kind::BlockedCommand,
+        "",
+        &target_id,
+        "用户清除了该供应商的 API Key",
+        "clear_provider_key",
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -2161,6 +2249,18 @@ pub fn write_export_bundle(path: String, bytes: Vec<u8>) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// 掩码：只露头尾，不能反推出完整 Key。
+    #[test]
+    fn mask_key_hides_the_middle() {
+        assert_eq!(mask_key("sk-or-v1-0123456789abcdef"), "sk-***cdef");
+        assert_eq!(mask_key(""), "");
+        assert_eq!(mask_key("   "), "");
+        // 短 Key 不该被拼出全文
+        let short = mask_key("abc");
+        assert!(short.contains("***"));
+        assert!(!short.contains("abc"), "短 Key 掩码不能还原原文: {short}");
+    }
 
     /// 停止操作的归属判定：只有正在跑的那个会话才能停掉它。
     ///

@@ -20,17 +20,13 @@
 //! 非 Windows 平台使用 SecretService（keyring crate）做加密，不再明文直穿。
 //! Windows 保留 DPAPI。
 
-// keyring 1.x 的公开入口是 `Entry`（`Keyring` 只存在于更老的版本）。
-#[cfg(not(windows))]
-use keyring::Entry;
-
 /// 附加熵，Windows DPAPI 加解密必须一致。
-const ENTROPY: &[u8] = b"aura-local-secret-v1";
+pub(crate) const ENTROPY: &[u8] = b"aura-local-secret-v1";
 
 /// Linux 上标记密文由 keyring 保管的前缀。`protect` 输出此标记，
 /// 实际密文存在 SecretService 中；`unprotect` 识别此前缀后从 keyring 读取。
 #[cfg(not(windows))]
-const KEYRING_MARKER: &str = "keyring:";
+pub(crate) const KEYRING_MARKER: &str = "keyring:";
 
 /// 密钥服务不可用时的排查提示。
 ///
@@ -42,55 +38,28 @@ pub const KEYRING_HINT: &str =
 
 /// keyring 的服务名与账户名。
 #[cfg(not(windows))]
-const KEYRING_SERVICE: &str = "aura";
+pub(crate) const KEYRING_SERVICE: &str = "aura";
 #[cfg(not(windows))]
-const KEYRING_USER: &str = "api_key";
+pub(crate) const KEYRING_USER: &str = "api_key";
 
-/// 加密，输出 hex 字符串（Windows）或 keyring 标记（Linux）。
+/// 加密，输出可持久化的 blob。
 ///
-/// 失败时返回 Err 而非回落明文：调用方（`save_config`）应让保存失败，
-/// 静默写成明文等于悄悄拆掉这道防线。
+/// 实现已搬到 [`crate::secure_store`]：按平台挑选后端（Windows DPAPI /
+/// 系统密钥环 / 文件加密降级档），并给密文加类型前缀以便分派解密。
 pub fn protect(plain: &str) -> Result<String, String> {
-    #[cfg(windows)]
-    {
-        win::protect(plain.as_bytes(), ENTROPY).map(|bytes| hex_encode(&bytes))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = ENTROPY;
-        let kr = Entry::new(KEYRING_SERVICE, KEYRING_USER);
-        kr.set_password(plain)
-            .map_err(|e| format!("保存 API Key 失败：{e}。{KEYRING_HINT}"))?;
-        Ok(KEYRING_MARKER.to_string())
-    }
+    crate::secure_store::protect(plain)
 }
 
-/// 解密 hex 密文（Windows）或 keyring 标记（Linux）。
+/// 解密 blob。
 ///
-/// 输入不是合法 hex、或不是本应用加密的 blob 时返回 Err——调用方
-/// （`load_config`）据此走「旧版明文」兼容分支。
+/// 按前缀分派：文件加密档 / 系统密钥环 / 旧格式（Windows 视为 DPAPI hex，
+/// 非 Windows 视为 v0.6.0 之前的明文）。
 pub fn unprotect(blob: &str) -> Result<String, String> {
-    #[cfg(windows)]
-    {
-        let bytes = hex_decode(blob)?;
-        let plain = win::unprotect(&bytes, ENTROPY)?;
-        String::from_utf8(plain).map_err(|e| format!("解密结果不是合法 UTF-8: {}", e))
-    }
-    #[cfg(not(windows))]
-    {
-        if let Some(_rest) = blob.strip_prefix(KEYRING_MARKER) {
-            let kr = Entry::new(KEYRING_SERVICE, KEYRING_USER);
-            return kr
-                .get_password()
-                .map_err(|e| format!("读取 API Key 失败：{e}。{KEYRING_HINT}"));
-        }
-        // 非 keyring 标记：旧版明文兼容，按明文返回
-        Ok(blob.to_string())
-    }
+    crate::secure_store::unprotect(blob)
 }
 
 #[cfg(windows)]
-mod win {
+pub(crate) mod win {
     use std::os::raw::c_void;
 
     #[repr(C)]
@@ -212,7 +181,7 @@ mod win {
 }
 
 #[cfg(windows)]
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
@@ -222,7 +191,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
     if s.len() % 2 != 0 {
         return Err("hex 长度不为偶数".into());

@@ -11,6 +11,7 @@ pub mod proc_group;
 pub mod power;
 pub mod providers;
 pub mod secure;
+pub mod secure_store;
 pub mod security;
 pub mod terminal;
 pub mod timeline;
@@ -31,7 +32,8 @@ use commands::{
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, save_provider_catalog,
     set_providers, set_selected_model, set_system_settings,
-    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_approval_policy, set_approval_policy,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_keystore_status, get_approval_policy, set_approval_policy,
+    clear_provider_key,
     security_list_events, security_export_events, truncate_history,
     AppState,
 };
@@ -309,6 +311,13 @@ pub fn run() {
                 }
             }
 
+            // 密钥存储降级档要在应用数据目录放主密钥（v0.8.1 C45）。
+            // 目录可能还不存在，顺手建出来。
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                crate::secure_store::set_data_dir(dir);
+            }
+
             app.manage(AppState::new(api_key, db));
 
             // 安全事件落库通道（v0.8.0 C42）。工具层是纯函数，拿不到
@@ -384,6 +393,7 @@ pub fn run() {
             send_message,
             stop_message,
             resolve_approval,
+            get_keystore_status,
             security_list_events,
             security_export_events,
             get_approval_policy,
@@ -407,6 +417,7 @@ pub fn run() {
             set_selected_model,
             get_api_config,
             set_api_config,
+            clear_provider_key,
             get_providers,
             set_providers,
             get_provider_statuses,
