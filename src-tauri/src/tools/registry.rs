@@ -24,11 +24,41 @@ pub enum ToolKind {
     Exec,
 }
 
+/// 工具来源（v0.8.1 C50）。
+///
+/// 为什么要记来源：rc.3 起 MCP 服务器会把自己的工具挂进同一张注册表，
+/// 届时「这个工具是 Aura 自带的还是某个 MCP 服务器的」必须一眼可辨——
+/// 提示词分组、审批分级、错误提示都要用得上。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolSource {
+    /// Aura 内置工具
+    Builtin,
+    /// 来自某个 MCP 服务器
+    Mcp {
+        /// 服务器名（用于分组显示与审批归属）
+        server: String,
+    },
+}
+
+impl ToolSource {
+    /// 分组标题（提示词里按来源分段用）。
+    pub fn group_title(&self) -> String {
+        match self {
+            ToolSource::Builtin => "内置工具".to_string(),
+            ToolSource::Mcp { server } => format!("MCP 工具（{server}）"),
+        }
+    }
+}
+
 /// 单个工具的完整描述与实现。
 pub struct ToolSpec {
     /// 工具名（归一化后的小写下划线形式）
     pub name: &'static str,
     pub kind: ToolKind,
+    /// 工具来源（v0.8.1 C50）
+    pub source: ToolSource,
+    /// MCP 工具的参数 schema（内置工具为 None）
+    pub input_schema: Option<String>,
     /// System Prompt 中的说明
     pub desc: &'static str,
     /// System Prompt 中的参数示例
@@ -54,6 +84,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "list_files",
         kind: ToolKind::Read,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "单层列举目录，不递归。返回该层的文件与子目录列表，子目录以 / 结尾。",
         example: "{\"path\": \"src/\"}（以 / 开头表示工作区根目录，如 /src/main.rs）",
         run: fs_ops::list_files,
@@ -63,6 +95,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_file",
         kind: ToolKind::Read,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "读取文本文件的指定行区间，返回带行号的内容。",
         example: "{\"path\": \"src/main.rs\", \"start_line\": 1, \"end_line\": \"end\"}（end_line 也可为数字）",
         run: fs_ops::read_file,
@@ -72,6 +106,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "search_workspace",
         kind: ToolKind::Read,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "在工作区全文检索，返回带文件路径和行号的片段。",
         example: "{\"query\": \"关键词\"}",
         run: search::search_workspace,
@@ -85,6 +121,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "load_skill",
         kind: ToolKind::Read,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "加载指定技能（Skill）的完整指引。技能清单见系统提示中的「技能」一节；\
                某个技能的用途与当前任务匹配时必须先加载它，再严格按指引执行。\n\
                技能目录里若还有参考文档、模板或脚本，用 `file` 参数按相对路径读取\
@@ -97,6 +135,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "write_file",
         kind: ToolKind::Write,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "创建新文件或**全量覆写**整个文件；父目录不存在会自动创建。\n\
                仅在「新建文件」或「整体重写」时使用，小范围改动请用 string_replace。",
         example: "{\"path\": \"src/main.rs\", \"content\": \"完整文件内容\"}",
@@ -107,6 +147,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "string_replace",
         kind: ToolKind::Write,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "把文件中一处**精确匹配**的字符串替换为新字符串，最省 Token 的改法。\n\
                old_string 必须唯一命中；出现多次时补充上下文，或加 \"replace_all\": true 全量替换。",
         example: "{\"path\": \"src/main.rs\", \"old_string\": \"原文本\", \"new_string\": \"新文本\"}",
@@ -117,6 +159,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "replace_lines",
         kind: ToolKind::Write,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "按行号区间整段替换，new_content 是该区间**替换后的完整文本**。\n\
                适用于成块重写（如重写一个函数）。改单行优先用 string_replace。",
         example: "{\"path\": \"src/main.rs\", \"start_line\": 10, \"end_line\": 20, \"new_content\": \"新的内容\"}",
@@ -127,6 +171,8 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "run_script",
         kind: ToolKind::Exec,
+        source: ToolSource::Builtin,
+        input_schema: None,
         desc: "在工作区根目录执行一条命令（支持管道等复合命令），返回退出码与输出。\n\
                用于「改完代码后编译/测试」这类验证闭环；输出过长会自动截断。\n\
                危险命令（递归删除根目录、格式化磁盘等）会被拦截。",
@@ -166,6 +212,9 @@ pub fn max_consecutive(name: &str) -> u32 {
 }
 
 /// 生成 System Prompt 的「可用工具」段落，仅包含指定分类的工具。
+///
+/// **按来源分组**（v0.8.1 C50）：MCP 工具与内置工具分节列出，
+/// 模型能看出某个工具要连哪台服务器；rc.3 挂载 MCP 工具时不用再改这里。
 pub fn prompt_section(kinds: &[ToolKind]) -> String {
     let mut s = String::from(
         "\n# 可用工具\n\
@@ -173,8 +222,17 @@ pub fn prompt_section(kinds: &[ToolKind]) -> String {
          <tool>{\"name\": \"工具名\", \"args\": {参数}}</tool>\n\n",
     );
     let mut idx = 1usize;
+    let mut current_group: Option<String> = None;
     for t in TOOLS.iter().filter(|t| kinds.contains(&t.kind)) {
+        let title = t.source.group_title();
+        if current_group.as_deref() != Some(title.as_str()) {
+            s.push_str(&format!("\n## {title}\n"));
+            current_group = Some(title);
+        }
         s.push_str(&format!("{}. {}：{}\n   {}\n", idx, t.name, t.desc, t.example));
+        if let Some(schema) = &t.input_schema {
+            s.push_str(&format!("   参数 schema：{schema}\n"));
+        }
         idx += 1;
     }
     s

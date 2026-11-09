@@ -1,5 +1,6 @@
 pub mod exec;
 pub mod fs_ops;
+pub mod async_tool;
 pub mod registry;
 pub mod scope;
 pub mod search;
@@ -301,13 +302,12 @@ pub async fn execute(
     args: Value,
 ) -> Result<ToolOutput, ToolFail> {
     let label = tool_label(&name, &args);
+    // 分发走 AsyncTool trait（v0.8.1 C50）：内置工具内部包 spawn_blocking，
+    // MCP 工具（rc.3）直接 await 网络调用，调用方无差别。
     let result = match registry::find(&name) {
         Some(spec) => {
-            let run = spec.run;
-            match tokio::task::spawn_blocking(move || run(&scope, &args)).await {
-                Ok(r) => r,
-                Err(e) => Err(format!("工具执行异常: {}", e)),
-            }
+            let tool = async_tool::adapter(spec);
+            tool.run(scope, args).await
         }
         None => Err(format!("未知工具: {}", name)),
     };
