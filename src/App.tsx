@@ -957,8 +957,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
             style={{ width: rightbarWidthPx }}
           >
             {!rightbarFullscreen && (
-              {/* 拖拽手柄：加宽到 6px 并给一条居中的抓手线——
-                  原来只有 1px 宽、hover 才显色，几乎没人发现得了它能拖。 */}
+              // 拖拽手柄：加宽到 6px 并给一条居中的抓手线——
+              // 原来只有 1px 宽、hover 才显色，几乎没人发现得了它能拖。
+              // 注意这里在 JS 表达式里，注释必须是 // 而不是 {/* */}。
               <div
                 className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize"
                 onPointerDown={startDrag("rightbar")}
