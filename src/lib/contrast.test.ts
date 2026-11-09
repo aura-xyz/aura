@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contrastRatioFixed, meetsAA } from "./contrast";
+import { ACCENTS, ACCENT_IDS } from "./theme";
 
 // 令牌值镜像 src/index.css。改动 index.css 时必须同步这里，
 // 否则测试会变成「校验旧值」的假阴性。
@@ -104,5 +105,39 @@ describe("气泡底可辨识度", () => {
 
   it("暗色下用户/AI 气泡底可区分", () => {
     expect(contrastRatioFixed(DARK.bubbleUser, DARK.bubble)).toBeGreaterThan(1.2);
+  });
+
+});
+describe("强调色五档的对比度", () => {
+  /// C29 的硬约束：换强调色不能让链接或用户气泡文字掉出 AA。
+  /// 表在 lib/theme.ts，CSS 里的 [data-accent] 块必须与之同步。
+  it("每档的 link 在亮暗两种底色上都不低于 4.5:1", () => {
+    for (const id of ACCENT_IDS) {
+      const { light, dark } = ACCENTS[id];
+      expect(
+        meetsAA(light.link, "#ffffff"),
+        `${id} 亮色链接在白底上不达标`,
+      ).toBe(true);
+      expect(
+        meetsAA(light.link, "#f5f5f7"),
+        `${id} 亮色链接在凹陷面上不达标`,
+      ).toBe(true);
+      expect(
+        meetsAA(dark.link, "#0a0a0a"),
+        `${id} 暗色链接在纯黑上不达标`,
+      ).toBe(true);
+      expect(
+        meetsAA(dark.link, "#1c1c1e"),
+        `${id} 暗色链接在凹陷面上不达标`,
+      ).toBe(true);
+    }
+  });
+
+  it("每档的用户气泡里，正文仍然可读", () => {
+    for (const id of ACCENT_IDS) {
+      const { light, dark } = ACCENTS[id];
+      expect(meetsAA("#3a3a3c", light.bubbleUser), `${id} 亮色气泡正文`).toBe(true);
+      expect(meetsAA("#f5f5f7", dark.bubbleUser), `${id} 暗色气泡正文`).toBe(true);
+    }
   });
 });

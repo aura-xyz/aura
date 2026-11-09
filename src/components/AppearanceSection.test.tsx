@@ -7,8 +7,10 @@ type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 function api(overrides: Partial<ThemeApi> = {}): ThemeApi {
   return {
     theme: "light",
+    accent: "blue",
     resolved: "light",
     setTheme: vi.fn(),
+    setAccent: vi.fn(),
     fontSize: 15,
     codeFontSize: 11,
     terminalFontSize: 13,
@@ -88,5 +90,20 @@ describe("外观设置", () => {
     const lightBtn = screen.getByRole("button", { name: "亮色" });
     expect(lightBtn.querySelectorAll("span[aria-hidden] span").length).toBe(2);
     expect(container).toBeTruthy();
+  });
+
+  /// C29：五档强调色，点一下写进主题设置
+  it("强调色五选一，选中态可辨", () => {
+    const t = api();
+    render(<AppearanceSection theme={t} />);
+    const group = screen.getByRole("group", { name: "强调色" });
+    expect(group.querySelectorAll("button")).toHaveLength(5);
+    // 默认蓝色已选中
+    expect(screen.getByRole("button", { name: "蓝" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "紫" }));
+    expect(t.setAccent).toHaveBeenCalledWith("purple");
   });
 });

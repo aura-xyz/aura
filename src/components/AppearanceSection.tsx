@@ -4,10 +4,15 @@
  * 此前只画亮/暗两个按钮，而 useTheme 已经支持 system 与 text/code/terminal
  * 三档字号 —— 数据模型有、界面没有入口，等于功能不存在。
  */
-import { FONT_SIZE_MAX, FONT_SIZE_MIN } from "../lib/theme";
+import {
+  ACCENTS,
+  ACCENT_IDS,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+} from "../lib/theme";
 import { saveMarkdownLive } from "../lib/markdownLive";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
-import { RotateCcw } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
 
 type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 
@@ -80,6 +85,35 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
               {t.label}
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* 强调色：五档覆盖 --brand / --link / --bubble-user，
+          色值全部过了对比度门禁（见 contrast.test） */}
+      <div className="mt-6 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium">强调色</span>
+        <div role="group" aria-label="强调色" className="flex items-center gap-2">
+          {ACCENT_IDS.map((id) => {
+            const selected = theme.accent === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => theme.setAccent(id)}
+                aria-label={ACCENTS[id].label}
+                aria-pressed={selected}
+                title={`强调色：${ACCENTS[id].label}`}
+                style={{ backgroundColor: ACCENTS[id].light.brand }}
+                className={`flex h-6 w-6 items-center justify-center rounded-full transition-transform hover:scale-110 ${
+                  selected ? "ring-2 ring-offset-2 ring-offset-surface" : ""
+                }`}
+              >
+                {selected && (
+                  <Check size={12} className="text-white" aria-hidden />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 

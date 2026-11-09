@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type AccentId,
   type ThemeSettings,
   type ThemePreference,
   type FontRole,
@@ -51,6 +52,14 @@ export function useTheme() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  const updateAccent = useCallback((next: AccentId) => {
+    setSettings((prev) => {
+      const nextSettings = { ...prev, accent: next };
+      saveTheme(nextSettings);
+      return nextSettings;
+    });
+  }, []);
+
   const update = useCallback((next: ThemePreference) => {
     setSettings((prev) => {
       const nextSettings = { ...prev, preference: next };
@@ -92,6 +101,8 @@ export function useTheme() {
     root.style.colorScheme = resolved;
     // 与 dsh theme-presenter 一致，供将来原生标题栏跟随主题
     root.dataset.dsThemeSource = settings.preference;
+    // 强调色由 CSS 按 data-accent 覆盖 --brand/--link/--bubble-user
+    root.dataset.accent = settings.accent;
     const body = document.body;
     for (const role of ["text", "code", "terminal"] as const) {
       const value = settings[fontSizeField(role)];
@@ -101,8 +112,10 @@ export function useTheme() {
 
   return {
     theme: settings.preference,
+    accent: settings.accent,
     resolved,
     setTheme: update,
+    setAccent: updateAccent,
     fontSize: settings.fontSize,
     codeFontSize: settings.codeFontSize,
     terminalFontSize: settings.terminalFontSize,

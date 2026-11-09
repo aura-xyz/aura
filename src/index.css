@@ -766,6 +766,64 @@
 }
 
 /* ---------------------------------------------------------------
+   强调色五档（v0.8.0）
+   --------------------------------------------------------------- */
+/* 由 document.documentElement 的 data-accent 切换，只覆盖四个语义色令牌；
+   值必须与 lib/theme.ts 的 ACCENTS 表一致（contrast.test 逐档校验 AA）。
+   blue 是默认档，即上面的 :root / .dark 原值，这里不再重复声明。 */
+[data-accent="purple"] {
+  --brand: #6b3fd4;
+  --brand-strong: #5a33b8;
+  --link: #6b3fd4;
+  --bubble-user: #e2dbf7;
+}
+
+.dark[data-accent="purple"] {
+  --brand: #b39cff;
+  --link: #b39cff;
+  --bubble-user: #2a2338;
+}
+
+[data-accent="green"] {
+  --brand: #1f7a45;
+  --brand-strong: #196139;
+  --link: #1f7a45;
+  --bubble-user: #d6ebdf;
+}
+
+.dark[data-accent="green"] {
+  --brand: #4ade80;
+  --link: #4ade80;
+  --bubble-user: #1f2a24;
+}
+
+[data-accent="orange"] {
+  --brand: #b25000;
+  --brand-strong: #964300;
+  --link: #b25000;
+  --bubble-user: #fae0c9;
+}
+
+.dark[data-accent="orange"] {
+  --brand: #ffb066;
+  --link: #ffb066;
+  --bubble-user: #33261a;
+}
+
+[data-accent="pink"] {
+  --brand: #b8005e;
+  --brand-strong: #9c004f;
+  --link: #b8005e;
+  --bubble-user: #fbd9e8;
+}
+
+.dark[data-accent="pink"] {
+  --brand: #ff8fc0;
+  --link: #ff8fc0;
+  --bubble-user: #331f28;
+}
+
+/* ---------------------------------------------------------------
    设置页主题预览方块
    --------------------------------------------------------------- */
 /* 跟随系统的斜分预览：一半亮一半暗，45° 切分。写进 CSS 而不是内联
