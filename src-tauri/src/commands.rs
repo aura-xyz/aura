@@ -1478,6 +1478,10 @@ pub struct DirEntryView {
     pub size: u64,
     /// 修改时间（Unix 毫秒，0 表示读不到）
     pub modified_ms: u64,
+    /// 绝对路径（不含 `\\?\` 扩展前缀，盘符用正斜杠）。
+    /// 图片预览走 asset protocol 时，前端据此拼 `asset://` URL 定位真实文件；
+    /// 与 `path`（工作区相对、用于后续 list/read）互为补充。
+    pub absolute_path: String,
 }
 
 /// 列出工作区里匹配的文件（`@` 引用面板用）。
@@ -1629,6 +1633,15 @@ pub fn list_directory(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        // 绝对路径：以已解析的目录绝对路径为基拼接文件名，再剥离 `\\?\`
+        // 扩展前缀、统一为正斜杠——前端拿来直接拼 `asset://localhost/<此路径>`，
+        // 资产协议侧会自行 canonicalize 命中 scope，无需我们保留前缀。
+        let abs = target.join(&name);
+        let abs_str = abs.to_string_lossy().to_string();
+        let abs_str = abs_str
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&abs_str)
+            .replace('\\', "/");
         out.push(DirEntryView {
             name,
             // 工作区相对路径（前导 /）；工作区外的白名单目录才用盘符绝对路径。
@@ -1637,6 +1650,7 @@ pub fn list_directory(
             is_dir,
             size,
             modified_ms,
+            absolute_path: abs_str,
         });
     }
 

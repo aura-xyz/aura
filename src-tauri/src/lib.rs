@@ -159,16 +159,25 @@ mod nav_tests {
 /// 绝不放大访问范围——只放行已经授权读写的目录，未存在的目录跳过。
 fn register_asset_scope(app: &tauri::AppHandle, db: &rusqlite::Connection) {
     let scope = app.asset_protocol_scope();
+    // 注册时同时登记「原始路径」与「规范化路径」两种形态：
+    // 资产协议侧会把请求路径 canonicalize 成 `\\?\...` 形态再做 scope 匹配，
+    // 只登记一种会因前缀不一致而 403。两者都登记即可覆盖。
+    let register = |scope: &tauri::scope::fs::Scope, p: std::path::PathBuf| {
+        if !p.is_dir() {
+            return;
+        }
+        let _ = scope.allow_directory(p.clone(), true);
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            let _ = scope.allow_directory(c, true);
+        }
+    };
     if let Ok(ws) = db::list_workspaces(db) {
         for w in ws {
-            let p = std::path::PathBuf::from(&w);
-            if p.is_dir() {
-                let _ = scope.allow_directory(p, true);
-            }
+            register(&scope, std::path::PathBuf::from(&w));
         }
     }
     for p in crate::commands::allowlist_paths(db) {
-        let _ = scope.allow_directory(p, true);
+        register(&scope, p);
     }
 }
 

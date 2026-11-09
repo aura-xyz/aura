@@ -290,6 +290,12 @@ export interface DirEntry {
   size: number;
   /** 修改时间（Unix 毫秒，0 表示读不到） */
   modified_ms: number;
+  /**
+   * 绝对路径（不含 `\\?\` 前缀，正斜杠）。
+   * 图片预览走 asset protocol 时前端据此拼 `asset://localhost/<此路径>`；
+   * 旧后端可能不含此字段，调用方需做空值兜底。
+   */
+  absolute_path?: string;
 }
 
 /**
