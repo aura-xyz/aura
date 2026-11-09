@@ -31,6 +31,14 @@ const ENTROPY: &[u8] = b"aura-local-secret-v1";
 #[cfg(not(windows))]
 const KEYRING_MARKER: &str = "keyring:";
 
+/// 密钥服务不可用时的排查提示。
+///
+/// Linux 桌面上最常见的失败是「没有 SecretService」：精简发行版没装
+/// gnome-keyring，或者装了但会话里没启动；KDE 下还需要 Wallet 的兼容层。
+/// 只说「保存失败」用户无从下手，所以把三条出路写进错误里。
+pub const KEYRING_HINT: &str =
+    "未检测到系统密钥服务：请安装并启动 gnome-keyring，或在 KDE 中启用 Wallet 的 SecretService 兼容层";
+
 /// keyring 的服务名与账户名。
 #[cfg(not(windows))]
 const KEYRING_SERVICE: &str = "aura";
@@ -51,7 +59,7 @@ pub fn protect(plain: &str) -> Result<String, String> {
         let _ = ENTROPY;
         let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
         kr.set_password(plain)
-            .map_err(|e| format!("keyring 保存密码失败: {e}"))?;
+            .map_err(|e| format!("保存 API Key 失败：{e}。{KEYRING_HINT}"))?;
         Ok(KEYRING_MARKER.to_string())
     }
 }
@@ -71,7 +79,9 @@ pub fn unprotect(blob: &str) -> Result<String, String> {
     {
         if let Some(_rest) = blob.strip_prefix(KEYRING_MARKER) {
             let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
-            return kr.get_password().map_err(|e| format!("keyring 读取密码失败: {e}"));
+            return kr
+                .get_password()
+                .map_err(|e| format!("读取 API Key 失败：{e}。{KEYRING_HINT}"));
         }
         // 非 keyring 标记：旧版明文兼容，按明文返回
         Ok(blob.to_string())
@@ -339,5 +349,15 @@ mod tests {
             let back = hex_decode(&s).unwrap();
             assert_eq!(back, vec![byte, 0xab, 0xff]);
         }
+    }
+
+    /// 提示语不能只说「失败」：得同时告诉用户缺什么、装哪个包、
+    /// KDE 下还要做什么，否则照样无从下手。
+    #[test]
+    fn keyring_hint_names_package_and_kde_path() {
+        assert!(KEYRING_HINT.contains("gnome-keyring"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("KDE"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("SecretService"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("未检测到系统密钥服务"), "{KEYRING_HINT}");
     }
 }
