@@ -172,6 +172,15 @@ pub fn ensure_allowed(scope: &AccessScope, target: &Path) -> Result<PathBuf, Str
         .canonicalize()
         .map_err(|e| format!("路径不存在或无法访问: {}", e))?;
     if !scope.allows(&target_c) {
+        // 越权访问是最值得留痕的一类：模型「猜到」了工作区外的路径时，
+        // 用户需要知道它试过。
+        crate::security::log_simple(
+            crate::security::Kind::PathDenied,
+            "",
+            &target_c.to_string_lossy(),
+            "路径越出允许访问的范围（工作区与已授权目录）",
+            "path_scope",
+        );
         return Err("路径越出允许访问的范围（工作区与已授权目录），已拦截".into());
     }
     Ok(target_c)

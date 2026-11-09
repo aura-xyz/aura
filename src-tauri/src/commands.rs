@@ -1888,7 +1888,21 @@ pub async fn install_market_skill(
         build_registry(&db)?
     };
     let entry = registry.resolve(&id).await?;
-    crate::market::install(&registry, &entry, &root, accept_risky, update).await
+    let result = crate::market::install(&registry, &entry, &root, accept_risky, update).await;
+    // 高风险安装只在**确实装了**之后记：审查阶段就放弃的安装不算事件，
+    // 否则用户每点一次「取消」都会在安全面板里多一条噪音。
+    if accept_risky {
+        if let Ok(summary) = &result {
+            crate::security::log_simple(
+                crate::security::Kind::RiskyInstall,
+                "",
+                &id,
+                &format!("用户确认后安装了高风险技能（{}）", summary.skill_name),
+                "install_risky",
+            );
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -2075,6 +2089,37 @@ pub fn export_session_bundle(
 /// （写个 `.bat` 到启动目录即可持久化）。名单只收真实在用的导出格式：
 /// 会话日志 `.zip`、用量 `.csv`，以及计划内的 `.md`。
 const EXPORT_EXTENSIONS: &[&str] = &["zip", "csv", "md"];
+
+/// 最近的安全事件（v0.8.0 C42）。
+///
+/// 默认 100 条：够看清「刚才发生了什么」，又不会让设置页一次拉几十兆。
+#[tauri::command]
+pub fn security_list_events(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<db::SecurityEvent>, String> {
+    let limit = limit.unwrap_or(100).clamp(1, 5000);
+    let db = state.db.lock().map_err(lock_err)?;
+    db::list_security_events(&db, limit).map_err(|e| e.to_string())
+}
+
+/// 导出全部安全事件为 CSV。
+///
+/// 走 [`write_export_bundle`] 同一条落盘通道，因此**自动继承**扩展名白名单
+/// 与系统目录拦截（C36）——安全导出不能成为绕过安全校验的后门。
+#[tauri::command]
+pub fn security_export_events(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<usize, String> {
+    let events = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::list_security_events(&db, 10_000).map_err(|e| e.to_string())?
+    };
+    let csv = crate::security::events::to_csv(&events);
+    write_export_bundle(path, csv.into_bytes())?;
+    Ok(events.len())
+}
 
 /// 前端打包好 zip 后由后端落盘，绕开 plugin-fs 对任意保存路径的权限限制。
 ///

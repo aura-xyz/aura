@@ -344,12 +344,28 @@ async fn approval_gate(
             );
             match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
                 Ok(Ok(decision)) if decision.approved => {
+                    crate::security::log_simple(
+                        crate::security::Kind::ApprovalAllowed,
+                        ctx.session_id,
+                        &command,
+                        &reason,
+                        &rule_id,
+                    );
                     if decision.remember {
                         mgr.remember(ctx.session_id, &key);
                     }
                     None
                 }
-                Ok(Ok(_)) => Some(format!("用户拒绝了该命令，未执行：{command}")),
+                Ok(Ok(_)) => {
+                    crate::security::log_simple(
+                        crate::security::Kind::ApprovalDenied,
+                        ctx.session_id,
+                        &command,
+                        &reason,
+                        &rule_id,
+                    );
+                    Some(format!("用户拒绝了该命令，未执行：{command}"))
+                }
                 // 发送端被丢弃：stop_message 兜底决议或会话被清
                 Ok(Err(_)) => Some(format!("审批被取消，命令未执行：{command}")),
                 Err(_) => {
@@ -1073,7 +1089,18 @@ if tool_jsons.is_empty() {
                     let norm = normalize_tool_name(&name);
                     match tool_permitted(ctx.mode, &norm, &active_skills) {
                         Ok(()) => Next::Tool(norm, args),
-                        Err(msg) => Next::Reject(msg),
+                        Err(msg) => {
+                            // 模式闸门的拒绝要留痕：用户切到 Chat 模式后
+                            // 模型仍在试着写文件，这件事界面上看不出来。
+                            crate::security::log_simple(
+                                crate::security::Kind::ModeDenied,
+                                ctx.session_id,
+                                &norm,
+                                &msg,
+                                "mode_gate",
+                            );
+                            Next::Reject(msg)
+                        }
                     }
                 }
                 Err(msg) => Next::Reject(msg),

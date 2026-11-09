@@ -106,6 +106,16 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     // 判定统一走规则表（v0.8.0 C38）。HardBlock 直接拒；RequireApproval
     // 在审批流（C40）落地前也按拒绝处理——宁可少放行，不要静默执行。
     if let Some(hit) = check_command(command) {
+        // 打点在**真正拦下的地方**，而不是前置的审批闸门：命令可能从
+        // 别的调用路径进来（未来的 MCP 工具），只有这里一定经过。
+        // 这里拿不到会话 id（纯函数），留在库里由用户按对象排查。
+        crate::security::log_simple(
+            crate::security::Kind::BlockedCommand,
+            "",
+            command,
+            hit.reason,
+            hit.id,
+        );
         return Err(blocked_message(command, &hit));
     }
 

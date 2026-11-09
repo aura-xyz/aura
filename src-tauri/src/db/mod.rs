@@ -77,6 +77,19 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
          -- v0.6.2：路径白名单。授权给模型访问的额外目录。
          -- path 是归一化后的绝对路径（正斜杠），builtin=1 是内置默认项
          -- （skills/local，不可删）。判定逻辑在 paths.rs，不在库里。
+         -- v0.8.0：安全事件。拦截、审批、越权与高风险安装都记一条。
+         -- 与 timeline 分开：时间线是「模型做了什么」给用户看的，
+         -- 安全事件是「什么被挡住了」给排查与审计用的，生命周期不同。
+         CREATE TABLE IF NOT EXISTS security_events (
+             id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             ts_ms      INTEGER NOT NULL,
+             session_id TEXT NOT NULL DEFAULT '',
+             kind       TEXT NOT NULL,
+             subject    TEXT NOT NULL DEFAULT '',
+             reason     TEXT NOT NULL DEFAULT '',
+             rule_id    TEXT NOT NULL DEFAULT ''
+         );
+         CREATE INDEX IF NOT EXISTS idx_security_events_ts ON security_events(ts_ms DESC);
          CREATE TABLE IF NOT EXISTS path_allowlist (
              path TEXT PRIMARY KEY,
              label TEXT NOT NULL,
@@ -265,6 +278,63 @@ pub fn add_allowlist(
 /// 写入一条时间线记录。
 ///
 /// 同 seq 覆盖（重试写入不会产生重复行）。
+/// 一条安全事件。字段刻意保持扁平：导出 CSV 时不需要嵌套。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SecurityEvent {
+    pub id: i64,
+    pub ts_ms: i64,
+    pub session_id: String,
+    /// blocked_command / path_denied / mode_denied / approval_denied /
+    /// approval_allowed / risky_install / mcp_call
+    pub kind: String,
+    /// 被拦的对象：命令原文、路径、工具名
+    pub subject: String,
+    pub reason: String,
+    /// 命中的规则 id，没有规则时为更细的来源标签
+    pub rule_id: String,
+}
+
+/// 写一条安全事件。调用方包一层 [`crate::security::log_event`] 做静默降级。
+pub fn add_security_event(
+    conn: &Connection,
+    ts_ms: i64,
+    session_id: &str,
+    kind: &str,
+    subject: &str,
+    reason: &str,
+    rule_id: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO security_events (ts_ms, session_id, kind, subject, reason, rule_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![ts_ms, session_id, kind, subject, reason, rule_id],
+    )?;
+    Ok(())
+}
+
+/// 最近的安全事件，倒序。`limit` 由调用方给（设置页取 100）。
+pub fn list_security_events(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SecurityEvent>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, ts_ms, session_id, kind, subject, reason, rule_id
+         FROM security_events ORDER BY ts_ms DESC, id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok(SecurityEvent {
+            id: row.get(0)?,
+            ts_ms: row.get(1)?,
+            session_id: row.get(2)?,
+            kind: row.get(3)?,
+            subject: row.get(4)?,
+            reason: row.get(5)?,
+            rule_id: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn add_timeline_entry(conn: &Connection, e: &crate::timeline::TimelineEntry) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO timeline (session_id, seq, ts_ms, turn, kind, title, detail, ok, duration_ms)
@@ -1077,4 +1147,40 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// 安全事件：倒序、limit 生效、字段原样回读。
+    #[test]
+    fn security_events_round_trip_newest_first() {
+        let dir = std::env::temp_dir().join(format!("aura-db-sec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+
+        for i in 0..3 {
+            add_security_event(
+                &conn,
+                1_700_000_000_000 + i,
+                "s1",
+                "blocked_command",
+                &format!("cmd-{i}"),
+                "递归删除",
+                "cmd_rm_root",
+            )
+            .unwrap();
+        }
+        let rows = list_security_events(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].subject, "cmd-2", "最新的排最前");
+        assert_eq!(rows[0].rule_id, "cmd_rm_root");
+        assert_eq!(rows[0].session_id, "s1");
+
+        // limit 取的是「最近 N 条」，不是最早 N 条
+        let two = list_security_events(&conn, 2).unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].subject, "cmd-2");
+        assert_eq!(two[1].subject, "cmd-1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
 }

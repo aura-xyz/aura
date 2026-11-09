@@ -30,7 +30,8 @@ use commands::{
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
     set_api_config, set_global_rules, set_pinned_models, save_provider_catalog,
     set_providers, set_selected_model, set_system_settings,
-    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_approval_policy, set_approval_policy, truncate_history,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_approval_policy, set_approval_policy,
+    security_list_events, security_export_events, truncate_history,
     AppState,
 };
 use terminal::{
@@ -308,6 +309,30 @@ pub fn run() {
             }
 
             app.manage(AppState::new(api_key, db));
+
+            // 安全事件落库通道（v0.8.0 C42）。工具层是纯函数，拿不到
+            // AppState，所以在这里装一个全局 sink：它们只管调
+            // `security::log_simple`，落库失败静默——记录不能反过来
+            // 影响主流程。
+            {
+                use tauri::Manager;
+                let handle = app.handle().clone();
+                crate::security::events::install(move |e| {
+                    if let Some(state) = handle.try_state::<commands::AppState>() {
+                        if let Ok(db) = state.db.lock() {
+                            let _ = crate::db::add_security_event(
+                                &db,
+                                crate::security::events::now_ms(),
+                                e.session_id,
+                                e.kind.as_str(),
+                                e.subject,
+                                e.reason,
+                                e.rule_id,
+                            );
+                        }
+                    }
+                });
+            }
             // 终端会话表独立于 AppState：它的生命周期跟着窗口走，
             // 与会话/工作区状态无关。
             app.manage(TerminalManager::default());
@@ -358,6 +383,8 @@ pub fn run() {
             send_message,
             stop_message,
             resolve_approval,
+            security_list_events,
+            security_export_events,
             get_approval_policy,
             set_approval_policy,
             remove_session,
