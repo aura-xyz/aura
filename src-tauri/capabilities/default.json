@@ -8,7 +8,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "fs:default",
     "dialog:default",
     "core:window:allow-minimize",
     "core:window:allow-maximize",
@@ -18,7 +17,6 @@
     "updater:default",
     "process:allow-restart",
     "window-state:default",
-    "notification:default",
-    "os:default"
+    "os:allow-platform"
   ]
 }
