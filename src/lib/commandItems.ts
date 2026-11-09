@@ -7,6 +7,11 @@
 import {
   Cpu,
   Download,
+  History,
+  MessageSquarePlus,
+  Palette,
+  Plug,
+  Settings,
   SlidersHorizontal,
   Sparkles,
   Target,
@@ -21,11 +26,128 @@ import {
 } from "./slashCommands";
 import { skillItems } from "./mentions";
 
+/** 全局面板的分组。输入框里的 `/` 面板不分组（group 缺省即 action）。 */
+export type CommandGroup = "action" | "session" | "skill" | "file";
+
 export interface CommandItem {
   id: string;
   label: string;
   detail: string;
   icon?: LucideIcon;
+  group?: CommandGroup;
+}
+
+export const GROUP_LABEL: Record<CommandGroup, string> = {
+  action: "动作",
+  session: "会话",
+  skill: "技能",
+  file: "文件",
+};
+
+/** 分组顺序固定：动作 → 会话 → 技能 → 文件。顺序变了用户的手感就变了。 */
+const GROUP_ORDER: CommandGroup[] = ["action", "session", "skill", "file"];
+
+/** 按分组切开，组内保持原序，空组不返回。 */
+export function groupCommandItems(
+  items: CommandItem[],
+): { group: CommandGroup; items: CommandItem[] }[] {
+  const buckets = new Map<CommandGroup, CommandItem[]>();
+  for (const item of items) {
+    const group = item.group ?? "action";
+    const bucket = buckets.get(group);
+    if (bucket) bucket.push(item);
+    else buckets.set(group, [item]);
+  }
+  return GROUP_ORDER.filter((g) => buckets.has(g)).map((g) => ({
+    group: g,
+    items: buckets.get(g) as CommandItem[],
+  }));
+}
+
+/** 关键词过滤：标签与说明都参与，空查询原样返回。 */
+export function filterCommandItems(
+  items: CommandItem[],
+  query: string,
+): CommandItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return items;
+  return items.filter((i) =>
+    `${i.label}\n${i.detail}`.toLowerCase().includes(q),
+  );
+}
+
+/** 全局面板的动作项。id 是稳定的执行键，由 App 按 id 分派。 */
+export function actionCommandItems(ctx: {
+  mode: Mode;
+  theme: "light" | "dark" | "system";
+}): CommandItem[] {
+  const modes = MODES.map((m) => ({
+    id: `action:mode:${m}`,
+    label: `切换到${MODE_LABEL[m]}模式`,
+    detail: m === ctx.mode ? "当前模式" : MODE_HINT[m],
+    icon: SlidersHorizontal,
+    group: "action" as const,
+  }));
+  const themes = (
+    [
+      { id: "light", label: "亮色" },
+      { id: "dark", label: "暗色" },
+      { id: "system", label: "跟随系统" },
+    ] as const
+  ).map((t) => ({
+    id: `action:theme:${t.id}`,
+    label: `切换主题：${t.label}`,
+    detail: t.id === ctx.theme ? "当前" : "",
+    icon: Palette,
+    group: "action" as const,
+  }));
+
+  return [
+    {
+      id: "action:new",
+      label: "新建对话",
+      detail: "Ctrl + N",
+      icon: MessageSquarePlus,
+      group: "action",
+    },
+    ...modes,
+    {
+      id: "action:settings",
+      label: "打开设置",
+      detail: "外观、模型服务、通用、关于",
+      icon: Settings,
+      group: "action",
+    },
+    {
+      id: "action:skills",
+      label: "打开 Skills",
+      detail: "内置 / 已安装 / 市场",
+      icon: Sparkles,
+      group: "action",
+    },
+    {
+      id: "action:mcp",
+      label: "打开 MCP",
+      detail: "服务器与权限",
+      icon: Plug,
+      group: "action",
+    },
+    {
+      id: "action:timeline",
+      label: "打开操作时间线",
+      detail: "本会话的全部工具调用与耗时",
+      icon: History,
+      group: "action",
+    },
+    ...themes,
+    {
+      id: "action:export",
+      label: "导出会话日志",
+      detail: "打包会话、时间线与更新日志为 ZIP",
+      icon: Download,
+      group: "action",
+    },
+  ];
 }
 
 const ROOT_ICONS: Record<CommandId, LucideIcon> = {

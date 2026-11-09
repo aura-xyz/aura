@@ -28,7 +28,13 @@ import { useTheme } from "./hooks/useTheme";
 import { useRightbarTransition } from "./hooks/useRightbarTransition";
 import { useDropZone } from "./hooks/useDropZone";
 import { useConfirm } from "./hooks/useConfirm";
-import { checkAllowlistPath } from "./lib/api";
+import {
+  checkAllowlistPath,
+  listSkills,
+  listWorkspaceFiles,
+  type FileCandidate,
+  type SkillView,
+} from "./lib/api";
 import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
 import {
   codeBlockMenuItems,
@@ -38,14 +44,26 @@ import {
   textMenuItems,
 } from "./lib/contextMenuItems";
 import { copyText } from "./lib/clipboard";
+import { downloadSessionZip } from "./lib/exportSession";
+import { notify } from "./lib/notices";
 import { CONTENT_WIDTH } from "./lib/layout";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
 import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
 import { shouldBlockDevtools } from "./lib/devtools";
-import { nextMode } from "./lib/commandItems";
+import {
+  actionCommandItems,
+  nextMode,
+  type CommandItem,
+} from "./lib/commandItems";
+import {
+  filePaletteItems,
+  sessionPaletteItems,
+  skillPaletteItems,
+} from "./lib/palette";
 import SessionSearch from "./components/SessionSearch";
+import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -177,6 +195,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** 全局命令面板（Ctrl+K）。 */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteSkills, setPaletteSkills] = useState<SkillView[]>([]);
+  const [paletteFiles, setPaletteFiles] = useState<FileCandidate[]>([]);
+  const [paletteLoading, setPaletteLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTurn, setActiveTurn] = useState(0);
   const turnItems = useMemo(
@@ -350,14 +374,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         changeMode(nextMode(modeRef.current));
         return;
       }
-      // Ctrl+F / Ctrl+K 都开搜索：顶栏胶囊提示的是 Ctrl+K，
-      // 统一命令面板（C27）落地前先用同一个面板兜住两个入口。
-      if (
-        (e.ctrlKey && e.key.toLowerCase() === "f") ||
-        (e.ctrlKey && e.key.toLowerCase() === "k")
-      ) {
+      // Ctrl+F 只搜会话（快、窄）；Ctrl+K 开全局面板（动作 / 会话 / 技能 / 文件）。
+      if (e.ctrlKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setSearchOpen(true);
+        return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+        setPaletteQuery("");
         return;
       }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
@@ -482,6 +508,112 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
    */
   const recentSession = [...sessions].reverse().find((s) => s.messages.length > 0);
 
+  // ── 全局命令面板（Ctrl+K）────────────────────────────────────
+  // 技能在打开时拉一次；文件随查询去后端捞（带 250ms 防抖，避免每敲一个字都发请求）。
+  useEffect(() => {
+    if (!paletteOpen) return;
+    let live = true;
+    listSkills()
+      .then((rows) => {
+        if (live) setPaletteSkills(rows);
+      })
+      .catch(() => {
+        if (live) setPaletteSkills([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [paletteOpen]);
+
+  useEffect(() => {
+    if (!paletteOpen) {
+      setPaletteFiles([]);
+      return;
+    }
+    const q = paletteQuery.trim();
+    if (!q || !activeId) {
+      setPaletteFiles([]);
+      setPaletteLoading(false);
+      return;
+    }
+    let live = true;
+    setPaletteLoading(true);
+    const timer = window.setTimeout(() => {
+      listWorkspaceFiles(activeId, q, 8)
+        .then((rows) => {
+          if (live) setPaletteFiles(rows);
+        })
+        .catch(() => {
+          if (live) setPaletteFiles([]);
+        })
+        .finally(() => {
+          if (live) setPaletteLoading(false);
+        });
+    }, 250);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [paletteOpen, paletteQuery, activeId]);
+
+  const paletteItems = useMemo<CommandItem[]>(() => {
+    if (!paletteOpen) return [];
+    return [
+      ...actionCommandItems({ mode, theme: theme.theme }),
+      ...sessionPaletteItems(sessions, paletteQuery),
+      ...skillPaletteItems(paletteSkills, paletteQuery),
+      ...filePaletteItems(paletteFiles),
+    ];
+    // 只用到 theme.theme，其余主题字段变化不该重建列表
+  }, [paletteOpen, mode, theme.theme, sessions, paletteQuery, paletteSkills, paletteFiles]);
+
+  /** 执行面板项：按 id 前缀分派，动作项再看具体键。 */
+  function runPaletteItem(item: CommandItem) {
+    const [kind, ...rest] = item.id.split(":");
+    const value = rest.join(":");
+    setPaletteOpen(false);
+    if (kind === "session") {
+      // value 形如 `{sessionId}:{messageIndex}`；目前只切会话，
+      // 命中消息的定位留给会话内搜索（与 Ctrl+F 面板的现有行为一致）。
+      const [sessionId] = value.split(":");
+      void openSession(sessionId);
+      return;
+    }
+    if (kind === "skill") {
+      insertIntoInput(`/${value} `);
+      return;
+    }
+    if (kind === "file") {
+      insertIntoInput(`@${value}`);
+      return;
+    }
+    // action:*
+    if (value === "new") {
+      void newSession();
+      setView("chat");
+    } else if (value.startsWith("mode:")) {
+      changeMode(value.slice(5) as typeof mode);
+    } else if (value.startsWith("theme:")) {
+      theme.setTheme(value.slice(6) as "light" | "dark" | "system");
+    } else if (value === "settings") {
+      setView("settings");
+    } else if (value === "skills") {
+      setView("skills");
+    } else if (value === "mcp") {
+      setView("mcp");
+    } else if (value === "timeline") {
+      setView("timeline");
+    } else if (value === "export") {
+      if (activeSession) {
+        void downloadSessionZip(activeSession.id, activeSession.title)
+          .then((ok) => {
+            if (ok) notify("ok", "日志已导出");
+          })
+          .catch((e) => notify("error", `导出失败：${String(e)}`));
+      }
+    }
+  }
+
   const inputProps = {
     busy,
     onSend: sendMessage,
@@ -579,7 +711,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
       onContextMenu={onContextMenu}
     >
-      <TitleBar onSearch={() => setSearchOpen(true)} />
+      <TitleBar
+        onSearch={() => {
+          setPaletteOpen(true);
+          setPaletteQuery("");
+        }}
+      />
 
       <div className="flex min-h-0 flex-1 relative">
         <Sidebar
@@ -789,6 +926,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
       {/* 全局轻提示：右下角堆叠，三处自建横条已归一到这里 */}
       <NoticeStack />
+
+      {paletteOpen && (
+        <CommandPalette
+          items={paletteItems}
+          loading={paletteLoading}
+          onQueryChange={setPaletteQuery}
+          onPick={runPaletteItem}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
 
       {searchOpen && (
         <SessionSearch
