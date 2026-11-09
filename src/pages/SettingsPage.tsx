@@ -11,6 +11,7 @@ import {
   Cpu,
   Info,
   Palette,
+  ShieldCheck,
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import { settingsSections } from "../lib/settingsSections";
 import AboutSection from "./AboutSection";
 import AppearanceSection from "../components/AppearanceSection";
 import GeneralSection from "../components/GeneralSection";
+import SecuritySection from "../components/SecuritySection";
 import ModelSection from "../components/ModelSection";
 
 /** 分区图标：与左栏导航同语言（15px，未选中 subtle，选中随文字变深）。 */
@@ -27,6 +29,7 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   appearance: Palette,
   model: Cpu,
   general: SlidersHorizontal,
+  security: ShieldCheck,
   about: Info,
 };
 
@@ -120,6 +123,7 @@ export default function SettingsPage({ onClose, theme }: Props) {
                 setSaved={setSaved}
               />
             )}
+            {section === "security" && <SecuritySection />}
             {section === "about" && <AboutSection />}
           </div>
         </div>

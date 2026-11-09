@@ -782,3 +782,25 @@ export function setApprovalPolicy(
 ): Promise<void> {
   return invoke("set_approval_policy", { policy, sessionId: sessionId ?? null });
 }
+
+// ── 安全事件（v0.8.0 C42/C43）────────────────────────────────
+
+export interface SecurityEvent {
+  id: number;
+  ts_ms: number;
+  session_id: string;
+  /** blocked_command / path_denied / mode_denied / approval_denied / approval_allowed / risky_install / mcp_call */
+  kind: string;
+  subject: string;
+  reason: string;
+  rule_id: string;
+}
+
+export function listSecurityEvents(limit = 100): Promise<SecurityEvent[]> {
+  return invoke("security_list_events", { limit });
+}
+
+/** 导出 CSV，返回写入的事件条数。 */
+export function securityExportEvents(path: string): Promise<number> {
+  return invoke("security_export_events", { path });
+}
