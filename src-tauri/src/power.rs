@@ -45,6 +45,71 @@ mod keep_awake_win {
     }
 }
 
+/// Linux：借 `systemd-inhibit` 抑制 logind 的空闲休眠。
+///
+/// 没有直接说 D-Bus（那要引 zbus），而是让 systemd 自己去做：
+/// `systemd-inhibit --what=idle:sleep ... sleep infinity` 会向 logind
+/// 申请一把「空闲不睡」的锁，进程退出（或被杀）锁自动释放。
+///
+/// 这比 `setsid` + D-Bus 私有接口稳：`systemd-inhibit` 是 logind 的
+/// 官方客户端，没有版本兼容问题；桌面环境里没有 systemd 时它会直接
+/// 报错退出，此时 `apply` 返回 false，设置页如实显示「未能生效」。
+#[cfg(target_os = "linux")]
+mod keep_awake_linux {
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Mutex;
+
+    /// 持有 inhibit 子进程。进程活着就说明锁还攥在手里。
+    static HOLDER: Mutex<Option<Child>> = Mutex::new(None);
+
+    pub fn apply(enabled: bool) -> bool {
+        let mut guard = HOLDER.lock().unwrap_or_else(|e| e.into_inner());
+        if enabled {
+            if guard.is_some() {
+                return true;
+            }
+            let child = Command::new("systemd-inhibit")
+                .args([
+                    "--what=idle:sleep",
+                    "--why=Aura 正在运行任务",
+                    "sleep",
+                    "infinity",
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            match child {
+                Ok(child) => {
+                    *guard = Some(child);
+                    true
+                }
+                Err(_) => false,
+            }
+        } else {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            true
+        }
+    }
+
+    /// PATH 里有没有 systemd-inhibit。决定设置页要不要把开关置灰。
+    pub fn available() -> bool {
+        static FOUND: OnceLock<bool> = OnceLock::new();
+        *FOUND.get_or_init(|| {
+            let Some(path) = std::env::var_os("PATH") else {
+                return false;
+            };
+            std::env::split_paths(&path).any(|dir| {
+                let candidate = dir.join("systemd-inhibit");
+                candidate.is_file()
+            })
+        })
+    }
+}
+
 #[cfg(not(windows))]
 mod keep_awake_win {
     pub fn apply(_enabled: bool) -> bool {
@@ -52,10 +117,41 @@ mod keep_awake_win {
     }
 }
 
-/// 当前平台是否支持防休眠。Linux 没有等价的进程级电源抑制原语，
-/// 设置页据此把开关置灰，而不是让用户以为打开就能生效。
+/// 平台相关的防休眠开关。
+fn keep_awake_apply(enabled: bool) -> bool {
+    #[cfg(windows)]
+    {
+        keep_awake_win::apply(enabled)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        keep_awake_linux::apply(enabled)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = enabled;
+        false
+    }
+}
+
+/// 当前平台是否支持防休眠。
+///
+/// Windows 恒为真；Linux 取决于 PATH 里有没有 `systemd-inhibit`
+/// （精简发行版与容器里常常没有）；其余平台置灰——设置页据此把开关
+/// 置灰，而不是让用户以为打开就能生效。
 pub fn keep_awake_supported() -> bool {
-    cfg!(windows)
+    #[cfg(windows)]
+    {
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        keep_awake_linux::available()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        false
+    }
 }
 
 static KEEP_AWAKE_TX: OnceLock<Sender<bool>> = OnceLock::new();
@@ -71,13 +167,13 @@ fn keep_awake_tx() -> &'static Sender<bool> {
                     if next == current {
                         continue;
                     }
-                    if keep_awake_win::apply(next) {
+                    if keep_awake_apply(next) {
                         current = next;
                     }
                 }
                 // 通道关闭（进程退出）时恢复默认电源策略
                 if current {
-                    keep_awake_win::apply(false);
+                    keep_awake_apply(false);
                 }
             });
         tx
