@@ -8,6 +8,7 @@ pub struct SavedSession {
     pub id: String,
     pub title: String,
     pub workspace: String,
+    pub updated_at: i64,
     pub messages: Vec<Value>,
     pub todos: Vec<crate::agent::Todo>,
 }
@@ -680,24 +681,27 @@ fn load_messages(conn: &Connection, session_id: &str) -> Result<Vec<Value>, rusq
 }
 
 pub fn load_sessions(conn: &Connection) -> Result<Vec<SavedSession>, rusqlite::Error> {
-    let mut stmt =
-        conn.prepare_cached("SELECT id, title, workspace FROM sessions ORDER BY updated_at DESC")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, title, workspace, updated_at FROM sessions ORDER BY updated_at DESC",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
         ))
     })?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, title, workspace) = row?;
+        let (id, title, workspace, updated_at) = row?;
         let messages = load_messages(conn, &id)?;
         let todos = load_todos(conn, &id)?;
         out.push(SavedSession {
             id,
             title,
             workspace,
+            updated_at,
             messages,
             todos,
         });
@@ -742,6 +746,39 @@ pub fn delete_workspace(conn: &Connection, workspace: &str) -> Result<(), rusqli
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **C51**：`load_sessions` 必须把 `updated_at` 一并读出来。
+    ///
+    /// 落盘处（`save_session`）早已写 `updated_at`，但旧查询只挑了
+    /// `id/title/workspace`——F2 时间分组（C52）依赖这个字段，漏了就
+    /// 全侧栏会话都归到「更早」。这里落库后再读出，断言时间戳非 0 且等值。
+    #[test]
+    fn load_sessions_includes_updated_at() {
+        let dir = std::env::temp_dir().join(format!(
+            "aura-db-test-{}-{}",
+            std::process::id(),
+            "updated_at"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+
+        let id = "sess-updated-at";
+        let msgs = vec![serde_json::json!({ "role": "user", "content": "hi" })];
+        save_session(&conn, id, "标题", "/tmp/ws", &msgs).unwrap();
+
+        let saved = load_sessions(&conn).unwrap();
+        let found = saved.iter().find(|s| s.id == id).expect("应读回该会话");
+        assert_eq!(found.title, "标题");
+        // now() 写的是秒级真实时间，必然 > 0
+        assert!(found.updated_at > 0, "updated_at 应被读回且非 0");
+
+        // 重载连接后字段仍稳定（落库口径一致）
+        let conn2 = open(&dir.join("t.db")).unwrap();
+        let reloaded = load_sessions(&conn2).unwrap();
+        let again = reloaded.iter().find(|s| s.id == id).expect("重载后仍存在");
+        assert_eq!(again.updated_at, found.updated_at);
+    }
 
     #[test]
     fn setting_roundtrip_and_upsert() {

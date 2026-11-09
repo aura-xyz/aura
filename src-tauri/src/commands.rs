@@ -641,6 +641,7 @@ pub struct SessionSnapshot {
     pub id: String,
     pub title: String,
     pub workspace: String,
+    pub updated_at: i64,
     pub messages: Vec<Value>,
     pub todos: Vec<Todo>,
 }
@@ -655,6 +656,7 @@ pub fn load_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSnapshot>,
             id: s.id,
             title: s.title,
             workspace: s.workspace,
+            updated_at: s.updated_at,
             messages: s.messages,
             todos: s.todos,
         })

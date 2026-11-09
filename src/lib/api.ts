@@ -6,6 +6,8 @@ export interface SavedSession {
   id: string;
   title: string;
   workspace: string;
+  /** 最近更新时间（Unix 秒）。C51 起后端返回，旧库为 0 */
+  updated_at: number;
   messages: ChatMessage[];
   /** 任务清单。旧版本会话可能没有该字段，按空处理 */
   todos?: Todo[];

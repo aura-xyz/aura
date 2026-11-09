@@ -119,6 +119,8 @@ export interface Session {
   id: string;
   title: string;
   workspace: string;
+  /** 最近更新时间（Unix 秒）。C51 起后端返回，旧库为 0 */
+  updated_at: number;
   messages: ChatMessage[];
   /** 任务清单。旧会话可能没有，按空处理 */
   todos: Todo[];
@@ -259,6 +261,7 @@ function createSession(workspace = ""): Session {
     id: crypto.randomUUID(),
     title: "新对话",
     workspace,
+    updated_at: 0,
     messages: [],
     todos: [],
   };
@@ -726,6 +729,8 @@ setState((s) => {
             id: x.id,
     title: x.title,
        workspace: normWs(x.workspace),
+            // C51：后端返回 updated_at；旧库/旧版本会话没有该字段时回落 0
+            updated_at: typeof x.updated_at === "number" ? x.updated_at : 0,
             messages: x.messages,
       // 旧版本会话没有 todos 字段，按空清单处理
       todos: normalizeTodos(x.todos),

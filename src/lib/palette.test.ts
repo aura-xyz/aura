@@ -8,6 +8,7 @@ function session(id: string, title: string, messages = 1): Session {
     id,
     title,
     workspace: "E:/dev/aura",
+    updated_at: 0,
     messages: Array.from({ length: messages }, (_, i) => ({
       id: `${id}-m${i}`,
       role: "user",
