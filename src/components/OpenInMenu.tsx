@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown } from "lucide-react";
+import { AppWindow, ChevronDown } from "lucide-react";
 import ideaUrl from "@jetbrains/logos/intellij-idea/intellij-idea.svg?url";
 import pycharmUrl from "@jetbrains/logos/pycharm/pycharm.svg?url";
 import webstormUrl from "@jetbrains/logos/webstorm/webstorm.svg?url";
@@ -41,6 +41,20 @@ export const APP_ICONS: Record<string, string> = {
   datagrip: datagripUrl,
   androidstudio: androidStudioUrl,
 };
+
+/**
+ * 应用图标：有映射用映射，没有就退中性图标。
+ *
+ * 不能再用 `APP_ICONS.explorer` 当兜底——Linux 下编辑器 id（如 code/subl）
+ * 没有映射时会显示成 Windows 资源管理器图标，看起来像图标没加载。
+ */
+function AppGlyph({ id }: { id: string }) {
+  const url = APP_ICONS[id];
+  if (url) {
+    return <img src={url} alt="" className="h-4 w-4 shrink-0" draggable={false} />;
+  }
+  return <AppWindow size={16} className="shrink-0 text-subtle" aria-hidden />;
+}
 
 function loadChoice(): string {
   try {
@@ -147,12 +161,7 @@ export default function OpenInMenu({ sessionId, workspace }: Props) {
           }
           className="flex items-center px-1.5 py-1 transition-colors enabled:hover:bg-surface enabled:hover:text-foreground disabled:opacity-40"
         >
-          <img
-            src={APP_ICONS[preferred?.id ?? "explorer"] ?? APP_ICONS.explorer}
-            alt=""
-            className="h-4 w-4"
-            draggable={false}
-          />
+          <AppGlyph id={preferred?.id ?? ""} />
         </button>
         <span className="h-4 w-px bg-line" aria-hidden />
         <button
@@ -186,12 +195,7 @@ export default function OpenInMenu({ sessionId, workspace }: Props) {
                 onClick={() => choose(app)}
                 className="flex w-full items-center gap-2 rounded-tag px-2 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-bubble"
               >
-                <img
-                  src={APP_ICONS[app.id] ?? APP_ICONS.explorer}
-                  alt=""
-                  className="h-4 w-4 shrink-0"
-                  draggable={false}
-                />
+                <AppGlyph id={app.id} />
                 <span className="min-w-0 flex-1 truncate">
                   {app.name}
                   {app.id === preferred?.id && (
