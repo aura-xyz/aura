@@ -90,7 +90,7 @@ import {
 } from "./lib/sidebarTabs";
 import { disposeTerminalSession } from "./lib/terminalSessions";
 import {
-  RIGHTBAR_DEFAULT,
+  rightbarDefaultWidth,
   RIGHTBAR_MAX_RATIO,
   RIGHTBAR_MIN,
   SIDEBAR_AUTO_COLLAPSE,
@@ -224,7 +224,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     () => buildTurnItems(activeSession?.messages ?? []),
     [activeSession?.messages],
   );
-  const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
+  // 初始宽度按视口算一次：屏幕宽就多给右栏（网页/终端要横向空间），
+  // 之后再被用户拖拽覆盖。窗口尺寸变化不重新算——用户拖过的宽度不该
+  // 被一次最大化重置。
+  const [rightbarWidth, setRightbarWidth] = useState(() =>
+    rightbarDefaultWidth(typeof window === "undefined" ? 1280 : window.innerWidth),
+  );
   const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
   /**
    * 右栏改成标签页后，状态从「选中的分区」变成「标签集合 + 当前标签」。
@@ -1004,7 +1009,10 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
               {tabsState.tabs.map((tab) => (
                 <div
                   key={tab.id}
-                  className={`absolute inset-0 ${
+                  // flex flex-col：正文根节点是 flex-1 的纵向容器，
+                  // 父层不给 flex 上下文时它只能按内容高排，
+                  // iframe / xterm 这类「撑满父容器」的组件会塌成很小一块。
+                  className={`absolute inset-0 flex flex-col ${
                     tab.id === tabsState.activeId ? "" : "hidden"
                   }`}
                 >
