@@ -957,14 +957,18 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
             style={{ width: rightbarWidthPx }}
           >
             {!rightbarFullscreen && (
+              {/* 拖拽手柄：加宽到 6px 并给一条居中的抓手线——
+                  原来只有 1px 宽、hover 才显色，几乎没人发现得了它能拖。 */}
               <div
-                className="absolute left-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-brand/30"
+                className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize"
                 onPointerDown={startDrag("rightbar")}
                 onPointerMove={moveDrag}
                 onPointerUp={endDrag}
                 onPointerCancel={endDrag}
                 aria-hidden
-              />
+              >
+                <span className="absolute left-1/2 top-1/2 h-12 w-px -translate-x-1/2 -translate-y-1/2 rounded-full bg-line transition-colors group-hover:bg-brand" />
+              </div>
             )}
             <SidebarTabBar
               tabs={tabsState.tabs}

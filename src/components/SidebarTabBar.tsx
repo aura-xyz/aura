@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import AnchoredMenu from "./AnchoredMenu";
+import ContextMenu, { type MenuState } from "./ContextMenu";
 import type { SidebarTab, SidebarTabKind } from "../lib/sidebarTabs";
 
 /** 标签种类 → 图标。图标由种类决定，不进标签数据（数据只管身份与标题）。 */
@@ -65,6 +66,8 @@ export function SidebarTabBar({
   trailing,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  /** 标签右键菜单（v0.8.1）：关掉这一串标签比一个个点 × 快得多。 */
+  const [tabMenu, setTabMenu] = useState<MenuState | null>(null);
   const addAnchor = useRef<HTMLButtonElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
@@ -115,6 +118,48 @@ export function SidebarTabBar({
               data-tab-id={tab.id}
               title={tab.title}
               onClick={() => onActivate(tab.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  items: [
+                    ...(closable
+                      ? [
+                          {
+                            label: "关闭此标签",
+                            onClick: () => onClose(tab.id),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: "关闭其它标签",
+                      onClick: () => {
+                        for (const other of tabs) {
+                          if (other.id !== tab.id && canClose(other.id)) {
+                            onClose(other.id);
+                          }
+                        }
+                      },
+                    },
+                    {
+                      label: "关闭全部标签",
+                      danger: true,
+                      onClick: () => {
+                        for (const other of tabs) {
+                          if (canClose(other.id)) onClose(other.id);
+                        }
+                      },
+                    },
+                    {
+                      label: "复制标题",
+                      onClick: () => {
+                        void navigator.clipboard?.writeText(tab.title).catch(() => {});
+                      },
+                    },
+                  ],
+                });
+              }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 const next = moveFocus(e.key, tab.id);
@@ -194,6 +239,7 @@ export function SidebarTabBar({
           </button>
         ))}
       </AnchoredMenu>
+      <ContextMenu state={tabMenu} onClose={() => setTabMenu(null)} />
     </div>
   );
 }
