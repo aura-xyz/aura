@@ -46,6 +46,7 @@ import {
 import { copyText } from "./lib/clipboard";
 import { downloadSessionZip } from "./lib/exportSession";
 import { notify } from "./lib/notices";
+import { recordUse } from "./lib/frecency";
 import { CONTENT_WIDTH } from "./lib/layout";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
@@ -569,6 +570,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
   /** 执行面板项：按 id 前缀分派，动作项再看具体键。 */
   function runPaletteItem(item: CommandItem) {
+    // 先记一次使用，下次打开时它自己会浮上来
+    recordUse(item.id);
     const [kind, ...rest] = item.id.split(":");
     const value = rest.join(":");
     setPaletteOpen(false);

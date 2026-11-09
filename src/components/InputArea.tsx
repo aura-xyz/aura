@@ -35,6 +35,7 @@ import {
 } from "../lib/commandItems";
 import { downloadSessionZip } from "../lib/exportSession";
 import { CONTENT_WIDTH } from "../lib/layout";
+import { loadFrecency, rankByFrecency, recordUse } from "../lib/frecency";
 import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import MarkdownEditor, {
@@ -286,8 +287,13 @@ export default function InputArea({
     switch (cmd.view) {
       case "root":
         return rootCommandItems(cmd.query);
-      case "skill":
-        return skillCommandItems(skills, cmd.query);
+      case "skill": {
+        const items = skillCommandItems(skills, cmd.query);
+        // 与全局面板同一套「最近使用」排序，位置不算搜索时由它决定
+        return cmd.query
+          ? items
+          : rankByFrecency(items, loadFrecency(), Date.now());
+      }
       case "model":
         return modelCommandItems(models, selectedModel, cmd.query);
       case "mode":
@@ -489,6 +495,7 @@ export default function InputArea({
     }
     switch (c.view) {
       case "skill":
+        recordUse(`skill:${item.id}`);
         finishCommand(`/${item.id} `);
         break;
       case "model":

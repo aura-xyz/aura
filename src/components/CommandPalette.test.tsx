@@ -1,7 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import CommandPalette from "./CommandPalette";
+import { recordUse } from "../lib/frecency";
 import type { CommandItem } from "../lib/commandItems";
+
+// 最近使用存在 localStorage，用例之间必须清掉，否则排序会互相污染
+beforeEach(() => localStorage.clear());
 
 const ITEMS: CommandItem[] = [
   { id: "action:new", label: "新建对话", detail: "", group: "action" },
@@ -74,5 +78,23 @@ describe("CommandPalette", () => {
       target: { value: "zzz" },
     });
     expect(screen.getByText("没有匹配的结果")).toBeInTheDocument();
+  });
+
+  /// C31：常用命令在组内自己浮上来，并标「最近」。排序限定组内，
+  /// 否则会话项会挤进动作组里。
+  it("用过的命令浮到组内最前并标「最近」", () => {
+    localStorage.clear();
+    recordUse("action:settings", Date.now());
+    setup();
+
+    const dialog = screen.getByRole("dialog", { name: "命令面板" });
+    const rows = within(dialog).getAllByRole("button");
+    expect(rows[0]).toHaveTextContent("打开设置");
+    expect(rows[0]).toHaveTextContent("最近");
+    // 分组结构不变：动作仍在会话之前
+    const labels = Array.from(dialog.querySelectorAll("section > p")).map(
+      (p) => p.textContent,
+    );
+    expect(labels[0]).toBe("动作");
   });
 });

@@ -16,6 +16,7 @@ import {
   GROUP_LABEL,
   type CommandItem,
 } from "../lib/commandItems";
+import { loadFrecency, rankByFrecency, topRecentIds } from "../lib/frecency";
 
 /** 数字键直达的条数上限。 */
 const DIGIT_LIMIT = 9;
@@ -43,7 +44,22 @@ export default function CommandPalette({
     () => filterCommandItems(items, query),
     [items, query],
   );
-  const groups = useMemo(() => groupCommandItems(filtered), [filtered]);
+  // 最近使用只在空查询时生效：一旦开始搜索，位置应当由匹配度决定。
+  // 排序限定在组内，避免把会话项排进动作组里。
+  const [frecency] = useState(() => loadFrecency());
+  const recentIds = useMemo(
+    () => (query ? new Set<string>() : topRecentIds(frecency, Date.now())),
+    [frecency, query],
+  );
+  const groups = useMemo(() => {
+    const grouped = groupCommandItems(filtered);
+    if (query) return grouped;
+    const now = Date.now();
+    return grouped.map((g) => ({
+      ...g,
+      items: rankByFrecency(g.items, frecency, now),
+    }));
+  }, [filtered, frecency, query]);
 
   // 结果集变化（打字、异步文件回来）后把高亮拉回第一条，
   // 否则回车会选中一个用户没看过的位置。
@@ -174,6 +190,11 @@ export default function CommandPalette({
                     )}
                     {Icon && <Icon size={13} className="shrink-0 text-subtle" />}
                     <span className="shrink-0 text-sm">{item.label}</span>
+                    {recentIds.has(item.id) && (
+                      <span className="shrink-0 rounded-full border border-brand/40 px-1 text-[9px] leading-4 text-brand">
+                        最近
+                      </span>
+                    )}
                     {item.detail && (
                       <span className="min-w-0 flex-1 truncate text-[11px] text-subtle">
                         {item.detail}

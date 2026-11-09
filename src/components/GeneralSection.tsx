@@ -5,6 +5,8 @@
  */
 import AllowlistSection from "./AllowlistSection";
 import SystemSettingsSection from "./SystemSettingsSection";
+import { resetFrecency } from "../lib/frecency";
+import { notify } from "../lib/notices";
 
 interface Props {
   rules: string;
@@ -46,6 +48,25 @@ export default function GeneralSection({
 
       <div className="mt-5 border-b border-line pb-5">
         <AllowlistSection />
+      </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3 border-b border-line pb-5">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">最近使用</p>
+          <p className="mt-0.5 text-xs text-subtle">
+            命令面板与 /skill 列表按最近使用排序，最近用过的排前面
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            resetFrecency();
+            notify("ok", "已清空最近使用");
+          }}
+          className="shrink-0 rounded-full border border-line px-3 py-1 text-xs text-subtle transition-colors hover:border-brand hover:text-brand"
+        >
+          重置
+        </button>
       </div>
 
       <label htmlFor="global-rules" className="mt-5 block text-sm font-medium">
