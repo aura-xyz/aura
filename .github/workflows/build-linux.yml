@@ -3,8 +3,8 @@ name: Build Linux
 on:
   workflow_dispatch:
   push:
-    branches:
-      - build/linux-support
+    tags:
+      - 'v*' # 当推送类似 v0.8.0-rc.1 的 tag 时触发
 
 jobs:
   build-linux:
@@ -12,11 +12,7 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: 'ubuntu-22.04'
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,7 +20,8 @@ jobs:
       - name: Install dependencies (Ubuntu only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libsecret-0-dev libnotify-dev
+          # 补充了你之前 commit 里提到的 libsecret 和 libnotify
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libsecret-1-dev libnotify-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -54,9 +51,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 开启签名：请确保你在 GitHub 仓库的 Secrets 里配置了这两个变量
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # 第一次测试：临时关闭签名，避免因为没有密钥导致构建失败
-          args: "--target x86_64-unknown-linux-gnu --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}'"
+          # 移除了之前测试用的关闭签名 config
+          args: "--target x86_64-unknown-linux-gnu"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -64,5 +64,7 @@ jobs:
           name: linux-bundles
           path: |
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.sig
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.sig
           if-no-files-found: error
