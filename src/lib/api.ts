@@ -120,11 +120,35 @@ export function setSelectedModel(id: string): Promise<void> {
 
 export interface ApiConfig {
   provider: string;
+  /** 掩码后的 Key（`sk-***8f2a`），不是真 Key */
   api_key: string;
+  /** 是否已配置 Key */
+  has_key: boolean;
 }
 
 export function getApiConfig(): Promise<ApiConfig> {
   return invoke("get_api_config");
+}
+
+/** 清除某个供应商的 API Key（v0.8.1 C46）。 */
+export function clearProviderKey(provider: string): Promise<void> {
+  return invoke("clear_provider_key", { provider });
+}
+
+/** 密钥存储后端状态（v0.8.1 C45/C47）。 */
+export interface KeyStoreStatus {
+  /** 后端名：Windows DPAPI / 系统密钥环（SecretService）/ 应用内文件加密 */
+  name: string;
+  /** 强度说明 */
+  strength: string;
+  /** 是否可用 */
+  available: boolean;
+  /** 是否为降级档（弱于系统密钥环） */
+  degraded: boolean;
+}
+
+export function getKeystoreStatus(): Promise<KeyStoreStatus> {
+  return invoke("get_keystore_status");
 }
 
 export function setApiConfig(provider: string, apiKey: string): Promise<void> {
