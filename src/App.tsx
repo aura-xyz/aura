@@ -889,7 +889,11 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
             {(() => {
               const Body = PANEL_BODIES[rightbarTab];
               return Body ? (
-                <Body sessionId={activeId} view={view} />
+                <Body
+                  sessionId={activeId}
+                  view={view}
+                  model={selectedModel}
+                />
               ) : (
                 <p className="px-3 py-4 text-[11px] text-subtle">
                   未注册的面板：{rightbarTab}

@@ -5,22 +5,26 @@
  * 新增一种面板 = 注册一条定义 + 在这里挂一个 body，外壳 App.tsx 不用改。
  */
 import type { ComponentType } from "react";
-import { Folder, Globe, ListTodo, type LucideIcon } from "lucide-react";
+import { Folder, Gauge, Globe, ListTodo, type LucideIcon } from "lucide-react";
 import { panelRegistry, type PanelDefinition } from "../lib/panels";
 import type { View } from "./Sidebar";
 import { FileBrowserPanel } from "./FileBrowserPanel";
 import { WebBrowserPanel } from "./WebBrowserPanel";
+import { UsagePanel } from "./UsagePanel";
 import RightPanel from "./RightPanel";
 
 export interface PanelContext {
   sessionId: string;
   view: View;
+  /** 当前选中的模型 key（用量面板按它查牌价） */
+  model?: string;
 }
 
 const DEFINITIONS: PanelDefinition[] = [
   { id: "files", label: "文件", order: 10 },
   { id: "web", label: "网页", order: 20 },
   { id: "todo", label: "任务", order: 30 },
+  { id: "usage", label: "用量", order: 40 },
 ];
 
 for (const def of DEFINITIONS) {
@@ -32,11 +36,13 @@ export const PANEL_ICONS: Record<string, LucideIcon> = {
   files: Folder,
   web: Globe,
   todo: ListTodo,
+  usage: Gauge,
 };
 
 export const PANEL_BODIES: Record<string, ComponentType<PanelContext>> = {
   files: ({ sessionId }: PanelContext) => <FileBrowserPanel sessionId={sessionId} />,
   web: () => <WebBrowserPanel />,
+  usage: ({ model }: PanelContext) => <UsagePanel model={model ?? ""} />,
   todo: ({ view }: PanelContext) =>
     view === "chat" ? (
       <RightPanel />

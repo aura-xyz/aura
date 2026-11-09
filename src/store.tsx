@@ -124,6 +124,12 @@ export interface Session {
   todos: Todo[];
   /** 最近一轮真实 token 用量；上游不提供时为空 */
   lastUsage?: TurnUsage;
+  /**
+   * 会话累计用量（v0.8.0）：每个 usage 事件累加一次。
+   * `turns` 是事件数（= 完成的轮次），不是单次 LLM 请求数——
+   * 一轮里因工具往返可能发起多次请求，后端已合并上报。
+   */
+  usageTotals?: { input: number; output: number; total: number; turns: number };
   /** 会话内累计 LLM 耗时（毫秒），与工具耗时分开展示 */
   llmMs?: number;
 }
@@ -612,6 +618,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   llmMs: p.llm_ms ?? 0,
                 },
                 llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
+                usageTotals: {
+                  input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
+                  output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
+                  total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
+                  turns: (sess.usageTotals?.turns ?? 0) + 1,
+                },
               }
             : sess,
         ),
