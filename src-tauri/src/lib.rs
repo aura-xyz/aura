@@ -10,6 +10,7 @@ pub mod paths;
 pub mod power;
 pub mod providers;
 pub mod secure;
+pub mod security;
 pub mod terminal;
 pub mod timeline;
 pub mod tools;
