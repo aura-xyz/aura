@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { listDirectory, readFileText, type DirEntry } from "../lib/api";
 import Markdown from "./Markdown";
+import { assetUrl } from "../lib/assetUrl";
 import {
   FILE_KIND_TINT,
   fileKindOf,
@@ -52,12 +53,6 @@ interface PreviewState {
   content: string;
   /** 图片走 asset protocol 时的绝对路径；非图片为 undefined */
   absolute_path?: string;
-}
-
-/** 绝对路径 -> asset:// URL。资产协议侧会自行 canonicalize 命中 scope。 */
-function assetUrl(absPath: string): string {
-  const norm = absPath.replace(/\\/g, "/");
-  return `asset://localhost/${encodeURI(norm)}`;
 }
 
 function formatSize(bytes: number): string {

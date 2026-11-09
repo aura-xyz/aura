@@ -25,6 +25,7 @@ import {
   setWorkspace,
   stopMessage as stopMessageApi,
   truncateHistory as truncateHistoryApi,
+  type ImageRef,
   type ModelInfo,
 } from "./lib/api";
 import { type Mode } from "./lib/mode";
@@ -84,7 +85,16 @@ export interface AssistantVersion {
 }
 
 export type ChatMessage =
-  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "user";
+      content: string;
+      /**
+       * 图片附件（v0.8.0，C55）。后端多模态就绪前为降级展示：
+       * 仅携带 path 引用，消息流按 asset protocol 渲染。
+       */
+      images?: ImageRef[];
+    }
   | {
       id: string;
       role: "assistant";
@@ -162,7 +172,7 @@ interface StoreValue extends State {
   startRename: (id: string) => void;
   cancelRename: () => void;
   renameSession: (id: string, title: string) => void;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, images?: ImageRef[]) => Promise<void>;
   /**
    * 回滚到第 userIndex 条用户消息并重新发送 `text`。
    * 「重新生成」与「编辑消息并重跑」共用。
@@ -874,7 +884,7 @@ let sessions = restored;
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, images?: ImageRef[]) => {
       if (state.busy) return;
       const sessionId = state.activeId;
       if (!sessionId) return;
@@ -885,6 +895,7 @@ let sessions = restored;
         id: crypto.randomUUID(),
         role: "user",
         content: text,
+        ...(images && images.length ? { images } : {}),
       };
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -921,7 +932,7 @@ let sessions = restored;
       }));
       persistNow(sessionId, title, current.workspace, messages);
       try {
-        await sendMessageApi(sessionId, text, stateRef.current.mode);
+        await sendMessageApi(sessionId, text, stateRef.current.mode, images);
       } catch (e) {
         if (!sawErrorRef.current) {
           appendBlocks(sessionId, assistantMsg.id, (b) => [

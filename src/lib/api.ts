@@ -26,12 +26,28 @@ export interface ModelInfo {
   pinned: boolean;
 }
 
+/**
+ * 一条图片附件（v0.8.0，C55 图片粘贴 / 拖放）。
+ *
+ * - `path`：本地文件绝对路径（拖放 / 文件选择器所得），预览走 asset protocol（C54 通道）。
+ * - `url`：剪贴板粘贴的图片没有真实路径，用 blob: 对象 URL 做缩略图与预览。
+ * 二者至多其一存在。`name` 始终有值，用于 chip 与消息流展示。
+ * 后端多模态尚未就绪时，发送端降级为只携带 path 引用；后端就绪后此处无需改动，
+ * 只需在 `send_message` 命令里消费 `images` 即可无缝切换。
+ */
+export interface ImageRef {
+  name: string;
+  path?: string;
+  url?: string;
+}
+
 export function sendMessage(
   sessionId: string,
   message: string,
   mode: string,
+  images?: ImageRef[],
 ): Promise<void> {
-  return invoke("send_message", { sessionId, message, mode });
+  return invoke("send_message", { sessionId, message, mode, images });
 }
 
 /**

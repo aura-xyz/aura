@@ -5,12 +5,15 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
-import { ArrowUp, Pencil, Plus, Square } from "lucide-react";
+import { ArrowUp, Pencil, Plus, Square, X } from "lucide-react";
 import type { LexicalEditor } from "lexical";
-import type { ModelInfo, SkillView } from "../lib/api";
+import type { ImageRef, ModelInfo, SkillView } from "../lib/api";
 import type { Mode } from "../lib/mode";
+import { assetUrl } from "../lib/assetUrl";
+import { fileKindOf } from "../lib/fileIcon";
 import { loadInputDraft, saveInputDraft } from "../lib/draft";
 import { fileItems, findTrigger, type MentionItem, type MentionTrigger } from "../lib/mentions";
 import {
@@ -57,7 +60,7 @@ import { TurnUsagePanel } from "./TurnUsagePanel";
 import WorkspaceSelect from "./WorkspaceSelect";
 
 interface Props {
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: ImageRef[]) => void;
   onStop: () => void;
   busy: boolean;
   models: ModelInfo[];
@@ -89,9 +92,9 @@ interface Props {
   onCancelEdit?: () => void;
   /**
    * 提交入口。普通发送与「编辑后重发」由 store 内部区分，
-   * 输入框只调这一个。
+   * 输入框只调这一个。images 为图片附件（C55），后端多模态就绪前降级携带。
    */
-  onSubmit?: (text: string) => void;
+  onSubmit?: (text: string, images?: ImageRef[]) => void;
   /**
    * 布局变体：`bottom`（默认）贴在对话区底部 / `inline` 嵌在开始界面里。
    */
@@ -105,6 +108,15 @@ interface Props {
 }
 
 type CommandView = CommandId | "root";
+
+/** 输入框本地的图片附件：在 ImageRef 基础上加一个稳定 id 方便增删。 */
+type Attachment = ImageRef & { id: string };
+
+/** 单条、且为图片扩展名的路径（拖放单张图片时 inputInsert 会是这种形态）。 */
+function isSingleImagePath(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  return fileKindOf(text) === "image";
+}
 
 interface CommandState {
   view: CommandView;
@@ -178,6 +190,9 @@ export default function InputArea({
   /** Esc 关掉的那一版触发文本：文本没变就不要因光标变动重新弹出来。 */
   const dismissedRef = useRef<string | null>(null);
 
+  // ── 图片附件（C55）：粘贴 / 拖放产生的图片，发送前以 chip 展示 ──────
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
   const liveSetting = useMarkdownLive();
   const markdownLive = markdownLiveProp ?? liveSetting;
 
@@ -224,9 +239,18 @@ export default function InputArea({
     mentionReqRef.current += 1;
   }, [editPrefill, setValue]);
 
-  // 拖放插入的路径：追加到当前内容末尾。用 id 做依赖，连续插入同段文本也能生效。
+  // 拖放插入的路径：单张图片转成附件 chip（走 asset 通道），其余当作文本追加。
   useEffect(() => {
     if (!inputInsert) return;
+    const text = inputInsert.text.trim();
+    if (isSingleImagePath(text)) {
+      const name = text.split(/[\\/]/).pop() ?? text;
+      setAttachments((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), name, path: text },
+      ]);
+      return;
+    }
     const next = valueRef.current.trim()
       ? `${valueRef.current} ${inputInsert.text}`
       : inputInsert.text;
@@ -432,16 +456,41 @@ export default function InputArea({
 
   function submit() {
     const text = valueRef.current.trim();
-    if (!text || busy) return;
-    // 没定工作区就发不出去：后端拿不到执行目录，工具会落到默认目录。
+    if (busy) return;
+    // 没内容也没附件就发不出去；没定工作区同样不行。
+    if (!text && attachments.length === 0) return;
     if (!workspace) return;
+    const imgs: ImageRef[] = attachments.map(({ id: _id, ...rest }) => rest);
+    // 无附件时保持单参数调用（历史行为，测试与既有调用方都按这个签名断言）。
     if (onSubmit) {
-      onSubmit(text);
+      if (imgs.length) onSubmit(text, imgs);
+      else onSubmit(text);
+    } else if (imgs.length) {
+      onSend(text, imgs);
     } else {
       onSend(text);
     }
     applyText("");
     saveInputDraft(sessionId, "");
+    setAttachments([]);
+  }
+
+  /** 粘贴图片：从剪贴板取出图片文件，生成缩略图 chip（无真实路径，用 blob URL）。 */
+  function handlePaste(e: ClipboardEvent<HTMLDivElement>) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const files = Array.from(dt.items)
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const added = files.map<Attachment>((f) => ({
+      id: crypto.randomUUID(),
+      name: f.name || `pasted-image-${Date.now()}.png`,
+      url: URL.createObjectURL(f),
+    }));
+    setAttachments((prev) => [...prev, ...added]);
   }
 
   /** 选中面板条目后的收尾：清掉触发词（plus 来源则按需插入文本）。 */
@@ -688,8 +737,37 @@ export default function InputArea({
           }
         />
       )}
+      {/* 图片附件 chip：粘贴 / 拖放图片后出现在输入框上方 */}
+      {attachments.length > 0 && (
+        <div className={`mx-auto mb-2 flex flex-wrap gap-2 ${CONTENT_WIDTH}`}>
+          {attachments.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-center gap-2 rounded-tag border border-line bg-surface px-2 py-1.5"
+            >
+              <img
+                src={a.path ? assetUrl(a.path) : a.url}
+                alt={a.name}
+                className="h-9 w-9 shrink-0 rounded object-cover"
+              />
+              <span className="max-w-[10rem] truncate text-[11px] text-foreground" title={a.name}>
+                {a.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
+                aria-label="移除附件"
+                className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-danger"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {/* 不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感。 */}
       <div
+        onPaste={handlePaste}
         className={`mx-auto flex ${CONTENT_WIDTH} flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-[border-color,box-shadow] duration-200 focus-within:border-brand/30 focus-within:shadow-sm`}
       >
         {markdownLive ? (
@@ -752,7 +830,7 @@ export default function InputArea({
               <button
                 type="button"
                 onClick={submit}
-                disabled={!value.trim() || !workspace}
+                disabled={(!value.trim() && attachments.length === 0) || !workspace}
                 aria-label={workspace ? "发送" : "请先选择工作区"}
                 className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
               >
