@@ -357,6 +357,27 @@
 }
 
 /* ---------------------------------------------------------------
+   Linux 无边框窗口圆角（v0.8.0 兼容性修复）
+   ---------------------------------------------------------------
+   Windows / macOS 的窗口圆角由系统窗口管理器负责（DWM / NSWindow）；
+   Linux 下无边框窗口只是一块矩形 surface，没有原生圆角，于是成了直角。
+   这里配合 Rust 侧 `#[cfg(target_os="linux")] transparent(true)`：窗口透明后，
+   把根容器裁成圆角并填回 surface 色，四角透出的区域即显示桌面。
+   仅 Linux 生效——Windows 保持不透明，避免透明窗口丢掉原生阴影与圆角。 */
+html[data-platform="linux"],
+html[data-platform="linux"] body {
+  background: transparent;
+}
+
+html[data-platform="linux"] #root {
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  /* 透明窗口没有系统投影，用 1px 内描边把窗口边缘勾出来，避免在浅色桌面上糊成一片 */
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* ---------------------------------------------------------------
    Breathing cursor (first-token wait)
    --------------------------------------------------------------- */
 

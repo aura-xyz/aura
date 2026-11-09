@@ -253,7 +253,7 @@ pub fn run() {
             // 跟随。窗口为无边框，一旦跳到外部页面就会失去标题栏与关闭按钮，
             // 用户只能杀进程。即便前端漏掉 preventDefault，这里也能拦住。
             let handle = app.handle().clone();
-            let window = tauri::WebviewWindowBuilder::new(
+            let mut builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::default(),
@@ -271,8 +271,15 @@ pub fn run() {
                     .opener()
                     .open_url(url.to_string(), None::<&str>);
                 false
-            })
-            .build()?;
+            });
+            // Linux 的无边框窗口没有 DWM 那样的原生圆角，只能靠透明窗口 +
+            // 前端 CSS 圆角裁剪（见 index.css 的 html[data-platform="linux"]）。
+            // Windows / macOS 保持不透明：它们的圆角由系统负责，透明反而会丢阴影。
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder.transparent(true);
+            }
+            let window = builder.build()?;
 
             #[cfg(any(windows, target_os = "linux"))]
             {
