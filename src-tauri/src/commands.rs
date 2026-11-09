@@ -1954,10 +1954,43 @@ pub fn export_session_bundle(
     })
 }
 
+/// 允许通过 `write_export_bundle` 落盘的扩展名。
+///
+/// 这条命令能把任意字节写到用户任选的路径，是绕开 plugin-fs 权限的
+/// **唯一出口**——不设白名单，前端就等于持有一个任意文件写入原语
+/// （写个 `.bat` 到启动目录即可持久化）。名单只收真实在用的导出格式：
+/// 会话日志 `.zip`、用量 `.csv`，以及计划内的 `.md`。
+const EXPORT_EXTENSIONS: &[&str] = &["zip", "csv", "md"];
+
 /// 前端打包好 zip 后由后端落盘，绕开 plugin-fs 对任意保存路径的权限限制。
+///
+/// 落盘前两道闸（v0.8.0 C36）：
+/// 1. **扩展名白名单**——只写导出文件，不写可执行/脚本；
+/// 2. **路径复用 `paths::classify` 的硬拒档**——系统目录（Windows、
+///    Program Files）与密钥目录（`.ssh`、`.aws`）一律不写。
+///    警告档（桌面、下载）放行：那正是用户主动选保存位置的地方，
+///    在这里再拦一次只会让正常导出失败。
 #[tauri::command]
 pub fn write_export_bundle(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{e}"))
+    let p = PathBuf::from(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext.is_empty() {
+        return Err(format!("导出路径缺少扩展名：{path}"));
+    }
+    if !EXPORT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!(
+            "不支持导出为 .{ext}，仅允许 {}：{path}",
+            EXPORT_EXTENSIONS.join(" / ")
+        ));
+    }
+    if let crate::paths::Verdict::Reject { reason } = crate::paths::classify(&p) {
+        return Err(format!("拒绝写入：{reason}"));
+    }
+    std::fs::write(&p, &bytes).map_err(|e| format!("写入失败：{e}"))
 }
 
 #[cfg(test)]
@@ -2143,6 +2176,51 @@ mod tests {
         let section = crate::agent::runner::render_goal_section("  写完报告  ");
         assert!(section.contains("写完报告"));
         assert!(section.contains("持续推进"), "目标必须明确要求跨轮推进");
+    }
+
+    /// 导出通道只写导出格式：可执行与脚本一律拒绝。
+    /// 没有这道闸，前端等于握着一个任意文件写入原语。
+    #[test]
+    fn export_rejects_executable_and_script_extensions() {
+        for path in [
+            "C:/Users/x/aura-export.exe",
+            "C:/Users/x/aura-export.bat",
+            "C:/Users/x/aura-export.ps1",
+            "C:/Users/x/aura-export.dll",
+            "C:/Users/x/no-ext",
+        ] {
+            let err = write_export_bundle(path.into(), vec![0]).unwrap_err();
+            assert!(
+                err.contains("扩展名") || err.contains("不支持"),
+                "{path} 应被扩展名拦下，实际：{err}"
+            );
+        }
+    }
+
+    /// 系统目录与密钥目录一律不写，即便扩展名合法。
+    #[test]
+    fn export_rejects_system_and_key_directories() {
+        for path in [
+            "C:/Windows/System32/evil.zip",
+            "C:/Program Files/aura/evil.zip",
+            "C:/Users/x/.ssh/known.zip",
+            "C:/Users/x/.aws/cred.zip",
+        ] {
+            let err = write_export_bundle(path.into(), vec![0]).unwrap_err();
+            assert!(err.contains("拒绝写入"), "{path} 应被拒，实际：{err}");
+        }
+    }
+
+    /// 正常导出路径必须能写：白名单是「收紧」，不是「挡住功能」。
+    #[test]
+    fn export_writes_allowed_extension_to_normal_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("aura-export-gate.zip");
+        let _ = std::fs::remove_file(&path);
+        write_export_bundle(path.to_string_lossy().into(), b"PK\x03\x04".to_vec())
+            .expect("临时目录下的 zip 导出应当成功");
+        assert_eq!(std::fs::read(&path).unwrap(), b"PK\x03\x04");
+        let _ = std::fs::remove_file(&path);
     }
 
 }
