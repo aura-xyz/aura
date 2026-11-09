@@ -39,6 +39,14 @@ $msi = Get-ChildItem -Path $BundleDir -Filter '*.msi' -Recurse |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
+# Linux（可选）：同一 bundle/ 目录里有 AppImage 就一并进清单。
+# Tauri updater 在 Linux 上只支持 AppImage，deb 仅供手动下载，
+# 因此 deb 不进 platforms（进了也没人会读，反而让人以为能自更新）。
+$appimage = Get-ChildItem -Path $BundleDir -Filter '*.AppImage' -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.BaseName -like "*_$Version*" } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
 if (-not $nsis) { throw "未找到 $Version 的 nsis 安装包，请确认已执行带签名的 tauri build" }
 
 $nsisSigPath = "$($nsis.FullName).sig"
@@ -74,6 +82,13 @@ $targets = @(
 )
 if ($msi) {
     $targets += @{ target = 'windows-x86_64-msi'; url = "$base/Aura_${Version}_win_x64.msi"; sig = $msiSigPath }
+}
+if ($appimage) {
+    $appimageSigPath = "$($appimage.FullName).sig"
+    if (-not (Test-Path $appimageSigPath)) {
+        throw "找到 $Version 的 AppImage 但缺少 .sig：$appimageSigPath"
+    }
+    $targets += @{ target = 'linux-x86_64'; url = "$base/$($appimage.Name)"; sig = $appimageSigPath }
 }
 
 # Tauri 要求签名字段去掉换行
@@ -128,5 +143,6 @@ $out = Join-Path (Split-Path $BundleDir -Parent) 'latest.json'
 Write-Host "已生成 $out"
 Write-Host "  选中安装包：$($nsis.Name)"
 if ($msi) { Write-Host "  选中 MSI ：$($msi.Name)" }
+if ($appimage) { Write-Host "  选中 AppImage：$($appimage.Name)" }
 if ($Mirrors.Count -gt 0) { Write-Host ("  mirrors 下发 " + $Mirrors.Count + " 项") }
-Write-Host "请在 Release v$Version 中上传：$releaseName、Aura_${Version}_win_x64.msi 与 latest.json"
+Write-Host "请在 Release v$Version 中上传：$releaseName、Aura_${Version}_win_x64.msi、AppImage/deb 与 latest.json"
