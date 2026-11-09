@@ -40,6 +40,17 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
              todos_json TEXT NOT NULL DEFAULT '[]',
              updated_at INTEGER NOT NULL DEFAULT 0
          );
+         -- v0.8.1 C49：agent 历史的增量存储。
+         -- 此前每轮结束都要把整份 history_json 重写一遍，长会话下写放大
+         -- 严重（O(n²)）。这里按 seq 逐条存，每轮只写新增的几条。
+         -- 注意与 messages 表区分：messages 存的是**前端**的富文本消息
+         -- （带 blocks），agent_history 存的是**模型**看到的 role/content。
+         CREATE TABLE IF NOT EXISTS agent_history (
+             session_id TEXT NOT NULL,
+             seq        INTEGER NOT NULL,
+             payload    TEXT NOT NULL,
+             PRIMARY KEY (session_id, seq)
+         );
          CREATE TABLE IF NOT EXISTS messages (
              session_id TEXT NOT NULL,
              seq INTEGER NOT NULL,
@@ -474,10 +485,107 @@ pub fn save_history(
     Ok(())
 }
 
+/// 读取会话历史。
+///
+/// **优先读 `messages` 表**（v0.8.1 C49 之后它是权威来源，增量落库写的就是它），
+/// 表里没有行时回退 `history_json`——那是 v0.6.0 之前的旧库与老数据。
+/// 库里已有的 agent 历史条数（增量落库算差值用）。
+pub fn count_agent_history(conn: &Connection, session_id: &str) -> Result<usize, rusqlite::Error> {
+    let mut stmt =
+        conn.prepare_cached("SELECT COUNT(*) FROM agent_history WHERE session_id = ?1")?;
+    let mut rows = stmt.query(params![session_id])?;
+    let n: i64 = match rows.next()? {
+        Some(row) => row.get(0)?,
+        None => 0,
+    };
+    Ok(n as usize)
+}
+
+/// **增量**追加消息：只写 `from_seq` 之后的新条目。
+///
+/// v0.8.1 C49：此前每轮结束都要把整份历史重写一遍（前端 `save_session`
+/// 会 DELETE 再全量 INSERT），长会话下这是 O(n²) 的写放大——100 轮对话
+/// 要重写 100 次全量。改成只写新增的几条后，单轮成本与对话长度无关。
+///
+/// 返回实际写入的条数。
+pub fn append_history(
+    conn: &Connection,
+    session_id: &str,
+    from_seq: usize,
+    entries: &[Value],
+) -> Result<usize, rusqlite::Error> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO agent_history (session_id, seq, payload) VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id, seq) DO UPDATE SET payload = excluded.payload",
+    )?;
+    for (i, m) in entries.iter().enumerate() {
+        stmt.execute(params![session_id, (from_seq + i) as i64, m.to_string()])?;
+    }
+    Ok(entries.len())
+}
+
+/// 覆盖第 `seq` 条消息。
+///
+/// 用于「最后一条被流式改写」的场景：那一行的 seq 已经在库里，
+/// 增量追加只会追加新行，改不到旧行。
+pub fn replace_last(
+    conn: &Connection,
+    session_id: &str,
+    seq: usize,
+    entry: &Value,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO agent_history (session_id, seq, payload) VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id, seq) DO UPDATE SET payload = excluded.payload",
+        params![session_id, seq as i64, entry.to_string()],
+    )?;
+    Ok(())
+}
+
+/// 只保留前 `keep` 条（截断历史后同步表）。
+pub fn truncate_agent_history(
+    conn: &Connection,
+    session_id: &str,
+    keep: usize,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "DELETE FROM agent_history WHERE session_id = ?1 AND seq >= ?2",
+        params![session_id, keep as i64],
+    )?;
+    Ok(())
+}
+
+/// 只更新会话的模型下标（与消息无关，增量落库时单独写）。
+pub fn set_model_index(
+    conn: &Connection,
+    id: &str,
+    model_idx: usize,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE sessions SET model_idx = ?2 WHERE id = ?1",
+        params![id, model_idx as i64],
+    )?;
+    Ok(())
+}
+
 pub fn load_history(
     conn: &Connection,
     id: &str,
 ) -> Result<Option<(Vec<Value>, usize)>, rusqlite::Error> {
+    let stored = load_agent_history(conn, id)?;
+    if !stored.is_empty() {
+        let mut stmt =
+            conn.prepare_cached("SELECT model_idx FROM sessions WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        let model_idx = match rows.next()? {
+            Some(row) => row.get::<_, i64>(0)? as usize,
+            None => 0,
+        };
+        return Ok(Some((stored, model_idx)));
+    }
     let mut stmt =
         conn.prepare_cached("SELECT history_json, model_idx FROM sessions WHERE id = ?1")?;
     let mut rows = stmt.query(params![id])?;
@@ -542,6 +650,22 @@ pub fn load_session_workspace(
         return Ok(None);
     };
     Ok(Some(row.get(0)?))
+}
+
+/// 读取 agent 历史（模型看到的 role/content）。
+fn load_agent_history(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<Value>, rusqlite::Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT payload FROM agent_history WHERE session_id = ?1 ORDER BY seq",
+    )?;
+    let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for payload in rows {
+        out.push(serde_json::from_str(&payload?).map_err(json_err)?);
+    }
+    Ok(out)
 }
 
 fn load_messages(conn: &Connection, session_id: &str) -> Result<Vec<Value>, rusqlite::Error> {
@@ -1179,6 +1303,49 @@ mod tests {
         assert_eq!(two.len(), 2);
         assert_eq!(two[0].subject, "cmd-2");
         assert_eq!(two[1].subject, "cmd-1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+
+    /// 增量落库：追加、覆盖最后一条、截断后继续追加，seq 都要连续。
+    #[test]
+    fn agent_history_appends_incrementally() {
+        let dir = std::env::temp_dir().join(format!("aura-db-hist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+
+        let msg = |role: &str, content: &str| serde_json::json!({"role": role, "content": content});
+
+        // 首轮：两条
+        append_history(&conn, "s1", 0, &[msg("user", "一"), msg("assistant", "二")]).unwrap();
+        assert_eq!(count_agent_history(&conn, "s1").unwrap(), 2);
+        let (history, _) = load_history(&conn, "s1").unwrap().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["content"], "一");
+        assert_eq!(history[1]["content"], "二");
+
+        // 次轮：只追加一条
+        append_history(&conn, "s1", 2, &[msg("user", "三")]).unwrap();
+        assert_eq!(count_agent_history(&conn, "s1").unwrap(), 3);
+        let (history, _) = load_history(&conn, "s1").unwrap().unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[2]["content"], "三");
+
+        // 覆盖最后一条（流式改写）
+        replace_last(&conn, "s1", 2, &msg("user", "三（改过）")).unwrap();
+        let (history, _) = load_history(&conn, "s1").unwrap().unwrap();
+        assert_eq!(history[2]["content"], "三（改过）");
+
+        // 截断到 1 条后继续追加，seq 不能错位
+        truncate_agent_history(&conn, "s1", 1).unwrap();
+        assert_eq!(count_agent_history(&conn, "s1").unwrap(), 1);
+        append_history(&conn, "s1", 1, &[msg("user", "新的一轮")]).unwrap();
+        let (history, _) = load_history(&conn, "s1").unwrap().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["content"], "一");
+        assert_eq!(history[1]["content"], "新的一轮");
 
         std::fs::remove_dir_all(&dir).ok();
     }

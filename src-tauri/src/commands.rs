@@ -302,8 +302,11 @@ pub async fn send_message(
         };
         run_turn(&mut ctx, message).await
     };
-    if let Ok(db) = state.db.lock() {
-        let _ = db::save_history(&db, &session_id, &session.history, session.model_idx);
+    // 增量落库（v0.8.1 C49）：只写本轮新增/变化的那几条，
+    // 不再每轮重写整份历史（长会话下那是 O(n²) 的写放大）。
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        let _ = persist_agent_history(&db, &session_id, &session.history, session.model_idx);
     }
     // 释放执行权必须在保存历史之后，否则刚结束的流可能被紧随其后的
     // 新请求抢跑，而旧流还没落盘
@@ -545,6 +548,10 @@ pub async fn truncate_history(
         let db = state.db.lock().map_err(lock_err)?;
         db::save_history(&db, &session_id, &session.history, session.model_idx)
             .map_err(|e| e.to_string())?;
+        // 增量表也要截断：否则 agent_history 里多出来的旧行会被
+        // 下次读取当成历史，模型看到已经「删掉」的对话。
+        db::truncate_agent_history(&db, &session_id, session.history.len())
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(TruncateResult {
@@ -552,6 +559,46 @@ pub async fn truncate_history(
         keep_user_messages: plan.keep_user_messages,
         clamped: plan.keep_user_messages < keep_through_user,
     })
+}
+
+/// **增量**落库 agent 历史（v0.8.1 C49）。
+///
+/// 库里已有的条数与内存长度对比后，只写差量：
+///
+/// - 库里比内存多 → 说明历史被截断过，以内存为准，重置后全量写；
+/// - 条数相同 → 最后一条可能被流式改写，覆盖它即可；
+/// - 库里更少 → 追加新增的几条，并把可能改写的最后一条覆盖掉。
+///
+/// `model_idx` 单独更新（它在 sessions 表上，与消息无关）。
+fn persist_agent_history(
+    db: &Connection,
+    session_id: &str,
+    history: &[Value],
+    model_idx: usize,
+) -> Result<(), String> {
+    let stored = db::count_agent_history(db, session_id).map_err(|e| e.to_string())?;
+    let len = history.len();
+
+    if stored > len {
+        db::truncate_agent_history(db, session_id, 0).map_err(|e| e.to_string())?;
+        db::append_history(db, session_id, 0, history).map_err(|e| e.to_string())?;
+    } else if stored == len {
+        if let Some(last) = history.last() {
+            db::replace_last(db, session_id, len.saturating_sub(1), last)
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        if stored > 0 {
+            if let Some(entry) = history.get(stored - 1) {
+                db::replace_last(db, session_id, stored - 1, entry)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        db::append_history(db, session_id, stored, &history[stored..])
+            .map_err(|e| e.to_string())?;
+    }
+
+    db::set_model_index(db, session_id, model_idx).map_err(|e| e.to_string())
 }
 
 /// 侧作用检查结果（前端投影）。
