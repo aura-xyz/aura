@@ -79,9 +79,15 @@ fn greet(name: &str) -> String {
 /// - 生产：自定义协议 `tauri://`，或 Windows 上的 `http://tauri.localhost`
 /// - 开发：`http://localhost:1420`（tauri.conf.json 的 devUrl）
 /// 其余一律视为外部链接，交系统浏览器打开并阻止导航。
+///
+/// **`file:` 不再放行（v0.8.0 C35）**。放行它等于把 WebView 变成任意本地
+/// 文件的渲染器：模型在回答里写一个 `[点我](file:///C:/Users/x/.ssh/id_rsa)`，
+/// 用户点一下就把密钥内容渲染进页面；`file://` 下的脚本还能读到同源目录。
+/// 本地文件统一走 opener（系统默认程序打开），拖动文件走 drag-drop 事件，
+/// 两条路都不经过 WebView 导航，功能没有损失。
 fn is_app_url(url: &tauri::Url) -> bool {
     match url.scheme() {
-        "tauri" | "file" => true,
+        "tauri" => true,
         "http" | "https" => {
             let host = url.host_str().unwrap_or("");
             host == "localhost"
@@ -109,6 +115,31 @@ mod nav_tests {
         assert!(!is_app_url(&"https://api.deepseek.com/models".parse().unwrap()));
         assert!(!is_app_url(&"http://localhost.evil.com/".parse().unwrap()));
         assert!(!is_app_url(&"ftp://files.example.com/".parse().unwrap()));
+    }
+
+    /// **本地文件必须交给系统程序打开，不能让 WebView 渲染**。
+    ///
+    /// 放行 `file:` 时，模型输出里的一个 `file:///C:/Users/x/.ssh/id_rsa`
+    /// 链接被点开就能把密钥内容画进页面；`file://` 页面里的脚本还能顺着
+    /// 同源规则读同目录的其它文件。
+    #[test]
+    fn rejects_file_scheme() {
+        assert!(!is_app_url(&"file:///C:/Users/x/.ssh/id_rsa".parse().unwrap()));
+        assert!(!is_app_url(&"file:///etc/passwd".parse().unwrap()));
+        assert!(!is_app_url(&"file://localhost/C:/Windows/win.ini".parse().unwrap()));
+    }
+
+    /// 自定义协议只认 `tauri:`，别给 `data:` / `blob:` / `javascript:` 开口子。
+    #[test]
+    fn rejects_other_schemes() {
+        for raw in [
+            "data:text/html,<script>alert(1)</script>",
+            "blob:https://example.com/abc",
+            "javascript:alert(1)",
+            "about:blank",
+        ] {
+            assert!(!is_app_url(&raw.parse().unwrap()), "应拦截: {raw}");
+        }
     }
 }
 
