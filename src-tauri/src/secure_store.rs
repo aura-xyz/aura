@@ -336,7 +336,28 @@ impl Store {
     }
 
     pub fn save(&self, plain: &str) -> Result<String, String> {
-        self.backend().save(plain)
+        match self.backend().save(plain) {
+            Ok(blob) => Ok(blob),
+            Err(primary_err) => {
+                // 主后端写失败时降级到文件加密档。
+                //
+                // 典型场景：Linux 上 SecretService 的「可用」探针只做只读探测
+                // （读一个不存在的条目），能连通就判定可用；但真正写入时若密钥环
+                // 集合被锁、或 DBus 会话不可写，set_password 会失败。此时若直接
+                // 返回错误，连同 `save_config` 在内的所有配置保存都会失败——
+                // 表现为「模型列表有模型却切换不了」这类看似无关的故障。
+                //
+                // C45 的口径是「宁可弱，也不能让用户存不进 Key」，配置保存同理：
+                // 降级档的密文带 `aurafile:v1:` 前缀，unprotect 会按前缀路由回来。
+                if !matches!(self.kind, StoreKind::File) && FileEncryptedStore.available() {
+                    FileEncryptedStore.save(plain).map_err(|file_err| {
+                        format!("{primary_err}；降级到文件加密也失败：{file_err}")
+                    })
+                } else {
+                    Err(primary_err)
+                }
+            }
+        }
     }
 
     pub fn load(&self, blob: &str) -> Result<String, String> {

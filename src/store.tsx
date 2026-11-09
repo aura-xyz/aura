@@ -787,8 +787,10 @@ let sessions = restored;
     try {
       await setSelectedModelApi(id);
       setState((s) => ({ ...s, selectedModel: id }));
-    } catch {
-      /* 无效模型保持原选择 */
+    } catch (e) {
+      // 以前这里静默吞错：后端一旦保存失败（如 Linux 密钥环写不进去），
+      // 界面什么都不显示，用户只看到「切换不了」，无从判断原因。
+      notifyApi("error", `切换模型失败：${typeof e === "string" ? e : String(e)}`);
     }
   }, []);
 
