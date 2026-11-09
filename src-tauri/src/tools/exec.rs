@@ -23,7 +23,26 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{scope::AccessScope, ToolOutput};
+use crate::proc_group::Group;
 use crate::security::rules::{check_command, Action, RULES_VERSION};
+
+/// 全局取消标志（v0.8.1 C44）。
+///
+/// 与 `AppState::cancelled` 同为全局语义（同一时刻只跑一个流），
+/// 这里再存一份是因为工具层是纯函数：拿不到 AppState 就没法知道
+/// 用户按了「停止」。停止时置位，执行中的命令会**连同子孙进程**一起
+/// 被终结——旧实现只杀直接子进程，后台还在写文件。
+static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 设置取消标志。停止时置 true，每轮对话开始时置 false。
+pub fn set_cancelled(cancelled: bool) {
+    CANCELLED.store(cancelled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 当前是否已被请求取消。
+pub fn is_cancelled() -> bool {
+    CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// 合并输出的字符上限，超出后头尾截断，防止撑爆模型上下文。
 const MAX_OUTPUT: usize = 5000;
@@ -129,10 +148,9 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("无法启动进程: {}", e))?;
+    // 接管整棵进程树：挂起创建 → 挂进作业 → 恢复执行，
+    // 这样它派生的子孙一个都跑不掉（v0.8.1 C44）
+    let (mut child, group) = Group::spawn(cmd)?;
 
     // ★ 必须**在**开始轮询之前就把管道交给后台线程读空。
     //
@@ -150,8 +168,29 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
         match child.try_wait() {
             Ok(Some(status)) => break status.code(),
             Ok(None) => {
+                // 用户点了「停止」：整树终结，不能只杀父进程
+                if is_cancelled() {
+                    group.terminate(&mut child);
+                    let _ = child.wait();
+                    let partial = drain.join();
+                    let (out, truncated) = truncate_output(&partial, MAX_OUTPUT);
+                    return Ok(ToolOutput {
+                        label: format!("Exec '{}'（已取消）", first_line(command)),
+                        result: format!(
+                            "命令已被用户取消，已终止整棵进程树。\n--- 部分输出 ---\n{}",
+                            if truncated {
+                                format!("{}\n（输出已截断）", out)
+                            } else {
+                                out
+                            }
+                        ),
+                        diff: None,
+                    });
+                }
                 if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
+                    // 超时同样要带走子孙：只杀父进程的话，它派生的
+                    // 安装/编译进程会继续在后台跑
+                    group.terminate(&mut child);
                     let _ = child.wait();
                     let partial = drain.join();
                     let (out, truncated) = truncate_output(&partial, MAX_OUTPUT);

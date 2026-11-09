@@ -7,6 +7,7 @@ pub mod db;
 pub mod history;
 pub mod market;
 pub mod paths;
+pub mod proc_group;
 pub mod power;
 pub mod providers;
 pub mod secure;

@@ -200,6 +200,8 @@ pub async fn send_message(
         return Err("请先为这个对话选择工作区目录".into());
     }
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
+    // 复位取消标志：上一轮的「停止」不该让这一轮的合法命令立刻被取消
+    crate::tools::exec::set_cancelled(false);
 
     // 审批策略：会话覆盖 > 全局默认 > 代码默认（仅危险命令询问）。
     // 每轮读一次，用户在设置里改了下一条命令即生效。
@@ -320,6 +322,9 @@ pub async fn stop_message(
         return Ok(());
     }
     state.cancelled.store(true, Ordering::Relaxed);
+    // 工具层是纯函数，拿不到 AppState：另置一个全局标志，
+    // 让正在跑的命令连同子孙进程一起停下来（C44）
+    crate::tools::exec::set_cancelled(true);
     // 正在等审批的请求必须一起否掉：否则 runner 会卡在 120 秒超时上，
     // 用户看到的是「已经停了但还在转」。
     let cancelled = state.approvals.cancel_session(&session_id);
