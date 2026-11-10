@@ -77,11 +77,9 @@ pub struct ToolFail {
     pub error: String,
 }
 
-/// 生成 UI 动作文案。工具列表见 `registry::TOOLS`。
+/// 生成 UI 动作文案。内置工具走各自 label，MCP 工具显示「服务器/原始名」。
 pub fn tool_label(name: &str, args: &Value) -> String {
-    registry::find(name)
-        .map(|t| (t.label)(args))
-        .unwrap_or_else(|| name.to_string())
+    registry::label_for(name, args)
 }
 
 /// 把模型给的路径解析成实际路径。

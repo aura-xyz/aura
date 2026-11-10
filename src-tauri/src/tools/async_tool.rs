@@ -91,14 +91,17 @@ impl AsyncTool for McpTool {
     fn run(
         &self,
         _scope: AccessScope,
-        _args: Value,
+        args: Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, String>> + Send>> {
-        let server = match &self.spec.source {
-            ToolSource::Mcp { server } => server.clone(),
-            _ => "未知服务器".to_string(),
-        };
+        let name = self.spec.name;
         Box::pin(async move {
-            Err(format!("MCP 服务器「{server}」尚未连接"))
+            // 动态表里存着「改写名 → 服务器 + 原始名」的映射：
+            // `tools/call` 必须发原始名（服务器只认自己的名字）。
+            let entry = crate::tools::registry::mcp_entry(name)
+                .ok_or_else(|| format!("MCP 工具未挂载：{name}"))?;
+            let result = crate::mcp::call_tool(entry.server_id, &entry.original_name, args).await?;
+            let label = format!("MCP {}/{}", entry.server_name, entry.original_name);
+            Ok(ToolOutput::new(label, result))
         })
     }
 }

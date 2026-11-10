@@ -23,6 +23,7 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_STDERR_LINES: usize = 50;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
+const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 单服务器工具数上限：防失控服务器撑爆 prompt。
 const MAX_TOOLS: usize = 50;
 
@@ -277,6 +278,14 @@ impl Connection {
             json!({ "serverId": self.server_id, "count": all.len() }),
         );
         Ok(all)
+    }
+
+    /// 调用一个工具。同一服务器的调用串行执行（`call_lock`），避免服务器
+    /// 实现差异带来的交错问题。返回原始 `result`，内容映射交由上层。
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, String> {
+        let _guard = self.call_lock.lock().await;
+        let params = json!({ "name": name, "arguments": args });
+        self.request("tools/call", params, CALL_TIMEOUT).await
     }
 
     /// `notifications/tools/list_changed`：重扫本服务器工具集并同步注册表。
