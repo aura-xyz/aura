@@ -1579,20 +1579,18 @@ fn join_panel_path(base: &str, name: &str) -> String {
     format!("{}/{name}", base.trim_end_matches('/'))
 }
 
-/// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
+/// 文件面板的路径上下文：会话工作区 + 运行时白名单（v0.8.1 P05）。
 ///
-/// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
-/// 前导 `/` 是工作区根，`C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
-#[tauri::command]
-pub fn list_directory(
-    state: State<'_, AppState>,
-    session_id: String,
-    path: String,
-) -> Result<Vec<DirEntryView>, String> {
+/// 从 `AppState` 取出后转成 owned 值，才能送进 `spawn_blocking` 的
+/// `'static` 闭包——`State<'_, _>` 是借用，不能跨线程持有。
+fn panel_context(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(PathBuf, Vec<PathBuf>), String> {
     // 会话自己的工作区；查不到（内存新建、尚未落库）才回落全局。
     let workspace = {
         let db = state.db.lock().map_err(lock_err)?;
-        db::load_session_workspace(&db, &session_id)
+        db::load_session_workspace(&db, session_id)
             .ok()
             .flatten()
             .filter(|s| !s.is_empty())
@@ -1601,18 +1599,48 @@ pub fn list_directory(
         Some(w) => PathBuf::from(w),
         None => state.workspace.lock().map_err(lock_err)?.clone(),
     };
-    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
-        return Ok(Vec::new());
-    }
-
     let allowlist = {
         let db = state.db.lock().map_err(lock_err)?;
         allowlist_paths(&db)
     };
+    Ok((workspace, allowlist))
+}
+
+/// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
+///
+/// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
+/// 前导 `/` 是工作区根，`C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
+///
+/// v0.8.1 P05：命令改 `async`，磁盘 IO 整体下沉到阻塞池。同步版本在
+/// 上千条目录的 `read_dir` + 逐条 `metadata` 期间会占住 IPC 线程，
+/// 前端 `invoke` 迟迟不返回，表现为「整个应用卡住」。
+#[tauri::command]
+pub async fn list_directory(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<Vec<DirEntryView>, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        list_directory_blocking(workspace, allowlist, &path)
+    })
+    .await
+    .map_err(|e| format!("目录列举异常: {e}"))?
+}
+
+/// 纯磁盘部分：抽出来是为了能脱离 AppState / SQLite 直接单测。
+fn list_directory_blocking(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<Vec<DirEntryView>, String> {
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Ok(Vec::new());
+    }
     let scope = crate::tools::AccessScope::new(workspace, allowlist)
         .map_err(|e| format!("{e}"))?;
 
-    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::resolve_path(&scope, path)?;
     let target = crate::tools::ensure_allowed(&scope, &target)?;
     let meta = std::fs::metadata(&target).map_err(|e| format!("目录不存在: {e}"))?;
     if !meta.is_dir() {
@@ -1623,7 +1651,7 @@ pub fn list_directory(
     for entry in std::fs::read_dir(&target).map_err(|e| format!("读取目录失败: {e}"))? {
         let entry = entry.map_err(|e| format!("读取目录失败: {e}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        let next_path = join_panel_path(&path, &name);
+        let next_path = join_panel_path(path, &name);
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let meta = entry.metadata().ok();
         let size = meta.as_ref().map(|m| if is_dir { 0 } else { m.len() }).unwrap_or(0);
@@ -1666,35 +1694,34 @@ pub fn list_directory(
 /// 读取文本文件内容（右侧文件浏览面板预览用，v0.8.0）。
 ///
 /// 上限 256KB，超限或非 UTF-8 直接返回可读错误；访问范围同样受工作区 + 白名单约束。
+/// v0.8.1 P05：与 `list_directory` 一样改 async + 阻塞池，大文件读盘不再卡住 IPC。
 #[tauri::command]
-pub fn read_file_text(
+pub async fn read_file_text(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
 ) -> Result<String, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        read_file_text_blocking(workspace, allowlist, &path)
+    })
+    .await
+    .map_err(|e| format!("文件读取异常: {e}"))?
+}
+
+fn read_file_text_blocking(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<String, String> {
     const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
-    let workspace = {
-        let db = state.db.lock().map_err(lock_err)?;
-        db::load_session_workspace(&db, &session_id)
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-    };
-    let workspace = match workspace {
-        Some(w) => PathBuf::from(w),
-        None => state.workspace.lock().map_err(lock_err)?.clone(),
-    };
     if workspace.as_os_str().is_empty() || !workspace.is_dir() {
         return Err("尚未选择工作区".into());
     }
-    let allowlist = {
-        let db = state.db.lock().map_err(lock_err)?;
-        allowlist_paths(&db)
-    };
     let scope = crate::tools::AccessScope::new(workspace, allowlist)
         .map_err(|e| format!("{e}"))?;
 
-    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::resolve_path(&scope, path)?;
     let target = crate::tools::ensure_allowed(&scope, &target)?;
     let meta = std::fs::metadata(&target).map_err(|e| format!("文件不存在: {e}"))?;
     if meta.is_dir() {
@@ -2924,4 +2951,67 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+}
+
+/// v0.8.1 P05：文件面板的阻塞部分抽成纯函数后，无需构造 AppState / SQLite
+/// 就能直接验证排序、路径语义与文件大小闸门。
+#[cfg(test)]
+mod file_panel_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aura-panel-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn lists_dirs_first_with_case_insensitive_file_names() {
+        let root = scratch();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("beta.txt"), "b").unwrap();
+        std::fs::write(root.join("Alpha.txt"), "a").unwrap();
+
+        let got = list_directory_blocking(root.clone(), vec![], "/").unwrap();
+        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["docs", "Alpha.txt", "beta.txt"]);
+        assert!(got[0].is_dir);
+        // 前端靠这个相对路径下钻，不能被换成带盘符的绝对磁盘路径
+        assert_eq!(got[0].path, "/docs");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_utf8_and_rejects_directory_or_oversize_file() {
+        let root = scratch();
+        std::fs::write(root.join("a.txt"), "你好 Aura").unwrap();
+        assert_eq!(
+            read_file_text_blocking(root.clone(), vec![], "/a.txt").unwrap(),
+            "你好 Aura"
+        );
+        assert!(read_file_text_blocking(root.clone(), vec![], "/")
+            .unwrap_err()
+            .contains("是目录"));
+
+        std::fs::write(root.join("big.txt"), "x".repeat(256 * 1024 + 1)).unwrap();
+        assert!(read_file_text_blocking(root.clone(), vec![], "/big.txt")
+            .unwrap_err()
+            .contains("文件过大"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unset_workspace_yields_empty_listing_instead_of_error() {
+        // 新建会话尚未选工作区时，面板应该显示空目录而不是弹错误
+        let out = list_directory_blocking(PathBuf::new(), vec![], "/").unwrap();
+        assert!(out.is_empty());
+    }
 }
