@@ -59,6 +59,8 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { resolveAction } from "./lib/shortcuts";
 import { closeTopOverlay } from "./lib/overlayStack";
 import { focusInput } from "./lib/focusInput";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { installGlobalErrorHandlers } from "./lib/globalErrors";
 import {
   actionCommandItems,
   nextMode,
@@ -1159,9 +1161,15 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 export default function App() {
   const themeApi = useTheme();
 
+  // v0.8.1 P11：事件回调异常 / 未处理的 Promise 拒绝统一进 toast。
+  // 装在 ErrorBoundary 外面，即便 Shell 崩了兜底也还活着。
+  useEffect(() => installGlobalErrorHandlers(), []);
+
   return (
-    <StoreProvider>
-      <Shell theme={themeApi} />
-    </StoreProvider>
+    <ErrorBoundary>
+      <StoreProvider>
+        <Shell theme={themeApi} />
+      </StoreProvider>
+    </ErrorBoundary>
   );
 }
