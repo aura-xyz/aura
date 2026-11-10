@@ -20,7 +20,6 @@ export default function StartScreen({
   children,
   onPick,
   recentSession,
-  modelLabel,
 }: {
   /** 输入框（由外层传入，组件本身不管输入逻辑） */
   children: ReactNode;
@@ -28,8 +27,6 @@ export default function StartScreen({
   onPick: (prompt: string) => void;
   /** 最近一条会话：给了就显示「继续上次」直达胶囊 */
   recentSession?: { title: string; onOpen: () => void };
-  /** 当前模型名：给了就在 slogan 下补一枚徽章 */
-  modelLabel?: string;
 }) {
   const [cards, setCards] = useState<ExampleCard[]>([]);
 
@@ -63,11 +60,6 @@ export default function StartScreen({
         <p className="mt-1.5 text-sm text-subtle">
           Minimal surface. Maximum logic.
         </p>
-        {modelLabel && (
-          <span className="mt-2 rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-            {modelLabel}
-          </span>
-        )}
 
         {/* 输入框：紧跟在标题下方 */}
         <div className="mt-6 w-full">{children}</div>

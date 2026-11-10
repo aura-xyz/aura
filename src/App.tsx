@@ -909,11 +909,6 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                       }
                     : undefined
                 }
-                modelLabel={
-                  models.find((m) => m.key === selectedModel)?.label ||
-                  models.find((m) => m.id === selectedModel)?.label ||
-                  selectedModel
-                }
               >
                 <InputArea {...inputProps} variant="inline" />
               </StartScreen>
@@ -946,16 +941,20 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
           )}
         </main>
 
-        {rightbarShown && (
-          <aside
-            data-state={rightbarClosing ? "closing" : "open"}
-            className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
-              rightbarClosing ? "rightbar-leave" : "rightbar-enter"
-            } ${
-              rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
-            }`}
-            style={{ width: rightbarWidthPx }}
-          >
+        {/* 收起时**保持挂载**（仅 display:none），不卸载子组件：
+            否则已打开的文件夹/网页/终端标签与内容会在收起后丢失，
+            重新展开就是一张白板。 */}
+        <aside
+          data-state={
+            rightbarClosing ? "closing" : rightbarShown ? "open" : "hidden"
+          }
+          className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
+            rightbarClosing ? "rightbar-leave" : "rightbar-enter"
+          } ${
+            rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
+          } ${rightbarShown ? "" : "hidden"}`}
+          style={{ width: rightbarWidthPx }}
+        >
             {!rightbarFullscreen && (
               // 拖拽手柄：加宽到 6px 并给一条居中的抓手线——
               // 原来只有 1px 宽、hover 才显色，几乎没人发现得了它能拖。
@@ -1032,8 +1031,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                 </div>
               ))}
             </div>
-          </aside>
-        )}
+        </aside>
         {rightbarShown && (
           <div
             className="absolute top-2 z-30"

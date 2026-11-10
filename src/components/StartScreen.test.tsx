@@ -90,13 +90,15 @@ describe("StartScreen", () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it("给了模型名时在 slogan 下显示徽章", () => {
+  it("首页不再展示模型徽章（模型信息只在输入区）", () => {
     render(
-      <StartScreen onPick={() => {}} modelLabel="Claude Sonnet">
+      <StartScreen onPick={() => {}}>
         <textarea aria-label="输入" />
       </StartScreen>,
     );
-    expect(screen.getByText("Claude Sonnet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Minimal surface. Maximum logic."),
+    ).toBeInTheDocument();
   });
 
   /// 示例卡从 3 张提到 6 张，并带来源色顶边 + 首字小方块。
