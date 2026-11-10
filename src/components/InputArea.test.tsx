@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -369,5 +369,69 @@ describe("InputArea 的 @ / 触发", () => {
     await userEvent.type(box, "{Escape}");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(box).toHaveValue("@");
+  });
+
+  // v0.8.1 P10：焦点始终留在输入框，读屏要靠 aria-activedescendant
+  // 才知道「当前高亮的是哪一项」。
+  it("浮层打开时输入框声明 listbox 关系与当前活动项", async () => {
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    expect(box).not.toHaveAttribute("aria-expanded");
+    await userEvent.type(box, "@");
+    await screen.findByText("store.tsx");
+
+    expect(box).toHaveAttribute("aria-haspopup", "listbox");
+    expect(box).toHaveAttribute("aria-expanded", "true");
+    expect(box).toHaveAttribute("aria-controls", "aura-mention-listbox");
+    expect(box).toHaveAttribute(
+      "aria-activedescendant",
+      "aura-mention-listbox-option-0",
+    );
+    expect(screen.getByRole("listbox", { name: "文件引用" })).toHaveAttribute(
+      "aria-activedescendant",
+      "aura-mention-listbox-option-0",
+    );
+  });
+
+  it("PageDown / PageUp 翻页并同步活动项", async () => {
+    filesMock.mockResolvedValueOnce(
+      Array.from({ length: 12 }, (_, i) => ({
+        path: `src/f${i}.ts`,
+        name: `f${i}.ts`,
+        dir: "src",
+      })),
+    );
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    await screen.findByText("f0.ts");
+
+    expect(box).toHaveAttribute(
+      "aria-activedescendant",
+      "aura-mention-listbox-option-0",
+    );
+    fireEvent.keyDown(box, { key: "PageDown" });
+    expect(box).toHaveAttribute(
+      "aria-activedescendant",
+      "aura-mention-listbox-option-8",
+    );
+    fireEvent.keyDown(box, { key: "PageUp" });
+    expect(box).toHaveAttribute(
+      "aria-activedescendant",
+      "aura-mention-listbox-option-0",
+    );
+  });
+
+  it("Tab 选中当前候选，但不吞掉焦点移动", async () => {
+    const { props } = mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "@");
+    await screen.findByText("store.tsx");
+
+    // fireEvent 返回 false 表示有人 preventDefault；这里必须为 true
+    const notCancelled = fireEvent.keyDown(box, { key: "Tab" });
+    expect(notCancelled).toBe(true);
+    expect(box).toHaveValue("@<src/store.tsx> ");
+    expect(props.onSend).not.toHaveBeenCalled();
   });
 });

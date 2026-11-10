@@ -11,10 +11,20 @@
 import type { ReactNode } from "react";
 import { CONTENT_WIDTH } from "../lib/layout";
 
+/** listbox 的 DOM id：输入框靠 aria-controls / aria-activedescendant 指向它。 */
+export const MENTION_LISTBOX_ID = "aura-mention-listbox";
+export const COMMAND_LISTBOX_ID = "aura-command-listbox";
+
+export function listboxOptionId(listId: string, index: number): string {
+  return `${listId}-option-${index}`;
+}
+
 export default function MenuPopup({
   label,
   header,
   maxHeight = "max-h-72",
+  id,
+  activeDescendant,
   children,
 }: {
   /** 无障碍名（listbox 用） */
@@ -22,12 +32,18 @@ export default function MenuPopup({
   /** 标题行：图标 + 说明 */
   header?: ReactNode;
   maxHeight?: string;
+  /** 有值时启用 aria 联动（v0.8.1 P10） */
+  id?: string;
+  /** 当前高亮项的 DOM id */
+  activeDescendant?: string;
   children: ReactNode;
 }) {
   return (
     <div
+      id={id}
       role="listbox"
       aria-label={label}
+      aria-activedescendant={activeDescendant}
       className={`aura-pop-in mx-auto mb-2 ${CONTENT_WIDTH} ${maxHeight} overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg`}
     >
       {header}

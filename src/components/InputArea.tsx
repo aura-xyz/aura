@@ -43,6 +43,11 @@ import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { onFocusInput } from "../lib/focusInput";
+import {
+  COMMAND_LISTBOX_ID,
+  MENTION_LISTBOX_ID,
+  listboxOptionId,
+} from "./MenuPopup";
 import MarkdownEditor, {
   insertAtCaret,
   replaceTrigger,
@@ -159,6 +164,9 @@ function consume(e: KeyboardEvent<HTMLElement>): void {
   e.preventDefault();
   e.stopPropagation();
 }
+
+/** @ 候选面板一次翻页跨过的条数（v0.8.1 P10）。 */
+const MENTION_PAGE_STEP = 8;
 
 export default function InputArea({
   onSend,
@@ -645,6 +653,24 @@ export default function InputArea({
         setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length);
         return;
       }
+      // 长文件列表靠逐键上下太慢：PageUp/PageDown 一次跨 8 条。
+      // 用 clamp 而非取模，翻到头就停住，不会从末尾绕回开头。
+      if (e.key === "PageDown" && mentionItems.length > 1) {
+        consume(e);
+        setMentionIndex((i) => Math.min(i + MENTION_PAGE_STEP, mentionItems.length - 1));
+        return;
+      }
+      if (e.key === "PageUp" && mentionItems.length > 1) {
+        consume(e);
+        setMentionIndex((i) => Math.max(i - MENTION_PAGE_STEP, 0));
+        return;
+      }
+      if (e.key === "Tab") {
+        // 只选中当前候选，**不** consume：Tab 必须继续把焦点移出输入框
+        // （WCAG 2.1.2 无键盘陷阱），吞掉它等于把键盘用户锁在这里。
+        pickMention(mentionItems[mentionIndex] ?? mentionItems[0]);
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         consume(e);
         pickMention(mentionItems[mentionIndex] ?? mentionItems[0]);
@@ -668,6 +694,22 @@ export default function InputArea({
       submit();
     }
   }
+
+  // v0.8.1 P10：输入框与候选 listbox 的读屏联动。焦点始终留在输入框，
+  // 因此用 aria-activedescendant 告诉读屏「当前高亮的是哪一项」。
+  const activeListbox = cmd
+    ? COMMAND_LISTBOX_ID
+    : mentionItems.length > 0
+      ? MENTION_LISTBOX_ID
+      : undefined;
+  const activeListboxIndex = cmd ? cmdIndex : mentionIndex;
+  const listboxA11y = activeListbox
+    ? {
+        id: activeListbox,
+        activeId: listboxOptionId(activeListbox, activeListboxIndex),
+        expanded: true,
+      }
+    : undefined;
 
   const placeholder =
     mode === "plan"
@@ -792,6 +834,7 @@ export default function InputArea({
             onChange={handleSnapshot}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
+            listboxA11y={listboxA11y}
           />
         ) : (
           <textarea
@@ -802,6 +845,11 @@ export default function InputArea({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             aria-label="消息输入框"
+            aria-haspopup={activeListbox ? "listbox" : undefined}
+            aria-expanded={activeListbox ? true : undefined}
+            aria-controls={activeListbox}
+            aria-activedescendant={listboxA11y?.activeId}
+            aria-autocomplete={activeListbox ? "list" : undefined}
             className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
           />
         )}
