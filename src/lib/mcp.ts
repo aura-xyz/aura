@@ -1,135 +1,146 @@
 /**
- * MCP（Model Context Protocol）服务器视图模型与命令契约（v0.8.0，C56 前端骨架）。
+ * MCP 服务器前端契约（v0.8.0 rc.3 C65）。
  *
- * **设计预览态**：后端 MCP 命令要到 rc.3 才落地。本模块先把类型、字段与命令契约
- * 定死，页面以「设计预览」运行（数据来自下面的 DEMO_SERVERS，改动只落在本地 state）。
- * 后端就绪后，把页面的数据源从 DEMO_SERVERS 换成 `invoke(MCP_COMMANDS.list)`、
- * 把各操作换成对应 invoke 即可实化——UI 与类型零重构。
- *
- * **安全口径**（必须与安全增强同批评审）：
- * - 工具白名单 `tools[].enabled` 决定哪些工具暴露给模型，UI 必须可见可改；
- * - 只读范围 `readOnly` + `scopes` 决定服务器可访问的目录，UI 必须可见可改；
- * - 后端对齐后，Exec 类工具自动进入统一审批分级（C40），前端不另写一套判定。
+ * 与后端 `commands.rs` 的返回结构逐字段对齐（返回结构为 snake_case）。
+ * 命令参数名与后端函数形参同名（均为单词，无驼峰歧义）。
  */
+import { invoke } from "@tauri-apps/api/core";
 
-export type McpStatus = "connected" | "disconnected" | "error";
+export type McpStatus = "running" | "connecting" | "down" | "disabled";
 
-/** 单条 MCP 工具视图。 */
-export interface McpToolView {
-  /** 工具名（服务器内的唯一标识） */
-  name: string;
-  description: string;
-  /** 是否在启用白名单内。未勾选的工具不会暴露给模型。 */
-  enabled: boolean;
-  /** 是否需要审批（Exec / 写类工具由后端规则判定，前端仅展示） */
-  requiresApproval?: boolean;
-}
-
-/** 一台 MCP 服务器视图。 */
+/** 单台服务器卡片视图。 */
 export interface McpServerView {
-  id: string;
+  id: number;
   name: string;
-  /** 传输方式：rc.3 只做 stdio */
-  transport: "stdio";
-  /** 启动命令（可执行文件或命令名） */
   command: string;
   args: string[];
-  status: McpStatus;
-  /** 逐服务器总开关：关闭后其工具全部不挂载 */
   enabled: boolean;
-  /** 工具清单（含白名单勾选状态） */
-  tools: McpToolView[];
-  /** 只读模式：开启后禁写类工具（仍可读） */
-  readOnly: boolean;
-  /** 只读范围：允许工具访问的目录（空 = 仅工作区，不额外放开） */
-  scopes: string[];
-  /** 最近错误（最新在前，展示在详情抽屉） */
-  recentErrors: string[];
-  /** 最近一次连接成功时间（Unix 毫秒，0 表示从未连接） */
-  lastConnectedAt: number;
+  status: McpStatus;
+  status_reason: string | null;
+  tool_count: number;
+  workspaces: string[];
 }
 
-/** 添加 / 编辑服务器时的输入（不含运行时状态）。 */
-export type McpServerInput = Pick<
-  McpServerView,
-  "name" | "command" | "args" | "enabled" | "readOnly" | "scopes"
->;
+/** 单个工具（详情展示：原始名与对外改写名对照）。 */
+export interface McpToolItem {
+  name: string;
+  external_name: string;
+  description: string;
+  schema: string | null;
+}
 
-/**
- * 后端命令契约（rc.3 实化时按此实现，前端调用签名不变）。
- *
- * 现在只在注释里固化，避免后端就绪后前后端各拍一套字段名。
- */
-export const MCP_COMMANDS = {
-  /** 列出全部服务器 → McpServerView[] */
-  list: "mcp_list_servers",
-  /** 新增服务器，入参 McpServerInput → McpServerView */
-  add: "mcp_add_server",
-  /** 更新服务器（含白名单 / 只读范围），入参 McpServerView → McpServerView */
-  update: "mcp_update_server",
-  /** 删除服务器，入参 { id } → void */
-  remove: "mcp_remove_server",
-  /** 连接 / 断开，入参 { id, connect: boolean } → McpServerView */
-  connect: "mcp_connect_server",
-} as const;
+/** 单服务器状态详情。 */
+export interface McpStatusView {
+  status: McpStatus;
+  reason: string | null;
+  stderr: string[];
+  tool_count: number;
+  tools: McpToolItem[];
+}
 
-/** 状态 → 展示元信息（文案 + 颜色点）。 */
+/** 添加前试连结果。 */
+export interface McpTestResult {
+  ok: boolean;
+  tool_count: number;
+  error: string | null;
+  stderr: string[];
+}
+
+/** 新增 / 编辑表单的输入。 */
+export interface McpServerInput {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  workspaces: string[];
+}
+
+/** 状态 → 展示元信息。 */
 export const MCP_STATUS_META: Record<
   McpStatus,
   { label: string; dot: string; text: string }
 > = {
-  connected: { label: "已连接", dot: "bg-success", text: "text-success" },
-  disconnected: { label: "未连接", dot: "bg-line", text: "text-subtle" },
-  error: { label: "连接失败", dot: "bg-danger", text: "text-danger" },
+  running: { label: "已连接", dot: "bg-success", text: "text-success" },
+  connecting: { label: "连接中", dot: "bg-warning", text: "text-warning" },
+  down: { label: "未连接", dot: "bg-danger", text: "text-danger" },
+  disabled: { label: "已停用", dot: "bg-line", text: "text-subtle" },
 };
 
-/** 状态点 / 名称的辅助函数（纯函数，便于日后单测）。 */
-export function commandSummary(server: Pick<McpServerView, "command" | "args">): string {
-  return [server.command, ...server.args].join(" ");
+/** 命令 + 参数的一行摘要。 */
+export function commandSummary(
+  s: Pick<McpServerView, "command" | "args">,
+): string {
+  return [s.command, ...s.args].join(" ").trim();
 }
 
-/**
- * 设计预览用的示例数据。**不是真实连接**，仅供界面演示与契约核对。
- * 后端就绪后本常量可整体删除。
- */
-export const DEMO_SERVERS: McpServerView[] = [
-  {
-    id: "demo-filesystem",
-    name: "filesystem",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/work"],
-    status: "connected",
-    enabled: true,
-    readOnly: true,
-    scopes: ["/work", "/work/docs"],
-    recentErrors: [],
-    lastConnectedAt: 0,
-    tools: [
-      { name: "read_file", description: "读取文件内容", enabled: true },
-      { name: "list_directory", description: "列出目录条目", enabled: true },
-      { name: "search_files", description: "按名称搜索文件", enabled: true },
-      { name: "write_file", description: "写入文件（只读模式下禁用）", enabled: false, requiresApproval: true },
-    ],
-  },
-  {
-    id: "demo-github",
-    name: "github",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-    status: "error",
-    enabled: false,
-    readOnly: false,
-    scopes: [],
-    recentErrors: [
-      "启动失败：未找到环境变量 GITHUB_TOKEN",
-      "连接超时（20s）：命令 npx 无响应",
-    ],
-    lastConnectedAt: 0,
-    tools: [
-      { name: "search_repositories", description: "搜索仓库", enabled: true },
-      { name: "create_issue", description: "创建 issue", enabled: false, requiresApproval: true },
-    ],
-  },
-];
+/** 解析「每行一个 KEY=VALUE」的环境变量文本；忽略空行与 # 注释。 */
+export function parseEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1).trim();
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+/** 环境变量对象 → 表单文本（每行 KEY=VALUE）。 */
+export function envToText(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+}
+
+/** 文本 → 非空行数组（参数 / 工作区共用）。 */
+export function toLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// ── 命令封装 ─────────────────────────────────────────────────
+
+export function listServers(): Promise<McpServerView[]> {
+  return invoke("mcp_list_servers");
+}
+
+export function addServer(input: McpServerInput): Promise<McpServerView> {
+  return invoke("mcp_add_server", { ...input });
+}
+
+export function updateServer(
+  id: number,
+  input: McpServerInput,
+): Promise<McpServerView> {
+  return invoke("mcp_update_server", { id, ...input });
+}
+
+export function removeServer(id: number): Promise<void> {
+  return invoke("mcp_remove_server", { id });
+}
+
+export function setServerEnabled(
+  id: number,
+  enabled: boolean,
+): Promise<McpServerView> {
+  return invoke("mcp_set_server_enabled", { id, enabled });
+}
+
+export function getServerStatus(id: number): Promise<McpStatusView> {
+  return invoke("mcp_server_status", { id });
+}
+
+export function rescanTools(id: number): Promise<McpServerView> {
+  return invoke("mcp_rescan_tools", { id });
+}
+
+export function testConnect(
+  input: Pick<McpServerInput, "name" | "command" | "args" | "env">,
+): Promise<McpTestResult> {
+  return invoke("mcp_test_connect", { ...input });
+}

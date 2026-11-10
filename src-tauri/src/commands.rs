@@ -2341,13 +2341,25 @@ pub struct McpServerView {
     pub workspaces: Vec<String>,
 }
 
-/// 单服务器状态详情（含 stderr 尾部与工具数）。
+/// 单个工具（详情展示用）。
+#[derive(serde::Serialize)]
+pub struct McpToolItem {
+    /// 服务器原始名（调用时用）
+    pub name: String,
+    /// 对外改写名（模型可见、可能与原名不同）
+    pub external_name: String,
+    pub description: String,
+    pub schema: Option<String>,
+}
+
+/// 单服务器状态详情（含 stderr 尾部、工具数与工具清单）。
 #[derive(serde::Serialize)]
 pub struct McpStatusView {
     pub status: String,
     pub reason: Option<String>,
     pub stderr: Vec<String>,
     pub tool_count: usize,
+    pub tools: Vec<McpToolItem>,
 }
 
 /// 添加前的连通性试跑结果（不落库）。
@@ -2470,6 +2482,15 @@ pub async fn mcp_update_server(
     }
     let cfg = {
         let db = state.db.lock().map_err(lock_err)?;
+        // 环境变量里常含凭据，前端不回读明文；编辑时若表单留空则保留原值，
+        // 避免「只想改个参数却把 token 清掉」。
+        let env = if env.is_empty() {
+            crate::mcp::config::get(&db, id)?
+                .map(|c| c.env)
+                .unwrap_or_default()
+        } else {
+            env
+        };
         crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces)?
     };
     crate::mcp::disconnect_server(id).await;
@@ -2531,11 +2552,34 @@ pub async fn mcp_server_status(
     match conn {
         Some(c) => {
             let (status, reason) = mcp_status_parts(Some(c.status().await), cfg.enabled);
+            let defs = c.tools().await;
+            let mapping = crate::tools::registry::mcp_snapshot();
+            let tools = defs
+                .into_iter()
+                .map(|t| {
+                    let external_name = mapping
+                        .iter()
+                        .find(|(_, server, original)| server == &cfg.name && original == &t.name)
+                        .map(|(ext, _, _)| ext.clone())
+                        .unwrap_or_else(|| t.name.clone());
+                    McpToolItem {
+                        name: t.name,
+                        external_name,
+                        description: t.description,
+                        schema: if t.input_schema.is_null() {
+                            None
+                        } else {
+                            Some(t.input_schema.to_string())
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
             Ok(McpStatusView {
                 status,
                 reason,
                 stderr: c.stderr_tail(),
-                tool_count: c.tools().await.len(),
+                tool_count: tools.len(),
+                tools,
             })
         }
         None => {
@@ -2545,6 +2589,7 @@ pub async fn mcp_server_status(
                 reason,
                 stderr: Vec::new(),
                 tool_count: 0,
+                tools: Vec::new(),
             })
         }
     }

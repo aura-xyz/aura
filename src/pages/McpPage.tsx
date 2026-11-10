@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowLeft,
   ChevronRight,
   CircleAlert,
-  FolderOpen,
+  Pencil,
   Plug,
   Plus,
+  RefreshCw,
   Server,
   Trash2,
   Wrench,
@@ -13,92 +15,87 @@ import {
 } from "lucide-react";
 import Switch from "../components/Switch";
 import {
-  DEMO_SERVERS,
   MCP_STATUS_META,
+  addServer,
   commandSummary,
+  getServerStatus,
+  listServers,
+  parseEnv,
+  removeServer,
+  rescanTools,
+  setServerEnabled,
+  testConnect,
+  toLines,
+  updateServer,
   type McpServerInput,
   type McpServerView,
+  type McpStatusView,
+  type McpTestResult,
 } from "../lib/mcp";
 
 interface Props {
   onClose: () => void;
 }
 
-/** 深拷贝示例数据：设计预览期所有改动只落在本地 state，别污染模块常量。 */
-function cloneDemo(): McpServerView[] {
-  return DEMO_SERVERS.map((s) => ({
-    ...s,
-    args: [...s.args],
-    scopes: [...s.scopes],
-    recentErrors: [...s.recentErrors],
-    tools: s.tools.map((t) => ({ ...t })),
-  }));
-}
-
 export default function McpPage({ onClose }: Props) {
-  // 设计预览：数据来自 DEMO_SERVERS；后端就绪后换成 invoke(MCP_COMMANDS.list)。
-  const [servers, setServers] = useState<McpServerView[]>(cloneDemo);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [servers, setServers] = useState<McpServerView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [editing, setEditing] = useState<
+    { mode: "add" } | { mode: "edit"; server: McpServerView } | null
+  >(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
-  const selected = servers.find((s) => s.id === selectedId) ?? null;
+  const refresh = useCallback(async () => {
+    try {
+      setServers(await listServers());
+      setError(null);
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  /** 以不可变方式更新某台服务器。 */
-  function patch(id: string, fn: (s: McpServerView) => McpServerView) {
-    setServers((prev) => prev.map((s) => (s.id === id ? fn(s) : s)));
-  }
-
-  function toggleServer(id: string) {
-    patch(id, (s) => ({ ...s, enabled: !s.enabled }));
-  }
-
-  function toggleTool(id: string, toolName: string) {
-    patch(id, (s) => ({
-      ...s,
-      tools: s.tools.map((t) =>
-        t.name === toolName ? { ...t, enabled: !t.enabled } : t,
-      ),
-    }));
-  }
-
-  function setReadOnly(id: string, readOnly: boolean) {
-    patch(id, (s) => ({ ...s, readOnly }));
-  }
-
-  function removeScope(id: string, scope: string) {
-    patch(id, (s) => ({ ...s, scopes: s.scopes.filter((x) => x !== scope) }));
-  }
-
-  function addScope(id: string, scope: string) {
-    const v = scope.trim();
-    if (!v) return;
-    patch(id, (s) =>
-      s.scopes.includes(v) ? s : { ...s, scopes: [...s.scopes, v] },
-    );
-  }
-
-  function removeServer(id: string) {
-    setServers((prev) => prev.filter((s) => s.id !== id));
-    if (selectedId === id) setSelectedId(null);
-  }
-
-  function addServer(input: McpServerInput) {
-    const server: McpServerView = {
-      id: `demo-${Date.now()}`,
-      name: input.name,
-      transport: "stdio",
-      command: input.command,
-      args: input.args,
-      status: "disconnected",
-      enabled: input.enabled,
-      tools: [],
-      readOnly: input.readOnly,
-      scopes: input.scopes,
-      recentErrors: [],
-      lastConnectedAt: 0,
+  useEffect(() => {
+    void refresh();
+    // 连接状态 / 工具集变化由后端推送（未在 Tauri 环境下静默跳过）。
+    let unStatus: (() => void) | undefined;
+    let unTools: (() => void) | undefined;
+    (async () => {
+      try {
+        unStatus = await listen("mcp:status", () => void refresh());
+        unTools = await listen("mcp:tools", () => void refresh());
+      } catch {
+        /* 非 Tauri 环境（测试页）没有事件总线 */
+      }
+    })();
+    return () => {
+      unStatus?.();
+      unTools?.();
     };
-    setServers((prev) => [...prev, server]);
-    setAdding(false);
+  }, [refresh]);
+
+  async function toggle(server: McpServerView) {
+    try {
+      await setServerEnabled(server.id, !server.enabled);
+      await refresh();
+      if (detailId === server.id) setDetailId(server.id); // 触发抽屉自然重取
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+    }
+  }
+
+  async function doRemove(id: number) {
+    try {
+      await removeServer(id);
+      setConfirmDelete(null);
+      if (detailId === id) setDetailId(null);
+      await refresh();
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+    }
   }
 
   return (
@@ -108,9 +105,6 @@ export default function McpPage({ onClose }: Props) {
           <div className="flex items-center gap-2">
             <Plug size={16} className="shrink-0 text-subtle" />
             <h1 className="text-sm font-semibold">MCP</h1>
-            <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] text-warning">
-              设计预览
-            </span>
           </div>
           <p className="mt-1 text-xs text-subtle">
             接入 Model Context Protocol 服务器，让 Aura 用上工作区之外的能力与数据源。
@@ -119,7 +113,7 @@ export default function McpPage({ onClose }: Props) {
         <div className="flex shrink-0 items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() => setEditing({ mode: "add" })}
             className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
           >
             <Plus size={11} />
@@ -136,24 +130,23 @@ export default function McpPage({ onClose }: Props) {
         </div>
       </div>
 
-      {/* 设计预览说明：避免用户误以为操作已生效 */}
-      <div className="mt-4 flex items-start gap-2 rounded-card border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] text-subtle">
-        <CircleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
-        <span className="min-w-0 leading-relaxed">
-          后端 MCP 支持将在 rc.3 接入。当前为界面骨架演示，服务器与工具均为示例数据，
-          增删改与开关<span className="text-foreground">不会真正连接</span>任何服务。
-        </span>
-      </div>
+      {error && (
+        <div className="mt-4 flex items-start gap-2 rounded-card border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">
+          <CircleAlert size={13} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 break-words">{error}</span>
+        </div>
+      )}
 
-      {/* 服务器列表 */}
       <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-        {servers.length === 0 ? (
+        {loading ? (
+          <p className="py-10 text-center text-sm text-subtle">正在读取服务器…</p>
+        ) : servers.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 rounded-card border border-dashed border-line py-12 text-center">
             <Server size={22} className="text-subtle" />
             <p className="text-sm text-subtle">还没有 MCP 服务器</p>
             <button
               type="button"
-              onClick={() => setAdding(true)}
+              onClick={() => setEditing({ mode: "add" })}
               className="mt-1 rounded-full border border-line px-3 py-1.5 text-xs transition-colors hover:border-brand hover:text-brand"
             >
               添加第一个
@@ -168,12 +161,12 @@ export default function McpPage({ onClose }: Props) {
                 className="flex items-center gap-3 rounded-card border border-line bg-surface px-3 py-2.5"
               >
                 <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${MCP_STATUS_META[s.status].dot}`}
+                  className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
                   aria-hidden
                 />
                 <button
                   type="button"
-                  onClick={() => setSelectedId(s.id)}
+                  onClick={() => setDetailId(s.id)}
                   className="min-w-0 flex-1 text-left"
                   title="查看详情"
                 >
@@ -190,16 +183,32 @@ export default function McpPage({ onClose }: Props) {
                   </span>
                 </button>
                 <span className="shrink-0 text-[10px] text-subtle">
-                  {s.tools.filter((t) => t.enabled).length}/{s.tools.length} 工具
+                  {s.tool_count} 工具
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setEditing({ mode: "edit", server: s })}
+                  aria-label={`编辑 ${s.name}`}
+                  className="shrink-0 rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(s.id)}
+                  aria-label={`删除 ${s.name}`}
+                  className="shrink-0 rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-danger"
+                >
+                  <Trash2 size={13} />
+                </button>
                 <Switch
                   checked={s.enabled}
                   label={`启用 ${s.name}`}
-                  onChange={() => toggleServer(s.id)}
+                  onChange={() => void toggle(s)}
                 />
                 <button
                   type="button"
-                  onClick={() => setSelectedId(s.id)}
+                  onClick={() => setDetailId(s.id)}
                   aria-label={`查看 ${s.name} 详情`}
                   className="shrink-0 rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
                 >
@@ -211,58 +220,102 @@ export default function McpPage({ onClose }: Props) {
         )}
       </div>
 
-      {selected && (
-        <ServerDrawer
-          server={selected}
-          onClose={() => setSelectedId(null)}
-          onToggleTool={(name) => toggleTool(selected.id, name)}
-          onReadOnly={(v) => setReadOnly(selected.id, v)}
-          onAddScope={(scope) => addScope(selected.id, scope)}
-          onRemoveScope={(scope) => removeScope(selected.id, scope)}
-          onRemove={() => removeServer(selected.id)}
+      {detailId !== null && (
+        <DetailDrawer
+          id={detailId}
+          server={servers.find((s) => s.id === detailId)}
+          onClose={() => setDetailId(null)}
+          onChanged={() => void refresh()}
         />
       )}
 
-      {adding && <AddServerForm onCancel={() => setAdding(false)} onSubmit={addServer} />}
+      {confirmDelete !== null && (
+        <ConfirmRemove
+          name={servers.find((s) => s.id === confirmDelete)?.name ?? ""}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => void doRemove(confirmDelete)}
+        />
+      )}
+
+      {editing && (
+        <ServerForm
+          initial={editing.mode === "edit" ? editing.server : undefined}
+          onCancel={() => setEditing(null)}
+          onSubmit={async (input) => {
+            try {
+              if (editing.mode === "edit") {
+                await updateServer(editing.server.id, input);
+              } else {
+                await addServer(input);
+              }
+              setEditing(null);
+              await refresh();
+            } catch (e) {
+              setError(typeof e === "string" ? e : String(e));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/** 单服务器详情抽屉：工具白名单 + 只读范围（均可见可改）+ 最近错误。 */
-function ServerDrawer({
+/** 详情抽屉：状态、stderr 尾部、工具清单（原始名 ↔ 对外名）、重扫/重连。 */
+function DetailDrawer({
+  id,
   server,
   onClose,
-  onToggleTool,
-  onReadOnly,
-  onAddScope,
-  onRemoveScope,
-  onRemove,
+  onChanged,
 }: {
-  server: McpServerView;
+  id: number;
+  server?: McpServerView;
   onClose: () => void;
-  onToggleTool: (name: string) => void;
-  onReadOnly: (v: boolean) => void;
-  onAddScope: (scope: string) => void;
-  onRemoveScope: (scope: string) => void;
-  onRemove: () => void;
+  onChanged: () => void;
 }) {
-  const [scopeInput, setScopeInput] = useState("");
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const meta = MCP_STATUS_META[server.status];
+  const [detail, setDetail] = useState<McpStatusView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setDetail(await getServerStatus(id));
+      setErr(null);
+    } catch (e) {
+      setErr(typeof e === "string" ? e : String(e));
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function rescan() {
+    setBusy(true);
+    try {
+      await rescanTools(id);
+      await load();
+      onChanged();
+    } catch (e) {
+      setErr(typeof e === "string" ? e : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const meta = detail ? MCP_STATUS_META[detail.status] : null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <span className={`h-2 w-2 shrink-0 rounded-full ${MCP_STATUS_META[server.status].dot}`} aria-hidden />
-          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{server.name}</h2>
-          <span className={`shrink-0 text-[10px] ${meta.text}`}>{meta.label}</span>
+          {meta && <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} aria-hidden />}
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+            {server?.name ?? "服务器"}
+          </h2>
+          {meta && <span className={`shrink-0 text-[10px] ${meta.text}`}>{meta.label}</span>}
           <button
             type="button"
             onClick={onClose}
@@ -274,302 +327,109 @@ function ServerDrawer({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {err && (
+            <p className="mb-3 flex items-start gap-2 text-[11px] text-danger">
+              <CircleAlert size={12} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">{err}</span>
+            </p>
+          )}
+
           <section>
             <h3 className="eyebrow">启动命令</h3>
             <p className="mt-1.5 break-all rounded-tag bg-surface-sunken px-2 py-1.5 font-mono text-[11px] text-foreground">
-              {commandSummary(server) || "—"}
+              {server ? commandSummary(server) || "—" : "—"}
             </p>
-            <p className="mt-1 text-[10px] text-subtle">传输：stdio</p>
           </section>
 
-          {/* 工具白名单：勾选即暴露给模型，UI 可见可改 */}
+          {detail?.reason && (
+            <p className="mt-3 rounded-tag border border-danger/30 bg-danger/5 px-2 py-1.5 text-[11px] text-danger">
+              {detail.reason}
+            </p>
+          )}
+
           <section className="mt-5">
             <div className="flex items-baseline justify-between">
-              <h3 className="eyebrow">工具白名单</h3>
+              <h3 className="eyebrow">工具清单</h3>
               <span className="text-[10px] text-subtle">
-                {server.tools.filter((t) => t.enabled).length}/{server.tools.length} 已启用
+                {detail ? `${detail.tool_count} 个` : "—"}
               </span>
             </div>
-            <p className="mt-1 text-[10px] leading-relaxed text-subtle">
-              只有勾选的工具会暴露给模型；未勾选的一律不可用。
-            </p>
-            {server.tools.length === 0 ? (
-              <p className="mt-2 text-[11px] text-subtle">尚未发现工具（连接后自动拉取）。</p>
+            {!detail || detail.tools.length === 0 ? (
+              <p className="mt-2 text-[11px] text-subtle">
+                暂无工具（未连接或服务器未提供）。
+              </p>
             ) : (
               <ul className="mt-2 flex flex-col gap-1.5">
-                {server.tools.map((t) => (
+                {detail.tools.map((t) => (
                   <li
                     key={t.name}
-                    className="flex items-center gap-2 rounded-tag border border-line bg-surface px-2 py-1.5"
+                    className="rounded-tag border border-line bg-surface px-2 py-1.5"
                   >
-                    <Wrench size={12} className="shrink-0 text-subtle" aria-hidden />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate font-mono text-[11px] text-foreground">
-                          {t.name}
+                    <div className="flex items-center gap-1.5">
+                      <Wrench size={12} className="shrink-0 text-subtle" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+                        {t.external_name}
+                      </span>
+                      {t.external_name !== t.name && (
+                        <span className="shrink-0 rounded-full border border-warning/40 px-1.5 py-0.5 text-[9px] text-warning">
+                          原名 {t.name}
                         </span>
-                        {t.requiresApproval && (
-                          <span className="shrink-0 rounded-full border border-warning/40 px-1.5 py-0.5 text-[9px] text-warning">
-                            需审批
-                          </span>
-                        )}
-                      </span>
-                      <span className="block truncate text-[10px] text-subtle">
-                        {t.description}
-                      </span>
-                    </span>
-                    <Switch
-                      checked={t.enabled}
-                      label={`启用工具 ${t.name}`}
-                      onChange={() => onToggleTool(t.name)}
-                    />
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-[10px] text-subtle">{t.description}</p>
                   </li>
                 ))}
               </ul>
             )}
           </section>
 
-          {/* 只读范围：只读模式 + 可访问目录，UI 可见可改 */}
-          <section className="mt-5">
-            <div className="flex items-center justify-between">
-              <h3 className="eyebrow">只读范围</h3>
-              <label className="flex items-center gap-1.5 text-[11px] text-subtle">
-                只读模式
-                <Switch
-                  checked={server.readOnly}
-                  label="只读模式"
-                  onChange={() => onReadOnly(!server.readOnly)}
-                />
-              </label>
-            </div>
-            <p className="mt-1 text-[10px] leading-relaxed text-subtle">
-              {server.readOnly
-                ? "只读模式已开启：写类工具一律不可用，仅可读取下列目录。"
-                : "允许工具访问下列目录；不填则仅限当前工作区。"}
-            </p>
-            {server.scopes.length > 0 ? (
-              <ul className="mt-2 flex flex-col gap-1.5">
-                {server.scopes.map((scope) => (
-                  <li
-                    key={scope}
-                    className="flex items-center gap-2 rounded-tag border border-line bg-surface px-2 py-1.5"
-                  >
-                    <FolderOpen size={12} className="shrink-0 text-subtle" aria-hidden />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
-                      {scope}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveScope(scope)}
-                      aria-label={`移除 ${scope}`}
-                      className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:text-danger"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-[11px] text-subtle">未设置额外目录（仅工作区）。</p>
-            )}
-            <div className="mt-2 flex items-center gap-1.5">
-              <input
-                value={scopeInput}
-                onChange={(e) => setScopeInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    onAddScope(scopeInput);
-                    setScopeInput("");
-                  }
-                }}
-                placeholder="输入目录路径，回车添加"
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded-tag border border-line bg-surface px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-subtle focus:border-brand/40"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  onAddScope(scopeInput);
-                  setScopeInput("");
-                }}
-                className="shrink-0 rounded-tag border border-line px-2 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
-              >
-                添加
-              </button>
-            </div>
-          </section>
-
-          {/* 最近错误 */}
-          <section className="mt-5">
-            <h3 className="eyebrow">最近错误</h3>
-            {server.recentErrors.length > 0 ? (
-              <ul className="mt-2 flex flex-col gap-1.5">
-                {server.recentErrors.map((err, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 rounded-tag border border-danger/30 bg-danger/5 px-2 py-1.5 text-[11px] text-danger"
-                  >
-                    <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
-                    <span className="min-w-0 break-words">{err}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-[11px] text-subtle">无错误记录。</p>
-            )}
-          </section>
+          {detail && detail.stderr.length > 0 && (
+            <section className="mt-5">
+              <h3 className="eyebrow">stderr（最近）</h3>
+              <pre className="scrollbar-thin mt-2 max-h-48 overflow-auto rounded-tag bg-surface-sunken px-2 py-1.5 font-mono text-[10px] leading-relaxed text-subtle">
+                {detail.stderr.join("\n")}
+              </pre>
+            </section>
+          )}
         </div>
 
         <div className="flex items-center justify-between border-t border-line px-4 py-3">
-          {confirmRemove ? (
-            <div className="flex items-center gap-2 text-[11px]">
-              <span className="text-subtle">确认删除？</span>
-              <button
-                type="button"
-                onClick={onRemove}
-                className="rounded-full bg-danger px-2.5 py-1 text-white transition-colors hover:opacity-90"
-              >
-                删除
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmRemove(false)}
-                className="rounded-full border border-line px-2.5 py-1 text-subtle transition-colors hover:border-brand"
-              >
-                取消
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmRemove(true)}
-              className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[11px] text-subtle transition-colors hover:border-danger hover:text-danger"
-            >
-              <Trash2 size={11} />
-              删除服务器
-            </button>
-          )}
-          <span className="text-[10px] text-subtle">设计预览 · 不会生效</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void rescan()}
+            className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+          >
+            <RefreshCw size={11} />
+            重扫工具
+          </button>
+          <span className="text-[10px] text-subtle">仅执行模式下对模型可见</span>
         </div>
       </div>
     </div>
   );
 }
 
-/** 添加服务器表单：名称 + 命令 + 参数 + JSON 预览。 */
-function AddServerForm({
+/** 删除二次确认。 */
+function ConfirmRemove({
+  name,
   onCancel,
-  onSubmit,
+  onConfirm,
 }: {
+  name: string;
   onCancel: () => void;
-  onSubmit: (input: McpServerInput) => void;
+  onConfirm: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
-  const [argsText, setArgsText] = useState("");
-  const [readOnly, setReadOnly] = useState(true);
-  const [scopesText, setScopesText] = useState("");
-
-  const args = useMemo(
-    () => argsText.split(/\s+/).map((s) => s.trim()).filter(Boolean),
-    [argsText],
-  );
-  const scopes = useMemo(
-    () =>
-      scopesText
-        .split(/\n+/)
-        .map((s) => s.trim())
-        .filter(Boolean),
-    [scopesText],
-  );
-
-  const input: McpServerInput = {
-    name: name.trim(),
-    command: command.trim(),
-    args,
-    enabled: true,
-    readOnly,
-    scopes,
-  };
-  const valid = input.name.length > 0 && input.command.length > 0;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
-      onClick={onCancel}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={onCancel}>
       <div
-        className="w-full max-w-lg rounded-card border border-line bg-surface p-5 shadow-xl"
+        className="w-full max-w-sm rounded-card border border-line bg-surface p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">添加 MCP 服务器</h2>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="关闭"
-            className="rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-          >
-            <X size={14} />
-          </button>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-subtle">名称</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如 filesystem"
-              spellCheck={false}
-              className="rounded-tag border border-line bg-surface px-2 py-1.5 text-sm outline-none placeholder:text-subtle focus:border-brand/40"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-subtle">命令</span>
-            <input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="例如 npx"
-              spellCheck={false}
-              className="rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-subtle">参数（空格分隔）</span>
-            <input
-              value={argsText}
-              onChange={(e) => setArgsText(e.target.value)}
-              placeholder="-y @modelcontextprotocol/server-filesystem /work"
-              spellCheck={false}
-              className="rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-subtle">只读范围（每行一个目录，可留空）</span>
-            <textarea
-              value={scopesText}
-              onChange={(e) => setScopesText(e.target.value)}
-              rows={2}
-              placeholder={"每行一个目录，例如：\n/work"}
-              spellCheck={false}
-              className="resize-none rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
-            />
-          </label>
-          <label className="flex items-center gap-2 text-[11px] text-subtle">
-            只读模式
-            <Switch checked={readOnly} label="只读模式" onChange={() => setReadOnly((v) => !v)} />
-          </label>
-
-          <div>
-            <span className="text-[11px] text-subtle">JSON 预览（提交给后端的结构）</span>
-            <pre className="scrollbar-thin mt-1 max-h-40 overflow-auto rounded-tag border border-line bg-surface-sunken px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
-              {JSON.stringify(input, null, 2)}
-            </pre>
-          </div>
-        </div>
-
+        <h2 className="text-sm font-semibold">删除服务器「{name}」？</h2>
+        <p className="mt-2 text-xs leading-relaxed text-subtle">
+          该服务器的工具会立即从模型中下线，此操作不可恢复。
+        </p>
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
@@ -580,12 +440,207 @@ function AddServerForm({
           </button>
           <button
             type="button"
-            disabled={!valid}
-            onClick={() => valid && onSubmit(input)}
-            className="rounded-full bg-brand px-3 py-1.5 text-xs text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
+            onClick={onConfirm}
+            className="rounded-full bg-danger px-3 py-1.5 text-xs text-white transition-colors hover:opacity-90"
           >
-            添加
+            删除
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 新增 / 编辑表单，含「试连」与 JSON 预览。 */
+function ServerForm({
+  initial,
+  onCancel,
+  onSubmit,
+}: {
+  initial?: McpServerView;
+  onCancel: () => void;
+  onSubmit: (input: McpServerInput) => void | Promise<void>;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [command, setCommand] = useState(initial?.command ?? "");
+  const [argsText, setArgsText] = useState((initial?.args ?? []).join("\n"));
+  const [envText, setEnvText] = useState("");
+  const [workspacesText, setWorkspacesText] = useState(
+    (initial?.workspaces ?? []).join("\n"),
+  );
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<McpTestResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const build = (): McpServerInput => ({
+    name: name.trim(),
+    command: command.trim(),
+    args: toLines(argsText),
+    env: parseEnv(envText),
+    workspaces: toLines(workspacesText),
+  });
+
+  const valid = name.trim().length > 0 && command.trim().length > 0;
+
+  async function runTest() {
+    if (!valid) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testConnect(build()));
+    } catch (e) {
+      setTest({
+        ok: false,
+        tool_count: 0,
+        error: typeof e === "string" ? e : String(e),
+        stderr: [],
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function save() {
+    if (!valid) return;
+    setBusy(true);
+    try {
+      await onSubmit(build());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={onCancel}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-card border border-line bg-surface shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-line px-5 py-3">
+          <h2 className="text-sm font-semibold">
+            {initial ? "编辑 MCP 服务器" : "添加 MCP 服务器"}
+          </h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="关闭"
+            className="rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-subtle">名称</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如 filesystem"
+                spellCheck={false}
+                className="rounded-tag border border-line bg-surface px-2 py-1.5 text-sm outline-none placeholder:text-subtle focus:border-brand/40"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-subtle">命令</span>
+              <input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="例如 npx"
+                spellCheck={false}
+                className="rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-subtle">参数（每行一个）</span>
+              <textarea
+                value={argsText}
+                onChange={(e) => setArgsText(e.target.value)}
+                rows={3}
+                placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/work"}
+                spellCheck={false}
+                className="resize-none rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-subtle">
+                环境变量（每行 KEY=VALUE，加密存储{initial ? "；留空保留原值" : ""}）
+              </span>
+              <textarea
+                value={envText}
+                onChange={(e) => setEnvText(e.target.value)}
+                rows={2}
+                placeholder={"GITHUB_TOKEN=ghp_…"}
+                spellCheck={false}
+                className="resize-none rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] text-subtle">
+                可见工作区（每行一个路径；留空 = 全部工作区）
+              </span>
+              <textarea
+                value={workspacesText}
+                onChange={(e) => setWorkspacesText(e.target.value)}
+                rows={2}
+                placeholder={"E:/aura"}
+                spellCheck={false}
+                className="resize-none rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
+              />
+            </label>
+
+            <div>
+              <span className="text-[11px] text-subtle">JSON 预览</span>
+              <pre className="scrollbar-thin mt-1 max-h-32 overflow-auto rounded-tag border border-line bg-surface-sunken px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
+                {JSON.stringify(build(), null, 2)}
+              </pre>
+            </div>
+
+            {test && (
+              <p
+                className={`flex items-start gap-2 text-[11px] ${
+                  test.ok ? "text-success" : "text-danger"
+                }`}
+              >
+                <CircleAlert size={12} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {test.ok
+                    ? `连接成功，发现 ${test.tool_count} 个工具`
+                    : `连接失败：${test.error ?? "未知错误"}`}
+                </span>
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-3">
+          <button
+            type="button"
+            disabled={!valid || testing}
+            onClick={() => void runTest()}
+            className="flex items-center gap-1 rounded-full border border-line px-2.5 py-1.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+          >
+            <Plug size={11} />
+            {testing ? "测试中…" : "试连"}
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-full border border-line px-3 py-1.5 text-xs transition-colors hover:border-brand"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={!valid || busy}
+              onClick={() => void save()}
+              className="rounded-full bg-brand px-3 py-1.5 text-xs text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
+            >
+              {initial ? "保存" : "添加"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
