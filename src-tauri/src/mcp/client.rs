@@ -18,6 +18,7 @@ use tokio::process::{ChildStderr, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
+use super::prompts::{parse_prompt_messages, parse_prompt_page, McpPrompt, McpPromptMessage, MAX_PROMPTS};
 use super::resources::{
     parse_resource_contents, parse_resource_page, truncate_utf8, validate_resource_uri,
     McpResource, ResourceReadResult, MAX_RESOURCE_BYTES, MAX_RESOURCES,
@@ -84,6 +85,8 @@ pub struct Connection {
     tools: RwLock<Vec<McpToolDef>>,
     /// 最近一次 resources/list + templates/list 的缓存（M2-03）。
     resources: RwLock<Vec<McpResource>>,
+    /// 最近一次 prompts/list 的缓存（M2-05）。
+    prompts: RwLock<Vec<McpPrompt>>,
     /// 已订阅更新的资源 URI。
     subscribed: RwLock<Vec<String>>,
     /// `tools/call` 串行化（第一部分不做并发，避免服务器实现差异）。
@@ -108,6 +111,7 @@ impl Connection {
             capabilities: RwLock::new(ServerCapabilities::default()),
             tools: RwLock::new(Vec::new()),
             resources: RwLock::new(Vec::new()),
+            prompts: RwLock::new(Vec::new()),
             subscribed: RwLock::new(Vec::new()),
             call_lock: AsyncMutex::new(()),
         }
@@ -217,6 +221,58 @@ impl Connection {
             list.push(uri.to_string());
         }
         Ok(())
+    }
+
+    /// 提示词清单缓存（M2-05）。
+    pub async fn prompts(&self) -> Vec<McpPrompt> {
+        self.prompts.read().await.clone()
+    }
+
+    /// 重扫 prompts/list（带 cursor 翻页）。
+    pub async fn refresh_prompts(&self) -> Result<Vec<McpPrompt>, String> {
+        let mut all: Vec<McpPrompt> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let params = match &cursor {
+                Some(c) => json!({ "cursor": c }),
+                None => json!({}),
+            };
+            let res = self.request("prompts/list", params, LIST_TIMEOUT).await?;
+            all.extend(parse_prompt_page(&res));
+            match res.get("nextCursor").and_then(|c| c.as_str()) {
+                Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
+                _ => break,
+            }
+        }
+        all.truncate(MAX_PROMPTS);
+        *self.prompts.write().await = all.clone();
+        crate::mcp::emit(
+            "mcp:prompts",
+            json!({ "serverId": self.server_id, "count": all.len() }),
+        );
+        Ok(all)
+    }
+
+    /// 展开一条提示词模板。**只取消息文本，绝不执行、不写 history。**
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<Vec<McpPromptMessage>, String> {
+        if name.trim().is_empty() {
+            return Err("提示词名称不能为空".into());
+        }
+        if !args.is_object() && !args.is_null() {
+            return Err("提示词参数必须是对象".into());
+        }
+        let res = self
+            .request(
+                "prompts/get",
+                json!({ "name": name, "arguments": args }),
+                LIST_TIMEOUT,
+            )
+            .await?;
+        Ok(parse_prompt_messages(&res))
     }
 
     /// stderr 尾部（最近若干行），供连接排错展示。
@@ -333,6 +389,11 @@ impl Connection {
                     );
                 }
             }
+            "notifications/prompts/list_changed" => {
+                if let Err(e) = self.refresh_prompts().await {
+                    self.push_stderr(format!("刷新提示词列表失败：{e}"));
+                }
+            }
             _ => {}
         }
     }
@@ -342,6 +403,7 @@ impl Connection {
         self.transport.shutdown().await;
         self.session.fail_pending("连接已关闭");
         *self.resources.write().await = Vec::new();
+        *self.prompts.write().await = Vec::new();
         *self.subscribed.write().await = Vec::new();
         self.set_status(ConnStatus::Disabled).await;
     }
@@ -472,6 +534,11 @@ pub async fn connect(
             if conn.capabilities().await.resources {
                 if let Err(e) = conn.refresh_resources().await {
                     conn.push_stderr(format!("首次拉取资源列表失败：{e}"));
+                }
+            }
+            if conn.capabilities().await.prompts {
+                if let Err(e) = conn.refresh_prompts().await {
+                    conn.push_stderr(format!("首次拉取提示词列表失败：{e}"));
                 }
             }
             Ok(conn)
