@@ -1,15 +1,19 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.2/Aura_0.8.0-rc.2_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjJtbWtiRFdoVU9iUUJaQ0xHemtnZHpNV05JUmpUczBXa0hKQmZWdG5YOHNvWHRUa2JsTTBNdkRZVXZodDE2TVVvODRHVVd0V3Uyb0M2RnhrZjl0K3drPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjcxNTA3CWZpbGU6YXVyYV8wLjguMC1yYy4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguMC1yYy4yCmpWdE84ZDk0dGMxNmNxd0g0NkJHZjl1RXg5MUhTN3BTOW5DWTlzaHhNbkJ4QUpnSFlzaWgvaFdBVGxqcWgwRjVwY1RXdW9VdThTRnZHSjh5L1FmYUFBPT0K"
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/Aura_0.8.0_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjUvaUdGQnlOQWdmZTNrWkppWmlnNmk3cno2NlRqVGVFV01KWGFNaldhanBtd04zQXZ3ZXZFQkNyWnlESlowa215UnQxTVdCb0MzRUVuL1hIUy8zUkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjg5NzU0CWZpbGU6YXVyYV8wLjguMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC44LjAKaCsyeUJTMlk2Q3dwMHlxblBvZEVyekx2SjRvNk5iKy9JU2NnT1JEdktGeWg4RjJjTjRRR1E4Y21CcFBvZVJpak80UmVSVHpIbzk1MStWeVNQQmdYRGc9PQo="
                                          },
+                      "windows-x86_64-msi":  {
+                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/Aura_0.8.0_win_x64.msi",
+                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjFyaDdWRnp3L2ZEYTIxTjc0V1FNbDY2U0VmVlc4TEtTQU9jNVUyZ1JjWGtKb3dOemwwV1dUcWxZeWt5b0RLNVQwWHNCYi9zc3g0bUZyZndtU2RqL2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjg5NzU0CWZpbGU6YXVyYV8wLjguMF94NjRfZW4tVVMubXNpCXZlcnNpb246MC44LjAKVmRjUUNzazhocnQ1OXRFdnhhMzJjQkcybGRDWTdJNGtmNWZtQldpYkpwaTFpWEZsLzZ3KyttdkdJZjU1bEFvWkxiNFliU3RoMEtQKzlTbkx2R01hRHc9PQo="
+                                             },
                       "linux-x86_64":  {
-                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.2/aura_0.8.0-rc.2_amd64.AppImage",
-                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNnl0dFdhc1VlQXlkelAvSEdGMzR1ZTgxWlYxTTNQQnFCdWhIL0ZjK0VkV2F1dnBpbHdOOWsvN09IT2pvd3NQT3VhZ29UWEp3RDZTbEhTcFFCVkJpRUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjY5NjI2CWZpbGU6YXVyYV8wLjguMC1yYy4yX2FtZDY0LkFwcEltYWdlCXZlcnNpb246MC44LjAtcmMuMgoyZGp3ckRmdGVtNUhsekdFYkpoSXVXa1RCelB3cVB2aTJTUkRpUzV1SkZBL0V6Q1hHR1QwYk9ta3pBWTNxdW54VU9Ka2RWRC90TzJkSnNFc1ZPb0dBdz09Cg=="
+                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/aura_0.8.0_amd64.AppImage",
+                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNndYc2cxUGpDOU5iZXA4bW9QTGdDeXphV0E1K0pEQ1lqcEtpNTcvV3dvY254Tm13V0o3bXFYcHFsOTF2K3draUdzOWViTFBoeWhIcERHc29McnVmakFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkwMzIyCWZpbGU6YXVyYV8wLjguMF9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuOC4wCmRTekR0aW54YzJwVmFXeWxVNTlXcDFlNURSZ3pJbUVSMjYzZDZLVHNtMUdkdlN1WTN4UjBsVHIzS2psVDRQYkN3SjQrZUpwWnllU0hFWllrcnRXMkJ3PT0K"
                                        }
                   },
-    "pub_date":  "2026-11-10T00:45:24Z",
-    "version":  "0.8.0-rc.2",
-    "notes":  "v0.8.0-rc.2：Linux 兼容性修复与后端安全增强，详见 Release 页。"
+    "pub_date":  "2026-11-10T06:13:51Z",
+    "version":  "0.8.0",
+    "notes":  "v0.8.0 正式版：界面重构、MCP 第一部分、安全增强与 Linux 兼容性修复，详见 Release 页。"
 }
