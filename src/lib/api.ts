@@ -391,6 +391,21 @@ export async function readFileStream(
   };
 }
 
+/** 一键压缩（v0.8.1 P13）：只折叠模型可见的早期上下文，不删界面消息。 */
+export interface CompactResult {
+  before_tokens: number;
+  after_tokens: number;
+  dropped_messages: number;
+  changed: boolean;
+}
+
+export function compactSession(
+  sessionId: string,
+  contextLimit: number,
+): Promise<CompactResult> {
+  return invoke("compact_session", { sessionId, contextLimit });
+}
+
 /** 本机可用于「在…中打开」的应用；资源管理器始终在首位。 */
 export interface OpenApp {
   id: string;

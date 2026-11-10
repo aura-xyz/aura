@@ -43,3 +43,52 @@ export function waterHint(level: WaterLevel): string {
   }
   return "上下文占用";
 }
+
+/** 占满 / 溢出线（v0.8.1 P13）。到这一档必须硬拦截发送，不能静默失败。 */
+export const WATER_FULL = 1;
+
+/**
+ * 真实溢出判定。
+ *
+ * `WaterLevel.ratio` 被 `Math.min(..., 1)` 裁剪过，用 `ratio >= 1` 会把
+ * 「刚好 100%」和「早就超了 3 倍」混为一谈；这里直接比原始数值。
+ */
+export function waterOverflow(
+  usedTokens: number | null | undefined,
+  contextLimit: number | null | undefined,
+): boolean {
+  if (typeof usedTokens !== "number" || usedTokens <= 0) return false;
+  if (typeof contextLimit !== "number" || contextLimit <= 0) return false;
+  return usedTokens >= contextLimit;
+}
+
+export type WaterAdviceStage = "none" | "warn" | "crit" | "full";
+
+export interface WaterAdvice {
+  stage: WaterAdviceStage;
+  text: string;
+  /** 是否展示「压缩历史 / 新开会话」动作 */
+  showActions: boolean;
+}
+
+/** 把水位转换成一条可执行的建议（v0.8.1 P13）。 */
+export function waterAdvice(
+  level: WaterLevel | null,
+  overflow: boolean,
+): WaterAdvice {
+  if (overflow) {
+    return {
+      stage: "full",
+      text: "上下文已占满，已暂停发送。请压缩历史或新开会话后继续。",
+      showActions: true,
+    };
+  }
+  if (!level) return { stage: "none", text: "", showActions: false };
+  if (level.stage === "crit") {
+    return { stage: "crit", text: waterHint(level), showActions: true };
+  }
+  if (level.stage === "warn") {
+    return { stage: "warn", text: waterHint(level), showActions: false };
+  }
+  return { stage: "none", text: "", showActions: false };
+}

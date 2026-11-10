@@ -49,6 +49,8 @@ import {
 } from "./lib/todo";
 import { planChunk } from "./lib/streamChunks";
 import { toStreamFailure, type AppErrorCode } from "./lib/apiError";
+import { waterOverflow } from "./lib/contextWater";
+import { notify } from "./lib/notices";
 
 // 统一工作区键：反斜杠转 /，并剥离 Windows 扩展路径的 //?/ 前缀，
 // 保证与 Rust 侧 canonicalize 后的键一致
@@ -979,6 +981,20 @@ let sessions = restored;
       if (state.busy) return;
       const sessionId = state.activeId;
       if (!sessionId) return;
+      // v0.8.1 P13：上下文已占满时硬拦截，并明确告知原因。
+      // 不能静默 return——用户会以为「发送按钮坏了」。组件同时给出
+      // 「压缩历史 / 新开会话」两个脱困动作。
+      const limit = stateRef.current.models.find(
+        (m) =>
+          m.key === stateRef.current.selectedModel ||
+          m.id === stateRef.current.selectedModel,
+      )?.context_limit;
+      const used = stateRef.current.sessions.find((x) => x.id === sessionId)
+        ?.lastUsage?.input;
+      if (waterOverflow(used, limit)) {
+        notify("error", "上下文已占满，请先压缩历史或新开会话");
+        return;
+      }
       setState((s) => ({ ...s, busy: true, failure: null }));
       sawErrorRef.current = false;
       bufferRef.current = "";

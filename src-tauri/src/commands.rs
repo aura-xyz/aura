@@ -561,6 +561,75 @@ pub async fn truncate_history(
     })
 }
 
+/// 一键压缩上下文的结果（v0.8.1 P13）。
+#[derive(serde::Serialize)]
+pub struct CompactResult {
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+    pub dropped_messages: usize,
+    pub changed: bool,
+}
+
+/// 压缩目标：压到窗口的 70%，再交给 `local_trim`（它内部还有 0.85 系数），
+/// 实际落在约 60%，给下一轮 system prompt 与工具输出留出余量。
+const COMPACT_TARGET_RATIO: f64 = 0.7;
+
+/// 纯计算部分，脱离 AppState 可单测。
+fn plan_compaction(
+    history: &[Value],
+    context_limit: usize,
+) -> (Vec<Value>, CompactResult) {
+    let before_tokens = crate::agent::context::history_tokens(history);
+    let target = (context_limit as f64 * COMPACT_TARGET_RATIO) as usize;
+    let trimmed = crate::agent::context::local_trim(history, target, 0);
+    let after_tokens = crate::agent::context::history_tokens(&trimmed);
+    let dropped_messages = history.len().saturating_sub(trimmed.len());
+    (
+        trimmed,
+        CompactResult {
+            before_tokens,
+            after_tokens,
+            dropped_messages,
+            changed: dropped_messages > 0,
+        },
+    )
+}
+
+/// 一键压缩会话的 agent 历史（v0.8.1 P13）。
+///
+/// 与 runner 里的自动压缩不同，这是用户主动触发的「先腾空间再继续聊」：
+/// 只折叠模型可见的早期上下文，**界面上的对话记录一条都不删**。
+/// 内存与 DB 必须同步写，否则重启后旧历史又被读回来（与 truncate_history 同因）。
+#[tauri::command]
+pub async fn compact_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    context_limit: usize,
+) -> Result<CompactResult, String> {
+    if context_limit == 0 {
+        return Err("上下文窗口上限无效".into());
+    }
+    let mut sessions = state.sessions.lock().await;
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return Ok(CompactResult {
+            before_tokens: 0,
+            after_tokens: 0,
+            dropped_messages: 0,
+            changed: false,
+        });
+    };
+    let (trimmed, result) = plan_compaction(&session.history, context_limit);
+    if result.changed {
+        session.history = trimmed;
+        let db = state.db.lock().map_err(lock_err)?;
+        db::save_history(&db, &session_id, &session.history, session.model_idx)
+            .map_err(|e| e.to_string())?;
+        db::truncate_agent_history(&db, &session_id, session.history.len())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(result)
+}
+
 /// **增量**落库 agent 历史（v0.8.1 C49）。
 ///
 /// 库里已有的条数与内存长度对比后，只写差量：
@@ -3218,5 +3287,37 @@ mod file_panel_tests {
         // 新建会话尚未选工作区时，面板应该显示空目录而不是弹错误
         let out = list_directory_blocking(PathBuf::new(), vec![], "/").unwrap();
         assert!(out.entries.is_empty());
+    }
+
+    #[test]
+    fn compaction_drops_early_messages_but_keeps_system_and_recent() {
+        let mut history = vec![serde_json::json!({"role": "system", "content": "你是 Aura"})];
+        for i in 0..40 {
+            history.push(serde_json::json!({
+                "role": "user",
+                "content": format!("第{}轮问题 {}", i, "内容".repeat(60)),
+            }));
+            history.push(serde_json::json!({
+                "role": "assistant",
+                "content": format!("第{}轮回答 {}", i, "内容".repeat(60)),
+            }));
+        }
+        let (trimmed, result) = plan_compaction(&history, 4000);
+        assert!(result.changed);
+        assert!(result.after_tokens < result.before_tokens);
+        assert_eq!(trimmed.first().unwrap()["role"], "system");
+        assert_eq!(trimmed.last().unwrap(), history.last().unwrap());
+        assert_eq!(result.dropped_messages, history.len() - trimmed.len());
+    }
+
+    #[test]
+    fn short_history_is_left_untouched() {
+        let history = vec![
+            serde_json::json!({"role": "user", "content": "你好"}),
+            serde_json::json!({"role": "assistant", "content": "在的"}),
+        ];
+        let (trimmed, result) = plan_compaction(&history, 100_000);
+        assert!(!result.changed);
+        assert_eq!(trimmed, history);
     }
 }

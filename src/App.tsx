@@ -61,6 +61,7 @@ import { closeTopOverlay } from "./lib/overlayStack";
 import { focusInput } from "./lib/focusInput";
 import ErrorBoundary from "./components/ErrorBoundary";
 import StreamFailureBar from "./components/StreamFailureBar";
+import ContextWaterAlert from "./components/ContextWaterAlert";
 import { installGlobalErrorHandlers } from "./lib/globalErrors";
 import {
   actionCommandItems,
@@ -230,6 +231,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const turnItems = useMemo(
     () => buildTurnItems(activeSession?.messages ?? []),
     [activeSession?.messages],
+  );
+  /** 上下文预警条与输入框里的水位条共用同一个上限口径。 */
+  const contextLimit = useMemo(
+    () =>
+      models.find((m) => m.key === selectedModel)?.context_limit ??
+      models.find((m) => m.id === selectedModel)?.context_limit,
+    [models, selectedModel],
   );
   // 初始宽度按视口算一次：屏幕宽就多给右栏（网页/终端要横向空间），
   // 之后再被用户拖拽覆盖。窗口尺寸变化不重新算——用户拖过的宽度不该
@@ -969,6 +977,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
               </div>
               {dropBanner}
               {activeSession && <ApprovalCard sessionId={activeSession.id} />}
+              <ContextWaterAlert contextLimit={contextLimit} />
               <StreamFailureBar />
               <InputArea {...inputProps} />
             </>

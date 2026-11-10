@@ -22,7 +22,7 @@ pub mod update_log;
 pub mod updater;
 
 use commands::{
-    add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
+    add_allowlist_path, add_skill_source, check_allowlist_path, compact_session, delete_skill,
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
     get_provider_statuses, get_providers, get_selected_model, get_system_settings,
     get_workspace,
@@ -486,6 +486,7 @@ pub fn run() {
             set_approval_policy,
             remove_session,
             truncate_history,
+            compact_session,
             inspect_side_effects,
             notify,
             quit_app,
