@@ -2320,6 +2320,294 @@ pub fn write_export_bundle(path: String, bytes: Vec<u8>) -> Result<(), String> {
     std::fs::write(&p, &bytes).map_err(|e| format!("写入失败：{e}"))
 }
 
+// ── MCP 命令面（v0.8.0 rc.3 C64）──────────────────────────────
+//
+// 八条命令与既有风格对齐：`State<'_, AppState>` 注入、返回 `Result<_, String>`。
+// 注意：命令参数由 Tauri 按 camelCase 匹配（与 `sessionId` 一致），
+// 返回结构字段保持 snake_case（与本文件其它 struct 一致，前端按同名读）。
+
+/// 服务器卡片视图。
+#[derive(serde::Serialize)]
+pub struct McpServerView {
+    pub id: i64,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub enabled: bool,
+    /// running / connecting / down / disabled
+    pub status: String,
+    pub status_reason: Option<String>,
+    pub tool_count: usize,
+    pub workspaces: Vec<String>,
+}
+
+/// 单服务器状态详情（含 stderr 尾部与工具数）。
+#[derive(serde::Serialize)]
+pub struct McpStatusView {
+    pub status: String,
+    pub reason: Option<String>,
+    pub stderr: Vec<String>,
+    pub tool_count: usize,
+}
+
+/// 添加前的连通性试跑结果（不落库）。
+#[derive(serde::Serialize)]
+pub struct McpTestResult {
+    pub ok: bool,
+    pub tool_count: usize,
+    pub error: Option<String>,
+    pub stderr: Vec<String>,
+}
+
+/// 状态 → (标签, 原因)。未连接时按 enabled 给出 down/disabled。
+fn mcp_status_parts(
+    status: Option<crate::mcp::ConnStatus>,
+    enabled: bool,
+) -> (String, Option<String>) {
+    match status {
+        Some(crate::mcp::ConnStatus::Down { reason }) => ("down".to_string(), Some(reason)),
+        Some(other) => (other.label().to_string(), None),
+        None if enabled => ("down".to_string(), Some("未连接".to_string())),
+        None => ("disabled".to_string(), None),
+    }
+}
+
+async fn mcp_view(cfg: &crate::mcp::McpServerConfig) -> McpServerView {
+    let conn = crate::mcp::manager().get(cfg.id).await;
+    let (status, status_reason) = match &conn {
+        Some(c) => mcp_status_parts(Some(c.status().await), cfg.enabled),
+        None => mcp_status_parts(None, cfg.enabled),
+    };
+    let tool_count = match &conn {
+        Some(c) => c.tools().await.len(),
+        None => 0,
+    };
+    McpServerView {
+        id: cfg.id,
+        name: cfg.name.clone(),
+        command: cfg.command.clone(),
+        args: cfg.args.clone(),
+        enabled: cfg.enabled,
+        status,
+        status_reason,
+        tool_count,
+        workspaces: cfg.workspaces.clone(),
+    }
+}
+
+fn mcp_cwd(state: &State<'_, AppState>) -> Option<std::path::PathBuf> {
+    state.workspace.lock().ok().map(|p| p.clone())
+}
+
+/// 列出全部服务器（含实时状态与工具数）。
+#[tauri::command]
+pub async fn mcp_list_servers(
+    state: State<'_, AppState>,
+) -> Result<Vec<McpServerView>, String> {
+    let list = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::list(&db)?
+    };
+    let mut out = Vec::with_capacity(list.len());
+    for cfg in &list {
+        out.push(mcp_view(cfg).await);
+    }
+    Ok(out)
+}
+
+/// 新增服务器：先静态审查命令，再落库并尝试连接。
+#[tauri::command]
+pub async fn mcp_add_server(
+    state: State<'_, AppState>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    workspaces: Vec<String>,
+) -> Result<McpServerView, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true)?
+    };
+    let cwd = mcp_cwd(&state);
+    if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
+        crate::mcp::emit(
+            "mcp:status",
+            serde_json::json!({ "serverId": cfg.id, "status": { "kind": "down", "reason": e } }),
+        );
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 更新服务器配置（运行中的先断开再按新配置重连）。
+#[tauri::command]
+pub async fn mcp_update_server(
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    workspaces: Vec<String>,
+) -> Result<McpServerView, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces)?
+    };
+    crate::mcp::disconnect_server(id).await;
+    if cfg.enabled {
+        let cwd = mcp_cwd(&state);
+        let _ = crate::mcp::connect_server(&cfg, cwd).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 删除服务器（先断连再删行）。
+#[tauri::command]
+pub async fn mcp_remove_server(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    crate::mcp::disconnect_server(id).await;
+    let db = state.db.lock().map_err(lock_err)?;
+    crate::mcp::config::remove(&db, id)
+}
+
+/// 启用即连接，关闭即断开。
+#[tauri::command]
+pub async fn mcp_set_server_enabled(
+    state: State<'_, AppState>,
+    id: i64,
+    enabled: bool,
+) -> Result<McpServerView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::set_enabled(&db, id, enabled)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    if enabled {
+        let cwd = mcp_cwd(&state);
+        if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
+            crate::mcp::emit(
+                "mcp:status",
+                serde_json::json!({ "serverId": id, "status": { "kind": "down", "reason": e } }),
+            );
+        }
+    } else {
+        crate::mcp::disconnect_server(id).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 单服务器状态：状态 + stderr 尾部 + 工具数（排错主通道）。
+#[tauri::command]
+pub async fn mcp_server_status(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpStatusView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    let conn = crate::mcp::manager().get(id).await;
+    match conn {
+        Some(c) => {
+            let (status, reason) = mcp_status_parts(Some(c.status().await), cfg.enabled);
+            Ok(McpStatusView {
+                status,
+                reason,
+                stderr: c.stderr_tail(),
+                tool_count: c.tools().await.len(),
+            })
+        }
+        None => {
+            let (status, reason) = mcp_status_parts(None, cfg.enabled);
+            Ok(McpStatusView {
+                status,
+                reason,
+                stderr: Vec::new(),
+                tool_count: 0,
+            })
+        }
+    }
+}
+
+/// 手动重扫工具列表。
+#[tauri::command]
+pub async fn mcp_rescan_tools(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpServerView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    if let Some(conn) = crate::mcp::manager().get(id).await {
+        conn.refresh_tools()
+            .await
+            .map_err(|e| format!("刷新工具列表失败：{e}"))?;
+        crate::tools::registry::sync_mcp_tools(None).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 添加前试连：不落库，只验证握手并返回工具数。
+#[tauri::command]
+pub async fn mcp_test_connect(
+    state: State<'_, AppState>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+) -> Result<McpTestResult, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cwd = mcp_cwd(&state);
+    match crate::mcp::client::connect(-1, name, command, args, env, Vec::new(), cwd).await {
+        Ok(conn) => {
+            let result = McpTestResult {
+                ok: true,
+                tool_count: conn.tools().await.len(),
+                error: None,
+                stderr: conn.stderr_tail(),
+            };
+            conn.shutdown().await;
+            Ok(result)
+        }
+        Err(e) => Ok(McpTestResult {
+            ok: false,
+            tool_count: 0,
+            error: Some(e),
+            stderr: Vec::new(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

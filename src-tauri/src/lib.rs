@@ -36,6 +36,8 @@ use commands::{
     notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_keystore_status, get_approval_policy, set_approval_policy,
     clear_provider_key,
     security_list_events, security_export_events, truncate_history,
+    mcp_list_servers, mcp_add_server, mcp_update_server, mcp_remove_server,
+    mcp_set_server_enabled, mcp_server_status, mcp_rescan_tools, mcp_test_connect,
     AppState,
 };
 use terminal::{
@@ -384,6 +386,40 @@ pub fn run() {
                     }
                 });
             }
+            // rc.3 C64：MCP 连接状态 / 工具集变化推给前端；并在启动时
+            // 连接所有已启用的服务器（失败只推状态，不影响启动）。
+            {
+                use tauri::{Emitter, Manager};
+                let emit_handle = app.handle().clone();
+                crate::mcp::set_observer(Box::new(move |kind, payload| {
+                    let _ = emit_handle.emit(kind, payload);
+                }));
+
+                let boot_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let Some(state) = boot_handle.try_state::<commands::AppState>() else {
+                        return;
+                    };
+                    let servers = state
+                        .db
+                        .lock()
+                        .ok()
+                        .and_then(|c| crate::mcp::config::list(&c).ok())
+                        .unwrap_or_default();
+                    let cwd = state.workspace.lock().ok().map(|p| p.clone());
+                    for cfg in servers.into_iter().filter(|c| c.enabled) {
+                        if let Err(e) = crate::mcp::connect_server(&cfg, cwd.clone()).await {
+                            crate::mcp::emit(
+                                "mcp:status",
+                                serde_json::json!({
+                                    "serverId": cfg.id,
+                                    "status": { "kind": "down", "reason": e }
+                                }),
+                            );
+                        }
+                    }
+                });
+            }
             // 终端会话表独立于 AppState：它的生命周期跟着窗口走，
             // 与会话/工作区状态无关。
             app.manage(TerminalManager::default());
@@ -495,14 +531,29 @@ pub fn run() {
             remove_allowlist_path,
             list_timeline,
             export_timeline,
+            mcp_list_servers,
+            mcp_add_server,
+            mcp_update_server,
+            mcp_remove_server,
+            mcp_set_server_enabled,
+            mcp_server_status,
+            mcp_rescan_tools,
+            mcp_test_connect,
             list_shells,
             terminal_create,
             terminal_write,
             terminal_resize,
             terminal_close
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // rc.3：退出前优雅关闭全部 MCP 子进程（否则 npx 等会残留在
+            // 后台，用户下次启动看到多个同名进程）。
+            if matches!(event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(crate::mcp::shutdown_all());
+            }
+        });
 }
 
 #[cfg(test)]
