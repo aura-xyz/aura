@@ -168,3 +168,37 @@ describe("Markdown 稳定片段渲染", () => {
     expect(container.querySelector(".md .md-code-copy")).not.toBeNull();
   });
 });
+
+/**
+ * 未闭合代码块延迟高亮（v0.8.1 P03）。
+ *
+ * 流式写到一半时，每帧都拿残缺代码去跑 highlight.js（还带 highlightAuto
+ * 兜底）是纯浪费。降级期间用户仍要能看到语言标签并复制代码；围栏一闭合
+ * 必须立刻恢复高亮，不能因为记忆化而卡在纯文本状态。
+ */
+describe("Markdown 未闭合代码块延迟高亮", () => {
+  it("写到一半的代码块不做高亮，语言标签与复制按钮仍在", async () => {
+    const { container } = await renderMd("```rust\nfn main() {");
+    expect(container.querySelector('code [class*="hljs-"]')).toBeNull();
+    expect(screen.getByText("Rust")).toBeInTheDocument();
+    expect(container.querySelector(".md-code-copy")).not.toBeNull();
+  });
+
+  it("围栏闭合后恢复高亮", async () => {
+    const { container } = await renderMd("```rust\nfn main() {}\n```");
+    expect(container.querySelector('code [class*="hljs-"]')).not.toBeNull();
+  });
+
+  it("长回答里已闭合的代码块保持高亮，只降级尾部未闭合的那段", async () => {
+    const content =
+      `${"前言".repeat(400)}\n\n` +
+      "```rust\nfn main() {}\n```\n\n" +
+      `${"后记".repeat(400)}\n\n` +
+      "```ts\nconst a = ";
+    const { container } = await renderMd(content);
+    const blocks = container.querySelectorAll(".md .md-code");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].querySelector('[class*="hljs-"]')).not.toBeNull();
+    expect(blocks[1].querySelector('[class*="hljs-"]')).toBeNull();
+  });
+});

@@ -18,7 +18,7 @@ import nginx from "highlight.js/lib/languages/nginx";
 import protobuf from "highlight.js/lib/languages/protobuf";
 import http from "highlight.js/lib/languages/http";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { splitMarkdown } from "../lib/markdownSegments";
+import { hasUnclosedFence, splitMarkdown } from "../lib/markdownSegments";
 import "katex/dist/katex.min.css";
 
 interface Props {
@@ -63,6 +63,19 @@ const HIGHLIGHT_PLUGIN: [typeof rehypeHighlight, Parameters<typeof rehypeHighlig
   },
 ];
 const REHYPE_PLUGINS = [rehypeKatex, HIGHLIGHT_PLUGIN];
+
+/**
+ * 尾部片段出现**未闭合**围栏时改用它（v0.8.1 P03）。
+ *
+ * 模型逐字输出代码时，尾部几乎每帧都是半个 ``` 块；rehype-highlight 会对
+ * 这段残缺代码反复尝试高亮（还会走 highlightAuto 兜底），是长回答掉帧的
+ * 主要来源之一。KaTeX 保留，只跳过 highlight.js；围栏闭合后切回
+ * REHYPE_PLUGINS，一次性补上高亮。
+ *
+ * `code` 的 `language-xxx` class 由 react-markdown 自己给出，与高亮插件无关，
+ * 所以延迟期间语言标签、复制按钮、折叠预览都照常可用。
+ */
+const REHYPE_PLAIN_PLUGINS = [rehypeKatex];
 
 /**
  * react-markdown 没有 `isBlock` 参数，只能靠 children 结构判断：
@@ -140,11 +153,14 @@ const COMPONENTS = {
  * 组件本身不渲染包装元素：ReactMarkdown 输出的块级节点直接成为 `.md` 的子节点，
  * 所以 `.md > * + *` 之类的间距样式与「整段一次解析」时完全一致。
  */
-const MarkdownSegment = memo(function MarkdownSegment({ content }: Props) {
+const MarkdownSegment = memo(function MarkdownSegment({
+  content,
+  highlight,
+}: Props & { highlight: boolean }) {
   return (
     <ReactMarkdown
       remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
+      rehypePlugins={highlight ? REHYPE_PLUGINS : REHYPE_PLAIN_PLUGINS}
       components={COMPONENTS}
     >
       {content}
@@ -156,6 +172,12 @@ const Markdown = memo(function Markdown({ content }: Props) {
   // 只在 content 变化时重新切分；切出来的片段文本保持引用稳定，
   // 是 MarkdownSegment 的 memo 能命中的前提。
   const parts = useMemo(() => splitMarkdown(content), [content]);
+  // 只扫尾部片段：稳定片段里不可能有未闭合围栏（围栏内不切分），
+  // 全长扫描会把「冻结」省下的开销又加回来。
+  const tailOpen = useMemo(
+    () => hasUnclosedFence(parts[parts.length - 1] ?? ""),
+    [parts],
+  );
 
   /**
    * 模型输出里的链接一律用系统浏览器打开，绝不让 WebView 跟随导航。
@@ -177,7 +199,11 @@ const Markdown = memo(function Markdown({ content }: Props) {
   return (
     <div className="md" onClick={handleClick}>
       {parts.map((part, i) => (
-        <MarkdownSegment key={i} content={part} />
+        <MarkdownSegment
+          key={i}
+          content={part}
+          highlight={i < parts.length - 1 || !tailOpen}
+        />
       ))}
     </div>
   );

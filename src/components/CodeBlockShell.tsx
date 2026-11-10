@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { countLines, foldPreview, shouldFold } from "../lib/codeBlock";
@@ -11,7 +11,7 @@ import { langLabel } from "../lib/langLabels";
  * 让人翻不到后面的内容。折叠后留几行预览认得出是什么代码，
  * 想看再展开。
  */
-export default function CodeBlockShell({
+const CodeBlockShell = memo(function CodeBlockShell({
   lang,
   code,
   children,
@@ -60,4 +60,13 @@ export default function CodeBlockShell({
       )}
     </div>
   );
-}
+});
+
+/**
+ * 普通浅比较即可，不做「忽略 children」的自定义比较：
+ * 未闭合代码块降级成纯文本后，围栏闭合时 `code` 不变但 children 会变成
+ * 带 hljs span 的高亮树；若按 code 强行跳过渲染，高亮就永远补不上了。
+ * 真正的「冻结」在上游 MarkdownSegment（片段文本不变则整棵子树不重渲染），
+ * 这里只拦住父级无关状态变化时连带动到代码块。
+ */
+export default CodeBlockShell;
