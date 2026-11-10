@@ -99,6 +99,8 @@ pub async fn connect_server(
     )
     .await?;
     manager().insert(cfg.id, conn.clone()).await;
+    // 工具挂载进注册表（静态表 + 动态表双源）。
+    crate::tools::registry::sync_mcp_tools().await;
     Ok(conn)
 }
 
@@ -107,6 +109,7 @@ pub async fn disconnect_server(id: i64) {
     if let Some(conn) = manager().remove(id).await {
         conn.shutdown().await;
     }
+    crate::tools::registry::sync_mcp_tools().await;
 }
 
 /// 查询连接状态；未连接返回 None。

@@ -279,11 +279,12 @@ impl Connection {
         Ok(all)
     }
 
-    /// `notifications/tools/list_changed`：重扫本服务器工具集。
+    /// `notifications/tools/list_changed`：重扫本服务器工具集并同步注册表。
     async fn on_tools_changed(&self) {
         // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
-        if let Err(e) = self.refresh_tools().await {
-            self.push_stderr(format!("刷新工具列表失败：{e}"));
+        match self.refresh_tools().await {
+            Ok(_) => crate::tools::registry::sync_mcp_tools().await,
+            Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
         }
     }
 

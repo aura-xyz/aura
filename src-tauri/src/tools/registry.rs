@@ -8,8 +8,12 @@
 //! 现在收敛为单一数据源：[`TOOLS`]。`execute`/`tool_label`/`is_known_tool`/
 //! prompt 文案/错误提示全部由它派生，以后加工具只需追加一个元素。
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use serde_json::Value;
 
+use crate::mcp::McpToolDef;
 use super::{display_path, exec, fs_ops, scope::AccessScope, search, write_ops, ToolOutput};
 
 /// 工具能力分类。决定该工具是否注入 prompt，以及未来的模式隔离
@@ -183,9 +187,154 @@ pub const TOOLS: &[ToolSpec] = &[
     },
 ];
 
-/// 按名称查找工具。
+// ── MCP 动态工具表（rc.3 C61）────────────────────────────────
+//
+// 静态表 `TOOLS` 是同步函数指针，MCP 调用是异步 IO 且集合在运行期变化，
+// 因此静态表与动态表并存：动态表把每个 MCP 工具**泄漏**为一个
+// `&'static ToolSpec`（进程级），这样 `find` 仍返回同一种类型，
+// `adapter`/三层闸门/提示词全部零改动。
+//
+// 泄漏说明：每次同步都会重建条目。工具集变化的频率很低（连接/断开/
+// list_changed），一台桌面应用整个会话内泄漏的量可以忽略；换来的是调用方
+// 类型不变、没有生命周期传染。
+
+/// 动态工具的一条：spec + 原始名与归属服务器。
+pub struct McpDynamic {
+    pub spec: &'static ToolSpec,
+    pub server_id: i64,
+    pub server_name: String,
+    pub original_name: String,
+}
+
+/// 供分发层读取的最小信息（`name` 是改写后的对外名）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpEntry {
+    pub server_id: i64,
+    pub server_name: String,
+    pub original_name: String,
+}
+
+fn mcp_table() -> &'static Mutex<HashMap<String, McpDynamic>> {
+    static TABLE: OnceLock<Mutex<HashMap<String, McpDynamic>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 归一化工具名：小写字母/数字/下划线，其余折叠为 `_`。
+fn normalize_name(raw: &str) -> String {
+    let mut out = String::new();
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// MCP 工具的同步占位执行体：真正执行走 `async_tool::McpTool`。
+fn mcp_placeholder_run(_: &AccessScope, _: &Value) -> Result<ToolOutput, String> {
+    Err("MCP 工具应走异步分发".to_string())
+}
+
+fn label_mcp_tool(_args: &Value) -> String {
+    "MCP 调用".to_string()
+}
+
+fn build_mcp_spec(external: &str, server: &str, def: &McpToolDef) -> &'static ToolSpec {
+    let desc = if def.description.trim().is_empty() {
+        "（服务器未提供描述）".to_string()
+    } else {
+        def.description.clone()
+    };
+    let example = format!(
+        "{{\"name\": \"{external}\", \"args\": {{…}}}}（MCP 工具，服务器：{server}）"
+    );
+    let schema: Option<String> = if def.input_schema.is_null() {
+        None
+    } else {
+        Some(serde_json::to_string(&def.input_schema).unwrap_or_default())
+    };
+    Box::leak(Box::new(ToolSpec {
+        name: leak_str(external.to_string()),
+        // 从严：MCP 工具一律按 Exec，Chat/Plan 模式天然不可见。
+        kind: ToolKind::Exec,
+        source: ToolSource::Mcp {
+            server: server.to_string(),
+        },
+        input_schema: schema,
+        desc: leak_str(desc),
+        example: leak_str(example),
+        run: mcp_placeholder_run,
+        label: label_mcp_tool,
+        // 比内置 Exec 的 6 更严。
+        max_consecutive: 3,
+    }))
+}
+
+/// 解析对外工具名：不冲突则用归一化原名；冲突则改写为 `mcp_{server}_{name}`，
+/// 仍冲突再追加序号，保证全局唯一。
+///
+/// 冲突优先级：内置表优先保留原名；MCP 内部先到先得。
+fn pick_external_name(
+    def_name: &str,
+    server: &str,
+    is_taken: &dyn Fn(&str) -> bool,
+) -> String {
+    let mut external = normalize_name(def_name);
+    if external.is_empty() || is_taken(&external) {
+        external = normalize_name(&format!("mcp_{server}_{def_name}"));
+    }
+    let mut suffix = 2;
+    while external.is_empty() || is_taken(&external) {
+        external = normalize_name(&format!("mcp_{server}_{def_name}_{suffix}"));
+        suffix += 1;
+    }
+    external
+}
+
+/// 从连接管理器重建动态工具表。连接/断开/工具集变化后调用。
+pub async fn sync_mcp_tools() {
+    let snapshot = crate::mcp::manager().snapshot().await;
+    // 先汇总，再一次性替换，避免同步过程中出现半张表。
+    let mut next: HashMap<String, McpDynamic> = HashMap::new();
+    for (server_id, conn) in snapshot {
+        let server_name = conn.server_name.clone();
+        for def in conn.tools().await {
+            let is_taken = |name: &str| {
+                TOOLS.iter().any(|t| t.name == name) || next.contains_key(name)
+            };
+            let external = pick_external_name(&def.name, &server_name, &is_taken);
+            let spec = build_mcp_spec(&external, &server_name, &def);
+            next.insert(
+                external,
+                McpDynamic {
+                    spec,
+                    server_id,
+                    server_name: server_name.clone(),
+                    original_name: def.name.clone(),
+                },
+            );
+        }
+    }
+    if let Ok(mut table) = mcp_table().lock() {
+        *table = next;
+    }
+}
+
+/// 按名称查找工具：静态表优先，未命中查动态表。
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
-    TOOLS.iter().find(|t| t.name == name)
+    if let Some(t) = TOOLS.iter().find(|t| t.name == name) {
+        return Some(t);
+    }
+    mcp_table()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(name).map(|e| e.spec))
 }
 
 /// 名称是否为已注册工具。
@@ -193,22 +342,94 @@ pub fn is_known(name: &str) -> bool {
     find(name).is_some()
 }
 
-/// 全部工具名，用于错误提示文案（保证与实际注册列表同步）。
+/// 全部工具名，用于错误提示文案（静态 + 动态）。
 pub fn names() -> Vec<&'static str> {
-    TOOLS.iter().map(|t| t.name).collect()
+    let mut out: Vec<&'static str> = TOOLS.iter().map(|t| t.name).collect();
+    if let Ok(m) = mcp_table().lock() {
+        for e in m.values() {
+            out.push(e.spec.name);
+        }
+    }
+    out
 }
 
-/// 指定分类的工具名，用于按能力过滤 prompt。
+/// 指定分类的工具名，用于按能力过滤 prompt（静态 + 动态）。
 pub fn names_by_kind(kind: ToolKind) -> Vec<&'static str> {
-    TOOLS.iter()
+    let mut out: Vec<&'static str> = TOOLS
+        .iter()
         .filter(|t| t.kind == kind)
         .map(|t| t.name)
-        .collect()
+        .collect();
+    if let Ok(m) = mcp_table().lock() {
+        for e in m.values() {
+            if e.spec.kind == kind {
+                out.push(e.spec.name);
+            }
+        }
+    }
+    out
 }
 
 /// 连续调用上限；未注册的工具给一个保守默认值。
 pub fn max_consecutive(name: &str) -> u32 {
     find(name).map(|t| t.max_consecutive).unwrap_or(READ_LIMIT)
+}
+
+/// 查一条动态工具（分发与文案用）。
+pub fn mcp_entry(name: &str) -> Option<McpEntry> {
+    mcp_table().lock().ok().and_then(|m| {
+        m.get(name).map(|e| McpEntry {
+            server_id: e.server_id,
+            server_name: e.server_name.clone(),
+            original_name: e.original_name.clone(),
+        })
+    })
+}
+
+/// 工具动作文案：MCP 工具用「服务器/原始工具名」，其余走各自 label。
+pub fn label_for(name: &str, args: &Value) -> String {
+    if let Some(e) = mcp_entry(name) {
+        return format!("MCP {}/{}", e.server_name, e.original_name);
+    }
+    find(name)
+        .map(|t| (t.label)(args))
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// 当前动态工具快照（测试与状态查询用）：(对外名, 服务器, 原始名)。
+pub fn mcp_snapshot() -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = mcp_table()
+        .lock()
+        .map(|m| {
+            m.values()
+                .map(|e| {
+                    (
+                        e.spec.name.to_string(),
+                        e.server_name.clone(),
+                        e.original_name.clone(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// 静态 + 动态工具的统一视图（静态在前，动态按服务器分组稳定排序）。
+fn all_specs() -> Vec<&'static ToolSpec> {
+    let mut out: Vec<&'static ToolSpec> = TOOLS.iter().collect();
+    if let Ok(m) = mcp_table().lock() {
+        let mut dyn_specs: Vec<&'static ToolSpec> = m.values().map(|e| e.spec).collect();
+        dyn_specs.sort_by(|a, b| {
+            a.source
+                .group_title()
+                .cmp(&b.source.group_title())
+                .then_with(|| a.name.cmp(b.name))
+        });
+        out.extend(dyn_specs);
+    }
+    out
 }
 
 /// 生成 System Prompt 的「可用工具」段落，仅包含指定分类的工具。
@@ -223,7 +444,7 @@ pub fn prompt_section(kinds: &[ToolKind]) -> String {
     );
     let mut idx = 1usize;
     let mut current_group: Option<String> = None;
-    for t in TOOLS.iter().filter(|t| kinds.contains(&t.kind)) {
+    for t in all_specs().into_iter().filter(|t| kinds.contains(&t.kind)) {
         let title = t.source.group_title();
         if current_group.as_deref() != Some(title.as_str()) {
             s.push_str(&format!("\n## {title}\n"));
@@ -481,5 +702,50 @@ mod tests {
             label_search(&serde_json::json!({ "query": "连接池" })),
             "Search '连接池'"
         );
+    }
+
+    // ── C61：MCP 动态工具 ───────────────────────────────────────
+
+    #[test]
+    fn normalize_name_folds_to_ascii_identifier() {
+        assert_eq!(normalize_name("Read File!"), "read_file");
+        assert_eq!(normalize_name("a/b:c"), "a_b_c");
+    }
+
+    #[test]
+    fn pick_external_name_rewrites_on_conflict_and_dedupes() {
+        let none = |_: &str| false;
+        assert_eq!(pick_external_name("echo", "fs", &none), "echo");
+
+        // 命中内置名 → 加 mcp_{server}_ 前缀
+        let builtin = |n: &str| n == "read_file";
+        assert_eq!(
+            pick_external_name("read_file", "fs", &builtin),
+            "mcp_fs_read_file"
+        );
+
+        // 前缀名也已被占用 → 追加序号
+        let taken = |n: &str| n == "read_file" || n == "mcp_fs_read_file";
+        assert_eq!(
+            pick_external_name("read_file", "fs", &taken),
+            "mcp_fs_read_file_2"
+        );
+    }
+
+    #[test]
+    fn mcp_spec_is_exec_and_conservative() {
+        let def = crate::mcp::McpToolDef {
+            name: "read_file".into(),
+            description: String::new(),
+            input_schema: serde_json::Value::Null,
+        };
+        let spec = build_mcp_spec("mcp_fs_read_file", "fs", &def);
+        assert_eq!(spec.kind, ToolKind::Exec);
+        assert_eq!(spec.max_consecutive, 3);
+        assert!(spec.desc.contains("未提供描述"));
+        match &spec.source {
+            ToolSource::Mcp { server } => assert_eq!(server, "fs"),
+            _ => panic!("MCP 工具来源必须是 Mcp"),
+        }
     }
 }
