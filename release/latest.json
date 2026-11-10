@@ -1,24 +1,15 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.1/Aura_0.8.0-rc.1_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjIwNzkzb21ocWg5UDdMRFNWZUxjYnhXa04rbzF6MUhtL2NidzhPL2lES2lvUi8xaWFaWTZVK3p2bGNJUVRDQU1OWHZ1a1lFMG5XR3NrT3puWDVCM2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTg0OTgwCWZpbGU6YXVyYV8wLjguMC1yYy4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguMC1yYy4xClVVUXlKU2xQc3A0a3RSYVBlam5tMUQ3bkhlZE5idUhRL2I3c2U1TThyS1BYNnRDdGo3ZjkydjdISnNQNXhlcWVZcFRydFU2ZWs2bE1JbHZBRUkxMEFBPT0K"
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.2/Aura_0.8.0-rc.2_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjJtbWtiRFdoVU9iUUJaQ0xHemtnZHpNV05JUmpUczBXa0hKQmZWdG5YOHNvWHRUa2JsTTBNdkRZVXZodDE2TVVvODRHVVd0V3Uyb0M2RnhrZjl0K3drPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjcxNTA3CWZpbGU6YXVyYV8wLjguMC1yYy4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguMC1yYy4yCmpWdE84ZDk0dGMxNmNxd0g0NkJHZjl1RXg5MUhTN3BTOW5DWTlzaHhNbkJ4QUpnSFlzaWgvaFdBVGxqcWgwRjVwY1RXdW9VdThTRnZHSjh5L1FmYUFBPT0K"
                                          },
                       "linux-x86_64":  {
-                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.1/aura_0.8.0-rc.1_amd64.AppImage",
-                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjc0d2tFVTdUVzg2N2JwbkdVRlNzdmhyZGhEU1hrWFFCVW50dHhjQi9yRzdKMWFxSEpjQW1hYmpkVWdSZkFraVpzb0hSaUt6QkhUby9UUmd6Y05ESFFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTkwNTczCWZpbGU6YXVyYV8wLjguMC1yYy4xX2FtZDY0LkFwcEltYWdlCXZlcnNpb246MC44LjAtcmMuMQo3OGJQRm96WlY0VWF0OS8xUVBEY25xMzQxWEZuRVJMMWNkT08rL2c1WHZOMll4enBjNW5DLzc5U1AzZ3FkZ3J4cExoV083Ynk2YmVhNHhGNXNwUEZDQT09Cg=="
+                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0-rc.2/aura_0.8.0-rc.2_amd64.AppImage",
+                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNnl0dFdhc1VlQXlkelAvSEdGMzR1ZTgxWlYxTTNQQnFCdWhIL0ZjK0VkV2F1dnBpbHdOOWsvN09IT2pvd3NQT3VhZ29UWEp3RDZTbEhTcFFCVkJpRUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjY5NjI2CWZpbGU6YXVyYV8wLjguMC1yYy4yX2FtZDY0LkFwcEltYWdlCXZlcnNpb246MC44LjAtcmMuMgoyZGp3ckRmdGVtNUhsekdFYkpoSXVXa1RCelB3cVB2aTJTUkRpUzV1SkZBL0V6Q1hHR1QwYk9ta3pBWTNxdW54VU9Ka2RWRC90TzJkSnNFc1ZPb0dBdz09Cg=="
                                        }
                   },
-    "pub_date":  "2026-11-09T02:28:20Z",
-    "mirrors":  [
-                    "https://v4.gh-proxy.org/",
-                    "https://cdn.gh-proxy.org/",
-                    "https://gh-proxy.org/",
-                    "https://v6.gh-proxy.org/",
-                    "https://axisnow.gh-proxy.org/",
-                    "https://ghfast.top/",
-                    "https://gh-proxy.com/"
-                ],
-    "version":  "0.8.0-rc.1",
-    "notes":  "## 更新内容\n- 全局搜索：Ctrl+K 唤起统一面板，动作、会话、技能与工作区文件一起搜，空查询时数字键直达\n- 顶栏新增搜索胶囊，入口不再只藏在快捷键里\n- 输入区：Tab 恢复正常的焦点移动，模式切换改为 Ctrl+Shift+M\n- 输入区新增上下文水位条：七成提示归档，九成提示新开会话\n- 操作结果统一为右下角轻提示；内置浏览器被拒绝嵌入时给出系统浏览器出口\n- 右栏页签改为胶囊轨道；文件面板按类型着色、目录优先；任务面板显示进度条\n- 右栏新增「用量」：累计 token、模型与工具耗时、按牌价折算的估算成本，可导出 CSV\n- 技能页改为双列卡片并按来源着色；本地技能支持搜索；移除技能源需二次确认\n- 代码块改为带语言与复制按钮的工具条带；宽屏下用户气泡不再拉满整行\n- 开始页新增「继续上次」直达与当前模型徽章\n- 设置页：导航加图标、主题预览，另有五档强调色可选\n- 操作时间线的统计与分组摘要统一到对话区的样式\n- 命令与技能按最近使用排序，设置页可一键重置\n- Linux：平台判定改由系统接口提供，不再依赖浏览器 UA；缺少系统密钥服务时，错误信息直接给出安装与启用指引\n"
+    "pub_date":  "2026-11-10T00:45:24Z",
+    "version":  "0.8.0-rc.2",
+    "notes":  "v0.8.0-rc.2：Linux 兼容性修复与后端安全增强，详见 Release 页。"
 }
