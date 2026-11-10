@@ -15,6 +15,7 @@ const registry = new Map<string, SettingsSectionDefinition>();
 const DEFAULTS: SettingsSectionDefinition[] = [
   { id: "appearance", label: "外观", order: 10 },
   { id: "model", label: "模型服务", order: 20 },
+  { id: "shortcuts", label: "快捷键", order: 28 },
   { id: "general", label: "通用", order: 30 },
   { id: "security", label: "安全", order: 35 },
   { id: "about", label: "关于", order: 40 },

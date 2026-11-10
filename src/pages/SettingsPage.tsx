@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Cpu,
   Info,
+  Keyboard,
   Palette,
   ShieldCheck,
   SlidersHorizontal,
@@ -22,12 +23,14 @@ import AboutSection from "./AboutSection";
 import AppearanceSection from "../components/AppearanceSection";
 import GeneralSection from "../components/GeneralSection";
 import SecuritySection from "../components/SecuritySection";
+import ShortcutsSection from "../components/ShortcutsSection";
 import ModelSection from "../components/ModelSection";
 
 /** 分区图标：与左栏导航同语言（15px，未选中 subtle，选中随文字变深）。 */
 const SECTION_ICONS: Record<string, LucideIcon> = {
   appearance: Palette,
   model: Cpu,
+  shortcuts: Keyboard,
   general: SlidersHorizontal,
   security: ShieldCheck,
   about: Info,
@@ -115,6 +118,7 @@ export default function SettingsPage({ onClose, theme }: Props) {
           <div className="min-w-0 flex-1">
             {section === "appearance" && <AppearanceSection theme={theme} />}
             {section === "model" && <ModelSection />}
+            {section === "shortcuts" && <ShortcutsSection />}
             {section === "general" && (
               <GeneralSection
                 rules={rules}

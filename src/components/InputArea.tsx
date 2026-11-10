@@ -41,6 +41,7 @@ import { CONTENT_WIDTH } from "../lib/layout";
 import { loadFrecency, rankByFrecency, recordUse } from "../lib/frecency";
 import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
+import { useShortcuts } from "../hooks/useShortcuts";
 import MarkdownEditor, {
   insertAtCaret,
   replaceTrigger,
@@ -195,6 +196,8 @@ export default function InputArea({
 
   const liveSetting = useMarkdownLive();
   const markdownLive = markdownLiveProp ?? liveSetting;
+  // 底部提示跟着键位表走，用户在设置页改了「切模式」后这里不会留旧键位
+  const bindings = useShortcuts();
 
   const setValue = useCallback((next: string) => {
     valueRef.current = next;
@@ -854,7 +857,7 @@ export default function InputArea({
           />
         </div>
         <p className="shrink-0 text-xs text-subtle">
-          Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
+          Enter 发送 · Shift+Enter 换行 · {bindings.cycleMode} 切模式
         </p>
       </div>
     </div>
