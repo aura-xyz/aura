@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { useShortcuts } from "../hooks/useShortcuts";
+import { useOverlay } from "../hooks/useOverlay";
 import {
   SHORTCUT_ACTIONS,
   comboFromEvent,
@@ -26,6 +27,9 @@ export default function ShortcutsSection() {
   const bindings = useShortcuts();
   const [recording, setRecording] = useState<ShortcutId | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  // 录制态也压进浮层栈并置顶：Esc 先取消录制，再按一次才关设置页，
+  // 否则在设置页里按 Esc 想取消录制会整页退回对话。
+  useOverlay("shortcut-recording", recording !== null, () => setRecording(null));
 
   useEffect(() => {
     if (!recording) return;

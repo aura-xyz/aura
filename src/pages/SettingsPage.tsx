@@ -24,6 +24,7 @@ import AppearanceSection from "../components/AppearanceSection";
 import GeneralSection from "../components/GeneralSection";
 import SecuritySection from "../components/SecuritySection";
 import ShortcutsSection from "../components/ShortcutsSection";
+import { useOverlay } from "../hooks/useOverlay";
 import ModelSection from "../components/ModelSection";
 
 /** 分区图标：与左栏导航同语言（15px，未选中 subtle，选中随文字变深）。 */
@@ -42,6 +43,8 @@ interface Props {
 }
 
 export default function SettingsPage({ onClose, theme }: Props) {
+  // Esc 统一交给全局浮层栈：设置页下面可能还压着确认框，只关最上层
+  useOverlay("settings", true, onClose);
   const [section, setSection] = useState<string>(
     () => settingsSections()[0]?.id ?? "appearance",
   );

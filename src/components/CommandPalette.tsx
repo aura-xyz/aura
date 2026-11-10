@@ -17,6 +17,7 @@ import {
   type CommandItem,
 } from "../lib/commandItems";
 import { loadFrecency, rankByFrecency, topRecentIds } from "../lib/frecency";
+import { useOverlay } from "../hooks/useOverlay";
 
 /** 数字键直达的条数上限。 */
 const DIGIT_LIMIT = 9;
@@ -36,6 +37,8 @@ export default function CommandPalette({
   /** 远端查询进行中（文件/会话） */
   loading?: boolean;
 }) {
+  // 组件只在打开时挂载，故 open 恒为 true；Esc 由全局浮层栈统一关最上层
+  useOverlay("command-palette", true, onClose);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);

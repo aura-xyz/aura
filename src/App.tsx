@@ -57,6 +57,8 @@ import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
 import { shouldBlockDevtools } from "./lib/devtools";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { resolveAction } from "./lib/shortcuts";
+import { closeTopOverlay } from "./lib/overlayStack";
+import { focusInput } from "./lib/focusInput";
 import {
   actionCommandItems,
   nextMode,
@@ -540,6 +542,25 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     window.addEventListener("keydown", block, true);
     return () => window.removeEventListener("keydown", block, true);
   }, []);
+
+  // v0.8.1 P09：Esc 只关最上层浮层。捕获阶段抢在各浮层自己的监听之前，
+  // 命中后 stopPropagation，避免一次 Esc 连关两层或关错层；栈为空时
+  // 完全不拦截，小下拉等未入栈的浮层沿用各自的处理。
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (!closeTopOverlay()) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  }, []);
+
+  // 新建 / 切换会话、从设置页返回对话后把焦点交回输入框
+  useEffect(() => {
+    if (view === "chat") focusInput();
+  }, [view, activeId]);
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;

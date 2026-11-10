@@ -42,6 +42,7 @@ import { loadFrecency, rankByFrecency, recordUse } from "../lib/frecency";
 import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import { useShortcuts } from "../hooks/useShortcuts";
+import { onFocusInput } from "../lib/focusInput";
 import MarkdownEditor, {
   insertAtCaret,
   replaceTrigger,
@@ -198,6 +199,17 @@ export default function InputArea({
   const markdownLive = markdownLiveProp ?? liveSetting;
   // 底部提示跟着键位表走，用户在设置页改了「切模式」后这里不会留旧键位
   const bindings = useShortcuts();
+
+  // v0.8.1 P09：外部（切换会话 / 关闭浮层）通过事件把焦点交回输入框。
+  // 富文本与纯文本两条路径各有一个 ref，都在这里兜住。
+  useEffect(
+    () =>
+      onFocusInput(() => {
+        if (editorRef.current) editorRef.current.focus();
+        else textareaRef.current?.focus();
+      }),
+    [],
+  );
 
   const setValue = useCallback((next: string) => {
     valueRef.current = next;
