@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
+use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
 use super::session::RpcSession;
 use super::transport::{StdioTransport, Transport};
 
@@ -73,6 +74,8 @@ pub struct Connection {
     session: RpcSession,
     status: RwLock<ConnStatus>,
     stderr_tail: StdMutex<VecDeque<String>>,
+    /// 握手协商结果（M2-02）：版本、服务器信息与支持的域。
+    capabilities: RwLock<ServerCapabilities>,
     /// 最近一次 `tools/list` 的发现结果（C60）。
     tools: RwLock<Vec<McpToolDef>>,
     /// `tools/call` 串行化（第一部分不做并发，避免服务器实现差异）。
@@ -94,6 +97,7 @@ impl Connection {
             session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
             stderr_tail: StdMutex::new(VecDeque::new()),
+            capabilities: RwLock::new(ServerCapabilities::default()),
             tools: RwLock::new(Vec::new()),
             call_lock: AsyncMutex::new(()),
         }
@@ -117,6 +121,11 @@ impl Connection {
     /// 最近一次发现的工具集（克隆，供注册表同步与状态查询）。
     pub async fn tools(&self) -> Vec<McpToolDef> {
         self.tools.read().await.clone()
+    }
+
+    /// 握手协商出的能力快照（M2-02）。
+    pub async fn capabilities(&self) -> ServerCapabilities {
+        self.capabilities.read().await.clone()
     }
 
     /// stderr 尾部（最近若干行），供连接排错展示。
@@ -236,16 +245,19 @@ impl Connection {
         self.set_status(ConnStatus::Down { reason }).await;
     }
 
-    async fn handshake(&self) -> Result<Value, String> {
+    async fn handshake(&self) -> Result<(), String> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
+            // M2-02：声明 resources / prompts 两个域，服务器才会推对应通知。
+            // sampling 留给三期，不在这里声明。
+            "capabilities": client_capabilities(),
             "clientInfo": { "name": "aura", "version": env!("CARGO_PKG_VERSION") }
         });
-        // 协商以服务器返回值为准；这里不校验返回版本，兼容只支持旧版的服务器。
+        // 协商以服务器返回值为准；不校验版本，兼容只支持旧版的服务器。
         let result = self.request("initialize", params, HANDSHAKE_TIMEOUT).await?;
+        *self.capabilities.write().await = parse_capabilities(&result);
         self.notify("notifications/initialized", json!({})).await?;
-        Ok(result)
+        Ok(())
     }
 }
 

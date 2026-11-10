@@ -2614,6 +2614,8 @@ pub struct McpStatusView {
     pub stderr: Vec<String>,
     pub tool_count: usize,
     pub tools: Vec<McpToolItem>,
+    /// 握手协商结果（M2-02）：协议版本、服务器信息与支持的域。
+    pub capabilities: crate::mcp::capabilities::ServerCapabilities,
 }
 
 /// 添加前的连通性试跑结果（不落库）。
@@ -2834,6 +2836,7 @@ pub async fn mcp_server_status(
                 stderr: c.stderr_tail(),
                 tool_count: tools.len(),
                 tools,
+                capabilities: c.capabilities().await,
             })
         }
         None => {
@@ -2844,6 +2847,7 @@ pub async fn mcp_server_status(
                 stderr: Vec::new(),
                 tool_count: 0,
                 tools: Vec::new(),
+                capabilities: Default::default(),
             })
         }
     }

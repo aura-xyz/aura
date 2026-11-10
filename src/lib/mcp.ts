@@ -29,6 +29,19 @@ export interface McpToolItem {
   schema: string | null;
 }
 
+/** 握手协商出的服务器能力（v0.8.1 M2-02）。 */
+export interface McpCapabilities {
+  protocol_version: string;
+  server_name: string;
+  server_version: string;
+  tools: boolean;
+  tools_list_changed: boolean;
+  resources: boolean;
+  resources_subscribe: boolean;
+  prompts: boolean;
+  prompts_list_changed: boolean;
+}
+
 /** 单服务器状态详情。 */
 export interface McpStatusView {
   status: McpStatus;
@@ -36,6 +49,19 @@ export interface McpStatusView {
   stderr: string[];
   tool_count: number;
   tools: McpToolItem[];
+  capabilities: McpCapabilities;
+}
+
+/** 把能力快照压成设置页要显示的域徽标；未声明的域也列出并置灰。 */
+export function capabilityDomains(c: McpCapabilities | null | undefined): {
+  label: string;
+  on: boolean;
+}[] {
+  return [
+    { label: "tools", on: !!c?.tools },
+    { label: "resources", on: !!c?.resources },
+    { label: "prompts", on: !!c?.prompts },
+  ];
 }
 
 /** 添加前试连结果。 */

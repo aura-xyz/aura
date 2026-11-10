@@ -8,6 +8,7 @@
 //! 工具挂载与分发在 `tools` 侧（`registry` / `async_tool`），这里只提供
 //! 「配置与连接」的原语，避免 mcp 与 tools 互相知道太多。
 
+pub mod capabilities;
 pub mod client;
 pub mod config;
 pub mod session;

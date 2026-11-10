@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { MCP_STATUS_META, commandSummary, envToText, parseEnv, toLines } from "./mcp";
+import {
+  MCP_STATUS_META,
+  capabilityDomains,
+  commandSummary,
+  envToText,
+  parseEnv,
+  toLines,
+  type McpCapabilities,
+} from "./mcp";
+
+function caps(over: Partial<McpCapabilities> = {}): McpCapabilities {
+  return {
+    protocol_version: "2025-06-18",
+    server_name: "",
+    server_version: "",
+    tools: false,
+    tools_list_changed: false,
+    resources: false,
+    resources_subscribe: false,
+    prompts: false,
+    prompts_list_changed: false,
+    ...over,
+  };
+}
 
 describe("commandSummary", () => {
   it("拼接命令与参数", () => {
@@ -38,5 +61,27 @@ describe("MCP_STATUS_META", () => {
       expect(meta.label.length).toBeGreaterThan(0);
       expect(meta.dot.startsWith("bg-")).toBe(true);
     }
+  });
+});
+
+describe("capabilityDomains（M2-02）", () => {
+  it("三个域固定顺序，未声明的域也返回并标为关", () => {
+    expect(capabilityDomains(caps({ tools: true }))).toEqual([
+      { label: "tools", on: true },
+      { label: "resources", on: false },
+      { label: "prompts", on: false },
+    ]);
+  });
+
+  it("全声明时三个都为开", () => {
+    expect(
+      capabilityDomains(caps({ tools: true, resources: true, prompts: true })).every(
+        (d) => d.on,
+      ),
+    ).toBe(true);
+  });
+
+  it("快照缺失时不抛错，全部置灰", () => {
+    expect(capabilityDomains(null).every((d) => !d.on)).toBe(true);
   });
 });

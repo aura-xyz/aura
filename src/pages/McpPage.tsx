@@ -17,6 +17,7 @@ import Switch from "../components/Switch";
 import {
   MCP_STATUS_META,
   addServer,
+  capabilityDomains,
   commandSummary,
   getServerStatus,
   listServers,
@@ -340,6 +341,39 @@ function DetailDrawer({
               {server ? commandSummary(server) || "—" : "—"}
             </p>
           </section>
+
+          {detail && (
+            <section className="mt-5">
+              <h3 className="eyebrow">协议与能力</h3>
+              <p className="mt-1.5 break-all text-[11px] text-subtle">
+                {detail.capabilities.protocol_version || "服务器未返回协议版本"}
+                {detail.capabilities.server_name &&
+                  ` · ${detail.capabilities.server_name}`}
+                {detail.capabilities.server_version &&
+                  ` ${detail.capabilities.server_version}`}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {capabilityDomains(detail.capabilities).map((d) => (
+                  <span
+                    key={d.label}
+                    className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+                      d.on
+                        ? "border-brand/40 text-brand"
+                        : "border-line text-subtle opacity-60"
+                    }`}
+                  >
+                    {d.label}
+                    {d.on ? "" : "（未声明）"}
+                  </span>
+                ))}
+              </div>
+              {detail.capabilities.resources_subscribe && (
+                <p className="mt-1.5 text-[10px] text-subtle">
+                  服务器声明支持资源订阅更新
+                </p>
+              )}
+            </section>
+          )}
 
           {detail?.reason && (
             <p className="mt-3 rounded-tag border border-danger/30 bg-danger/5 px-2 py-1.5 text-[11px] text-danger">
