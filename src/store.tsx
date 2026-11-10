@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  startTransition,
   type ReactNode,
 } from "react";
 import {
@@ -619,29 +620,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       total: number;
       llm_ms: number;
     }>("agent:usage", (p) => {
-      setState((s) => ({
-        ...s,
-        sessions: s.sessions.map((sess) =>
-          sess.id === p.session_id
-            ? {
-                ...sess,
-                lastUsage: {
-                  input: p.input ?? 0,
-                  output: p.output ?? 0,
-                  total: p.total ?? 0,
-                  llmMs: p.llm_ms ?? 0,
-                },
-                llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
-                usageTotals: {
-                  input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
-                  output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
-                  total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
-                  turns: (sess.usageTotals?.turns ?? 0) + 1,
-                },
-              }
-            : sess,
-        ),
-      }));
+      // 用量统计每轮只推一次，且与消息块的先后顺序完全无关，是唯一能
+      // 安全降级的状态更新：用户此刻在输入/滚动时，统计面板让路给交互。
+      // 正文写入与 todo 勾选都不套 startTransition——前者被中断重放会把
+      // 文字排到动作卡片后面，后者要即时反馈。
+      startTransition(() => {
+        setState((s) => ({
+          ...s,
+          sessions: s.sessions.map((sess) =>
+            sess.id === p.session_id
+              ? {
+                  ...sess,
+                  lastUsage: {
+                    input: p.input ?? 0,
+                    output: p.output ?? 0,
+                    total: p.total ?? 0,
+                    llmMs: p.llm_ms ?? 0,
+                  },
+                  llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
+                  usageTotals: {
+                    input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
+                    output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
+                    total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
+                    turns: (sess.usageTotals?.turns ?? 0) + 1,
+                  },
+                }
+              : sess,
+          ),
+        }));
+      });
     });
 
     // 规划模式产出的任务清单。注意这里**不要求** streamRef 匹配：
