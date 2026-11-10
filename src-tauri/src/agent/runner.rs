@@ -276,8 +276,83 @@ fn record_timeline(
     persist(entry);
 }
 
+/// 单个事件允许携带的最大文本量（v0.8.1 P07）。
+///
+/// 工具层的 `MAX_OUTPUT` 已经截过一轮，这里是 **emit 前的最后一道闸门**：
+/// 上游哪天换了输出策略，也不会把一个几十 MB 的 stdout 直接塞进 IPC。
+const MAX_EVENT_TEXT_CHARS: usize = 32 * 1024;
+/// detail / diff 单侧字段的上限，比通用事件更紧。
+const MAX_EVENT_DETAIL_CHARS: usize = 8000;
+/// 流式正文累积到这个长度就立刻发，或由定时分支按时间发。
+const BATCH_MAX_CHARS: usize = 256;
+/// 聚合窗口：24ms 与前端 rAF 帧节流错开，避免双端同时按同一个节拍碎发。
+const BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(24);
+
 fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
-    let _ = app.emit(event, json!({ "session_id": session_id, "text": text }));
+    // 正文 chunk 绝不截断——丢一个字就是内容错误；其余事件统一兜底。
+    let payload = if event == EV_CHUNK {
+        text.to_string()
+    } else {
+        head_tail_truncate(text, MAX_EVENT_TEXT_CHARS)
+    };
+    let _ = app.emit(event, json!({ "session_id": session_id, "text": payload }));
+}
+
+/// 头尾保留式截断。错误输出的关键信息常在最后几行（堆栈、退出码），
+/// 只留开头会把真正的原因丢掉；按 char 处理，中文不会被切出半个字。
+fn head_tail_truncate(text: &str, limit: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= limit {
+        return text.to_string();
+    }
+    let head = limit / 4;
+    let tail = limit - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push_str(&format!("\n…（省略 {} 字符）…\n", chars.len() - head - tail));
+    out.extend(chars[chars.len() - tail..].iter());
+    out
+}
+
+fn truncate_event_detail(text: &str) -> String {
+    head_tail_truncate(text, MAX_EVENT_DETAIL_CHARS)
+}
+
+/// 流式正文聚合器（v0.8.1 P07）。
+///
+/// 逐 token emit 会让 IPC 次数与输出长度成正比；这里把相邻正文攒到
+/// 256 字符或 24ms 再发一次。**顺序是硬约束**：任何非正文事件落地前
+/// 必须先 flush，否则正文会排到工具卡片 / 清单更新之后。
+struct ChunkBatcher {
+    buf: String,
+    chars: usize,
+}
+
+impl ChunkBatcher {
+    fn new() -> Self {
+        Self { buf: String::new(), chars: 0 }
+    }
+
+    /// 累积一段正文；返回 true 表示达到阈值，调用方应立即 flush。
+    fn push(&mut self, text: &str) -> bool {
+        self.chars += text.chars().count();
+        self.buf.push_str(text);
+        self.chars >= BATCH_MAX_CHARS
+    }
+
+    /// 取出并清空。与 AppHandle 解耦，便于单测聚合逻辑。
+    fn take(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            return None;
+        }
+        self.chars = 0;
+        Some(std::mem::take(&mut self.buf))
+    }
+
+    fn flush(&mut self, app: &AppHandle, session_id: &str) {
+        if let Some(text) = self.take() {
+            emit_text(app, session_id, EV_CHUNK, &text);
+        }
+    }
 }
 
 /// 命令首行：审批卡的空间有限，长命令只显示开头，全文另给字段。
@@ -435,9 +510,25 @@ fn emit_action_detail(
     duration_ms: Option<i64>,
     diff: Option<crate::tools::FileDiff>,
 ) {
+    // emit 前的统一闸门：工具层已各自截断过，这里兜底防止将来某个工具
+    // 绕过约定直接把大输出带进事件载荷。
+    let detail = detail.map(|d| truncate_event_detail(&d));
+    let diff = diff.map(|mut d| {
+        d.before = truncate_event_detail(&d.before);
+        d.after = truncate_event_detail(&d.after);
+        d
+    });
     let _ = app.emit(
         EV_ACTION,
-        json!({ "session_id": session_id, "tool": tool, "text": label, "ok": ok, "detail": detail, "duration_ms": duration_ms, "diff": diff }),
+        json!({
+            "session_id": session_id,
+            "tool": tool,
+            "text": head_tail_truncate(label, MAX_EVENT_TEXT_CHARS),
+            "ok": ok,
+            "detail": detail,
+            "duration_ms": duration_ms,
+            "diff": diff,
+        }),
     );
 }
 
@@ -916,14 +1007,25 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         let mut stream = fb.value;
         let mut was_cancelled = false;
         let mut idle_timed_out = false;
+        let mut batcher = ChunkBatcher::new();
+        // 空闲超时的截止时间只在「真的收到数据」时后移。聚合器的定时
+        // flush 也会让 select 醒来，但绝不能顺带重置空闲计时，否则模型
+        // 断流后会被每 24ms 的 flush 一直续命，90 秒超时永远不触发。
+        let mut idle_deadline = tokio::time::Instant::now() + STREAM_IDLE_TIMEOUT;
         'stream: loop {
             let cancel = ctx.cancelled;
             let item = tokio::select! {
-                i = stream.next() => i,
-                // 空闲超时：每收到一块数据就重置，因此只在真正失联时触发
-                _ = tokio::time::sleep(STREAM_IDLE_TIMEOUT) => {
+                i = stream.next() => {
+                    idle_deadline = tokio::time::Instant::now() + STREAM_IDLE_TIMEOUT;
+                    i
+                }
+                _ = tokio::time::sleep_until(idle_deadline) => {
                     idle_timed_out = true;
                     break 'stream;
+                }
+                _ = tokio::time::sleep(BATCH_FLUSH_INTERVAL) => {
+                    batcher.flush(ctx.app, ctx.session_id);
+                    continue 'stream;
                 }
                 _ = async {
                     while !cancel.load(Ordering::Relaxed) {
@@ -942,9 +1044,14 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                         match ev {
                             Event::Chunk(t) => {
                                 turn_output.push_str(&t);
-                                emit_text(ctx.app, ctx.session_id, EV_CHUNK, &t);
+                                if batcher.push(&t) {
+                                    batcher.flush(ctx.app, ctx.session_id);
+                                }
                             }
                             Event::Tool(json_str) => {
+                                // 任何非正文事件落地前都要先排空聚合器，
+                                // 否则这半句正文会被排到工具卡片之后。
+                                batcher.flush(ctx.app, ctx.session_id);
                                 turn_output
                                     .push_str(&format!("<tool>{}</tool>", json_str));
                                 // v0.5.3：**不打断流**，继续收集本轮的其余工具。
@@ -958,11 +1065,13 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                                 }
                             }
                             Event::AnswerDone => {
+                                batcher.flush(ctx.app, ctx.session_id);
                                 turn_output.push_str("</answer>");
                                 answered = true;
                                 break 'stream;
                             }
                             Event::TodoPlan(json_str) => {
+                                batcher.flush(ctx.app, ctx.session_id);
                                 // 保留原文进 history：既让模型知道计划已输出，
                                 // 也保证后续轮次能看到自己写过什么
                                 turn_output
@@ -973,6 +1082,7 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                                 // 打断流会导致那段正文整个丢失。
                             }
                             Event::TodoUpdate(json_str) => {
+                                batcher.flush(ctx.app, ctx.session_id);
                                 turn_output
                                     .push_str(&format!("<todo_update>{}</todo_update>", json_str));
                                 handle_todo_update(ctx, &json_str);
@@ -989,6 +1099,9 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
                 None => break,
             }
         }
+        // 所有退出路径统一收尾：聚合器里可能还压着最后半句，必须在
+        // done / error / cancelled / 超时补发之前落地。
+        batcher.flush(ctx.app, ctx.session_id);
 
         // 用量与 LLM 耗时按请求累计：一轮里可能有多轮工具往返。
         usage.llm_ms += llm_started.elapsed().as_millis() as u64;
@@ -1855,5 +1968,67 @@ mod tests {
         let out = truncate_tail(&long, 200);
         assert_eq!(out.chars().count(), 201);
         assert!(out.starts_with('…'));
+    }
+}
+
+/// v0.8.1 P07：事件载荷上限与流式聚合的纯逻辑单测。
+#[cfg(test)]
+mod event_batch_tests {
+    use super::*;
+
+    #[test]
+    fn short_event_text_is_untouched() {
+        let text = "模型请求失败：网络超时";
+        assert_eq!(head_tail_truncate(text, MAX_EVENT_TEXT_CHARS), text);
+    }
+
+    #[test]
+    fn long_event_text_keeps_both_ends_and_reports_omitted_count() {
+        let text = format!(
+            "{}开头{}结尾",
+            "前".repeat(100),
+            "中".repeat(MAX_EVENT_TEXT_CHARS) + &"后".repeat(100)
+        );
+        let out = head_tail_truncate(&text, MAX_EVENT_TEXT_CHARS);
+        assert!(out.starts_with("前前"));
+        assert!(out.ends_with("后后结尾"));
+        assert!(out.contains("省略"));
+        assert!(out.chars().count() <= MAX_EVENT_TEXT_CHARS + 40);
+    }
+
+    #[test]
+    fn detail_cap_is_tighter_and_never_breaks_utf8() {
+        let long = "日志".repeat(MAX_EVENT_DETAIL_CHARS);
+        let out = truncate_event_detail(&long);
+        assert!(out.chars().count() <= MAX_EVENT_DETAIL_CHARS + 40);
+        assert!(out.contains("省略"));
+        assert!(!out.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn batcher_flushes_at_threshold_without_losing_text() {
+        let mut b = ChunkBatcher::new();
+        assert_eq!(b.take(), None);
+        let parts = vec![
+            "第一句".to_string(),
+            "第二句".to_string(),
+            "长".repeat(BATCH_MAX_CHARS),
+        ];
+        let mut collected = String::new();
+        for p in &parts {
+            if b.push(p) {
+                collected.push_str(&b.take().unwrap());
+            }
+        }
+        collected.push_str(&b.take().unwrap_or_default());
+        assert_eq!(collected, parts.concat());
+    }
+
+    #[test]
+    fn batcher_counts_chars_not_bytes() {
+        let mut b = ChunkBatcher::new();
+        // 256 个中文字符是 768 字节；按字符计数才符合「输出长度」的语义
+        assert!(b.push(&"中".repeat(BATCH_MAX_CHARS)));
+        assert_eq!(b.take().unwrap().chars().count(), BATCH_MAX_CHARS);
     }
 }
