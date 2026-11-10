@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorText, toAppError } from "./apiError";
+import { errorText, toAppError, toStreamFailure } from "./apiError";
 
 describe("toAppError 归类", () => {
   it("超时与断连归为可重试的网络错误", () => {
@@ -63,5 +63,33 @@ describe("toAppError 归类", () => {
 
   it("errorText 等价于归类后的用户文案", () => {
     expect(errorText("请求超时")).toBe(toAppError("请求超时").message);
+  });
+});
+
+describe("toStreamFailure 终态", () => {
+  it("网络超时与本地服务离线是「中断」，可重试", () => {
+    for (const raw of ["请求超时", "connection refused"]) {
+      const f = toStreamFailure(raw);
+      expect(f.kind).toBe("interrupted");
+      expect(f.retryable).toBe(true);
+    }
+  });
+
+  it("鉴权、限流、上下文溢出是「失败」", () => {
+    expect(toStreamFailure("401 Unauthorized").kind).toBe("failed");
+    expect(toStreamFailure("429").kind).toBe("failed");
+    expect(toStreamFailure("context length exceeded").kind).toBe("failed");
+  });
+
+  it("限流虽是 failed 但仍可重试", () => {
+    const f = toStreamFailure("429 Too Many Requests");
+    expect(f.kind).toBe("failed");
+    expect(f.retryable).toBe(true);
+  });
+
+  it("原始错误文本保留在 detail 里", () => {
+    expect(toStreamFailure("连接中断：stream closed").detail).toBe(
+      "连接中断：stream closed",
+    );
   });
 });

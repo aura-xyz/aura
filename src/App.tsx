@@ -60,6 +60,7 @@ import { resolveAction } from "./lib/shortcuts";
 import { closeTopOverlay } from "./lib/overlayStack";
 import { focusInput } from "./lib/focusInput";
 import ErrorBoundary from "./components/ErrorBoundary";
+import StreamFailureBar from "./components/StreamFailureBar";
 import { installGlobalErrorHandlers } from "./lib/globalErrors";
 import {
   actionCommandItems,
@@ -968,6 +969,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
               </div>
               {dropBanner}
               {activeSession && <ApprovalCard sessionId={activeSession.id} />}
+              <StreamFailureBar />
               <InputArea {...inputProps} />
             </>
           )}

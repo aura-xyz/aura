@@ -48,6 +48,7 @@ import {
   type TodoStatus,
 } from "./lib/todo";
 import { planChunk } from "./lib/streamChunks";
+import { toStreamFailure, type AppErrorCode } from "./lib/apiError";
 
 // 统一工作区键：反斜杠转 /，并剥离 Windows 扩展路径的 //?/ 前缀，
 // 保证与 Rust 侧 canonicalize 后的键一致
@@ -148,12 +149,28 @@ export interface Session {
   llmMs?: number;
 }
 
+/** 一轮生成失败后的可恢复状态（v0.8.1 P12）。 */
+export interface StreamFailure {
+  sessionId: string;
+  kind: "interrupted" | "failed";
+  code: AppErrorCode;
+  message: string;
+  /** 原始错误文本，折叠展示 */
+  detail: string;
+  retryable: boolean;
+  /** 触发本轮的用户消息序号（1-based）与原文，供「重试」回滚重发 */
+  userIndex: number;
+  text: string;
+}
+
 interface State {
   workspaces: string[];
   workspace: string;
   sessions: Session[];
   activeId: string;
   busy: boolean;
+  /** 当前失败状态；新一轮发送开始时清空 */
+  failure: StreamFailure | null;
   models: ModelInfo[];
   selectedModel: string;
   /** 当前会话模式，每次发送时随消息带上 */
@@ -188,6 +205,13 @@ interface StoreValue extends State {
     text: string,
     options?: { archive?: boolean; force?: boolean },
   ) => Promise<void>;
+  /**
+   * 重试最近一次流式失败：回滚到最后一条用户消息重新生成（v0.8.1 P12）。
+   * 已生成的内容不删，走 resendFrom 的常规副作用预检。
+   */
+  retryLast: () => Promise<void>;
+  /** 收起失败提示，但保留已生成的回答内容。 */
+  dismissFailure: () => void;
   /**
    * 切换某条 assistant 消息显示的版本（v0.7.0）。
    * 只改显示，不回滚后端上下文。
@@ -373,6 +397,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     sessions: [],
     activeId: "",
     busy: false,
+    failure: null,
     models: [],
     selectedModel: "",
     mode: "chat",
@@ -427,6 +452,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const bufferRef = useRef("");
   const streamRef = useRef<StreamTarget | null>(null);
   const sawErrorRef = useRef(false);
+  /** 本轮的触发信息：失败时用来拼出「重试」所需的回滚坐标。 */
+  const pendingTurnRef = useRef<{
+    sessionId: string;
+    userIndex: number;
+    text: string;
+  } | null>(null);
 
   const persistNow = useCallback(
     (id: string, title: string, workspace: string, messages: ChatMessage[]) => {
@@ -469,6 +500,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  /**
+   * 记录一次流式失败（v0.8.1 P12），返回用户可见文案供 error block 复用。
+   *
+   * 只在有本轮触发信息时才写 state：后端偶尔会在流之外补发 error 事件，
+   * 那种情况不该凭空造一个「可重试」的失败条。
+   */
+  const recordFailure = useCallback((raw: unknown): string => {
+    const info = toStreamFailure(raw);
+    const turn = pendingTurnRef.current;
+    if (turn) {
+      setState((s) => ({ ...s, failure: { ...turn, ...info } }));
+    }
+    return info.message;
+  }, []);
 
   /**
    * 把缓冲区里尚未渲染的文字**立即**落到消息里。
@@ -599,7 +645,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;
       sawErrorRef.current = true;
-      insertTailBlock(stream, { kind: "error", text: p.text ?? "" });
+      // 失败时先排空打字机缓冲：最后一段已收到的正文可能还躺在 buffer 里，
+      // 不落位就会在失败提示出现的同时凭空少一截。
+      flushBuffer();
+      const message = recordFailure(p.text ?? "");
+      insertTailBlock(stream, { kind: "error", text: message });
     });
     on<{ session_id: string }>("agent:done", (p) => {
       const stream = streamRef.current;
@@ -689,7 +739,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       disposed = true;
       unsubs.forEach((u) => u());
     };
-  }, [insertTailBlock, flushBuffer]);
+  }, [insertTailBlock, flushBuffer, recordFailure]);
 
   /**
    * 打字机由 requestAnimationFrame 驱动（v0.8.1 P01）。
@@ -929,7 +979,7 @@ let sessions = restored;
       if (state.busy) return;
       const sessionId = state.activeId;
       if (!sessionId) return;
-      setState((s) => ({ ...s, busy: true }));
+      setState((s) => ({ ...s, busy: true, failure: null }));
       sawErrorRef.current = false;
       bufferRef.current = "";
       const userMsg: ChatMessage = {
@@ -963,6 +1013,12 @@ let sessions = restored;
         current.title === "新对话" ? deriveTitle(text) : current.title;
       const messages = [...current.messages, userMsg, assistantMsg];
       streamRef.current = { sessionId, messageId: assistantMsg.id, textIndex: 0 };
+      // 失败重试要回滚到「这条用户消息」；序号按会话内用户消息计数（1-based）
+      pendingTurnRef.current = {
+        sessionId,
+        userIndex: current.messages.filter((m) => m.role === "user").length + 1,
+        text,
+      };
       setState((s) => ({
         ...s,
         sessions: s.sessions.map((sess) =>
@@ -976,9 +1032,13 @@ let sessions = restored;
         await sendMessageApi(sessionId, text, stateRef.current.mode, images);
       } catch (e) {
         if (!sawErrorRef.current) {
+          // invoke 直接抛错（后端没来得及发 agent:error）：同样先排空缓冲，
+          // 保留已生成内容，再写错误块与失败状态。
+          flushBuffer();
+          const message = recordFailure(e);
           appendBlocks(sessionId, assistantMsg.id, (b) => [
             ...b,
-            { kind: "error", text: String(e) },
+            { kind: "error", text: message },
           ]);
         }
       } finally {
@@ -1007,7 +1067,15 @@ let sessions = restored;
         }
       }
     },
-    [state.busy, state.activeId, appendBlocks, drainBuffer, persistNow],
+    [
+      state.busy,
+      state.activeId,
+      appendBlocks,
+      drainBuffer,
+      persistNow,
+      flushBuffer,
+      recordFailure,
+    ],
   );
 
   const stop = useCallback(async () => {
@@ -1300,6 +1368,20 @@ setState((s) => {
     }));
   }, []);
 
+  /** v0.8.1 P12：失败条上的「重试」与「忽略」。 */
+  const dismissFailure = useCallback(() => {
+    setState((s) => ({ ...s, failure: null }));
+  }, []);
+
+  const retryLast = useCallback(async () => {
+    const f = stateRef.current.failure;
+    if (!f || stateRef.current.busy) return;
+    // 先收起提示；resendFrom 的副作用预检若弹出确认框，用户取消后
+    // 旧提示也不该一直挂着。已生成的回答原文保留在消息里。
+    setState((s) => ({ ...s, failure: null }));
+    await resendFrom(f.userIndex, f.text);
+  }, [resendFrom]);
+
   const value = useMemo<StoreValue>(
     () => ({
       ...state,
@@ -1310,6 +1392,8 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      retryLast,
+      dismissFailure,
       switchMessageVersion,
       editingUserIndex,
       editPrefill,
@@ -1343,6 +1427,8 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      retryLast,
+      dismissFailure,
       switchMessageVersion,
       editingUserIndex,
       editPrefill,

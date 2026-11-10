@@ -111,6 +111,36 @@ export function toAppError(e: unknown): AppError {
   };
 }
 
+/** 流式状态机的两种终态（v0.8.1 P12）。 */
+export interface StreamFailureInfo {
+  /** interrupted：网络中断 / 超时；failed：鉴权、限流、上下文溢出等 */
+  kind: "interrupted" | "failed";
+  code: AppErrorCode;
+  message: string;
+  detail: string;
+  retryable: boolean;
+}
+
+/**
+ * 把一次流式失败归到终态。
+ *
+ * 网络类归 interrupted（内容可能只是「没传完」，值得重试）；其余归
+ * failed（重试也不会变好，需要用户先去改配置 / 压缩上下文）。
+ */
+export function toStreamFailure(e: unknown): StreamFailureInfo {
+  const app = toAppError(e);
+  return {
+    kind:
+      app.code === "net_timeout" || app.code === "local_down"
+        ? "interrupted"
+        : "failed",
+    code: app.code,
+    message: app.message,
+    detail: app.detail,
+    retryable: app.retryable,
+  };
+}
+
 /** 组件只需一句提示时的快捷入口（等价于 toAppError(e).message）。 */
 export function errorText(e: unknown): string {
   return toAppError(e).message;
