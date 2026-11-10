@@ -1,23 +1,29 @@
-//! stdio MCP 客户端（v0.8.0 · rc.3 C59）。
+//! stdio MCP 客户端（v0.8.1 · M2-01 重构）。
 //!
-//! 只做第一部分需要的最小子集：拉起子进程、按行（NDJSON）收发 JSON-RPC 2.0、
-//! `initialize` 握手、请求-响应按 id 关联、stderr 尾部留痕、进程退出即状态转 Down。
+//! 连接生命周期留在这里；**字节传输**在 `transport.rs`、**JSON-RPC 请求关联**
+//! 在 `session.rs`。二期新增 resources / prompts 域只需加方法，不必再动
+//! 子进程与帧处理。
 //!
-//! 不引入官方 rmcp：第一部分只用到 stdio + tools 两方法一通知，自研约数百行、
-//! 零新增依赖（tokio 已启用 process/io-util），排错时看 stderr 就能定位。
+//! 不引入官方 rmcp：M2 计划 D-01 把迁移触发点放到三期的 HTTP/OAuth，
+//! 这里先用 `Transport` trait 把替换面压到最小。
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{ChildStderr, ChildStdout, Command};
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
-/// 第一部分对齐的协议版本（见设计文档 1.1）。
+use super::session::RpcSession;
+use super::transport::{StdioTransport, Transport};
+
+// 保持一期对外符号不变：其他模块与既有单测仍从 client 引用这两个函数。
+pub use super::session::{decode_line, encode_message};
+
+/// 握手时向服务器声明的最低共同版本（见设计文档 1.1 / 二期计划 2.4）。
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// stderr 环形缓冲保留的行数。
 const MAX_STDERR_LINES: usize = 50;
@@ -57,39 +63,14 @@ impl ConnStatus {
     }
 }
 
-/// 编码一条 JSON-RPC 消息为一行（不含换行符）。`id=None` 即通知。
-pub fn encode_message(id: Option<u64>, method: &str, params: &Value) -> String {
-    let mut obj = serde_json::Map::new();
-    obj.insert("jsonrpc".to_string(), json!("2.0"));
-    if let Some(id) = id {
-        obj.insert("id".to_string(), json!(id));
-    }
-    obj.insert("method".to_string(), json!(method));
-    obj.insert("params".to_string(), params.clone());
-    serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
-}
-
-/// 解析一行。空行视为无消息（返回 None）。
-pub fn decode_line(line: &str) -> Result<Option<Value>, String> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    serde_json::from_str::<Value>(trimmed)
-        .map(Some)
-        .map_err(|e| format!("无法解析服务器消息：{e}"))
-}
-
 /// 一条活连接。
 pub struct Connection {
     pub server_id: i64,
     pub server_name: String,
     /// 允许可见的工作区（空 = 全部）。工具可见性按当前工作区前缀过滤。
     pub workspaces: Vec<String>,
-    child: AsyncMutex<Option<Child>>,
-    stdin: AsyncMutex<Option<ChildStdin>>,
-    next_id: AtomicU64,
-    pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
+    transport: Arc<dyn Transport>,
+    session: RpcSession,
     status: RwLock<ConnStatus>,
     stderr_tail: StdMutex<VecDeque<String>>,
     /// 最近一次 `tools/list` 的发现结果（C60）。
@@ -103,17 +84,14 @@ impl Connection {
         server_id: i64,
         server_name: String,
         workspaces: Vec<String>,
-        child: Child,
-        stdin: ChildStdin,
+        transport: Arc<dyn Transport>,
     ) -> Self {
         Connection {
             server_id,
             server_name,
             workspaces,
-            child: AsyncMutex::new(Some(child)),
-            stdin: AsyncMutex::new(Some(stdin)),
-            next_id: AtomicU64::new(1),
-            pending: StdMutex::new(HashMap::new()),
+            transport,
+            session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
             stderr_tail: StdMutex::new(VecDeque::new()),
             tools: RwLock::new(Vec::new()),
@@ -158,91 +136,23 @@ impl Connection {
         }
     }
 
-    fn fail_pending(&self, reason: &str) {
-        if let Ok(mut map) = self.pending.lock() {
-            for (_, tx) in map.drain() {
-                let _ = tx.send(Err(reason.to_string()));
-            }
-        }
-    }
-
-    /// 发一条请求并等待响应。`id` 自增关联。
+    /// 发一条请求并等待响应。`id` 自增关联由会话层负责。
     pub async fn request(
         &self,
         method: &str,
         params: Value,
         timeout: Duration,
     ) -> Result<Value, String> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .map_err(|_| "内部状态异常".to_string())?
-            .insert(id, tx);
-
-        let line = encode_message(Some(id), method, &params);
-        self.write_line(&line).await?;
-
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(v))) => Ok(v),
-            Ok(Ok(Err(e))) => Err(e),
-            Ok(Err(_)) => Err("连接已关闭".to_string()),
-            Err(_) => {
-                if let Ok(mut map) = self.pending.lock() {
-                    map.remove(&id);
-                }
-                Err(format!("请求超时：{method}"))
-            }
-        }
+        self.session
+            .request(self.transport.as_ref(), method, params, timeout)
+            .await
     }
 
     /// 发一条通知（无 id、不等待响应）。
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
-        let line = encode_message(None, method, &params);
-        self.write_line(&line).await
-    }
-
-    async fn write_line(&self, line: &str) -> Result<(), String> {
-        let mut guard = self.stdin.lock().await;
-        let stdin = guard.as_mut().ok_or_else(|| "连接已关闭".to_string())?;
-        stdin
-            .write_all(line.as_bytes())
+        self.session
+            .notify(self.transport.as_ref(), method, params)
             .await
-            .map_err(|e| format!("写入服务器失败：{e}"))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| format!("写入服务器失败：{e}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("写入服务器失败：{e}"))?;
-        Ok(())
-    }
-
-    /// 分发一条从服务器收到的消息：带 id 的是响应，无 id 的是通知。
-    async fn dispatch(&self, v: Value) {
-        if let Some(id) = v.get("id").and_then(|x| x.as_u64()) {
-            let tx = self.pending.lock().ok().and_then(|mut m| m.remove(&id));
-            if let Some(tx) = tx {
-                if let Some(err) = v.get("error") {
-                    let msg = err
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("服务器返回错误");
-                    let _ = tx.send(Err(msg.to_string()));
-                } else {
-                    let _ = tx.send(Ok(v.get("result").cloned().unwrap_or(Value::Null)));
-                }
-            }
-            return;
-        }
-        // 通知：第一部分只关心工具列表变更（C60 处理），其余忽略。
-        if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
-            if method == "notifications/tools/list_changed" {
-                self.on_tools_changed().await;
-            }
-        }
     }
 
     /// 拉取工具集：`tools/list` 支持 cursor 翻页，逐页取尽后截断到上限。
@@ -297,37 +207,32 @@ impl Connection {
         self.request("tools/call", params, CALL_TIMEOUT).await
     }
 
-    /// `notifications/tools/list_changed`：重扫本服务器工具集并同步注册表。
-    async fn on_tools_changed(&self) {
-        // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
-        match self.refresh_tools().await {
-            Ok(_) => crate::tools::registry::sync_mcp_tools(None).await,
-            Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
+    /// 通知路由：会话层只负责把 method 名交回来，具体动作在这里决定。
+    /// 未知通知按一期口径忽略，不报错、不打断流。
+    async fn on_notification(&self, method: &str) {
+        if method == "notifications/tools/list_changed" {
+            // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
+            match self.refresh_tools().await {
+                Ok(_) => crate::tools::registry::sync_mcp_tools(None).await,
+                Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
+            }
         }
     }
 
     /// 关闭连接：关 stdin 让服务器自行退出，再兜底 kill + 回收。
     pub async fn shutdown(&self) {
-        if let Some(mut stdin) = self.stdin.lock().await.take() {
-            let _ = stdin.shutdown().await;
-        }
-        if let Some(mut child) = self.child.lock().await.take() {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-        }
-        self.fail_pending("连接已关闭");
+        self.transport.shutdown().await;
+        self.session.fail_pending("连接已关闭");
         self.set_status(ConnStatus::Disabled).await;
     }
 
     /// 回收已退出的子进程（stdout EOF 后调用）。
     async fn reap(&self) {
-        if let Some(mut child) = self.child.lock().await.take() {
-            let _ = child.wait().await;
-        }
+        self.transport.reap().await;
     }
 
     async fn mark_down(&self, reason: String) {
-        self.fail_pending(&reason);
+        self.session.fail_pending(&reason);
         self.set_status(ConnStatus::Down { reason }).await;
     }
 
@@ -352,7 +257,11 @@ async fn stdout_loop(conn: Arc<Connection>, stdout: ChildStdout) {
         match reader.read_line(&mut line).await {
             Ok(0) => break, // EOF：子进程退出或关闭了 stdout
             Ok(_) => match decode_line(&line) {
-                Ok(Some(v)) => conn.dispatch(v).await,
+                Ok(Some(v)) => {
+                    if let Some(method) = conn.session.dispatch(v) {
+                        conn.on_notification(&method).await;
+                    }
+                }
                 Ok(None) => {}
                 Err(e) => conn.push_stderr(e),
             },
@@ -417,12 +326,12 @@ pub async fn connect(
     let stdout = child.stdout.take().ok_or("无法获取服务器 stdout")?;
     let stderr = child.stderr.take().ok_or("无法获取服务器 stderr")?;
 
+    let transport: Arc<dyn Transport> = Arc::new(StdioTransport::new(child, stdin));
     let conn = Arc::new(Connection::new(
         server_id,
         server_name,
         workspaces,
-        child,
-        stdin,
+        transport,
     ));
     // 先起读任务，握手响应才有处可投递。
     tokio::spawn(stdout_loop(conn.clone(), stdout));
@@ -470,7 +379,9 @@ mod tests {
     fn decode_line_handles_blank_and_garbage() {
         assert_eq!(decode_line("   ").unwrap(), None);
         assert!(decode_line("not json").is_err());
-        let v = decode_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap().unwrap();
+        let v = decode_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            .unwrap()
+            .unwrap();
         assert_eq!(v["id"], 1);
     }
 
