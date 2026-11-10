@@ -436,4 +436,22 @@ mod tests {
         assert_eq!(key(&a), key(&c));
         assert_ne!(key(&a), key(&b));
     }
+
+    /// MCP 工具的参数摘要（`mcp_name {json}`）同样走规则表：
+    /// 参数里出现不可逆破坏必须被硬拒（审批兜底不能绕过规则）。
+    #[test]
+    fn mcp_call_args_still_hit_hard_blocks() {
+        let g = decide(
+            Policy::Dangerous,
+            "mcp_echo {\"command\":\"mkfs.ext4 /dev/sda\"}",
+        );
+        assert!(matches!(g, Gate::Reject { .. }), "{g:?}");
+    }
+
+    /// 严格策略下任何 MCP 调用都应询问。
+    #[test]
+    fn strict_policy_asks_for_any_mcp_call() {
+        let g = decide(Policy::Strict, "mcp_echo {\"x\":1}");
+        assert!(matches!(g, Gate::Ask { .. }), "{g:?}");
+    }
 }

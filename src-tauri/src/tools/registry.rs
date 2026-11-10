@@ -439,6 +439,40 @@ pub fn mcp_snapshot() -> Vec<(String, String, String)> {
     out
 }
 
+/// 测试专用：直接注入动态表（不依赖真实连接）。
+#[cfg(test)]
+pub fn set_mcp_dynamic_for_test(items: Vec<(String, String, String, i64)>) {
+    let mut map = HashMap::new();
+    for (ext, server, original, sid) in items {
+        let def = McpToolDef {
+            name: original.clone(),
+            description: "测试工具".to_string(),
+            input_schema: Value::Null,
+        };
+        let spec = build_mcp_spec(&ext, &server, &def);
+        map.insert(
+            ext,
+            McpDynamic {
+                spec,
+                server_id: sid,
+                server_name: server,
+                original_name: original,
+            },
+        );
+    }
+    if let Ok(mut t) = mcp_table().lock() {
+        *t = map;
+    }
+}
+
+/// 测试专用：清空动态表。
+#[cfg(test)]
+pub fn clear_mcp_dynamic_for_test() {
+    if let Ok(mut t) = mcp_table().lock() {
+        t.clear();
+    }
+}
+
 /// 静态 + 动态工具的统一视图（静态在前，动态按服务器分组稳定排序）。
 fn all_specs() -> Vec<&'static ToolSpec> {
     let mut out: Vec<&'static ToolSpec> = TOOLS.iter().collect();
@@ -770,5 +804,27 @@ mod tests {
             ToolSource::Mcp { server } => assert_eq!(server, "fs"),
             _ => panic!("MCP 工具来源必须是 Mcp"),
         }
+    }
+
+    #[test]
+    fn dynamic_tool_participates_in_queries_and_prompt() {
+        set_mcp_dynamic_for_test(vec![(
+            "echo".to_string(),
+            "demo".to_string(),
+            "echo".to_string(),
+            7,
+        )]);
+        assert!(find("echo").is_some());
+        assert!(is_known("echo"));
+        assert!(names().contains(&"echo"));
+        let entry = mcp_entry("echo").expect("动态条目应可查");
+        assert_eq!(entry.server_name, "demo");
+        assert_eq!(entry.original_name, "echo");
+        assert_eq!(label_for("echo", &serde_json::json!({})), "MCP demo/echo");
+        let prompt = prompt_section(&[ToolKind::Exec]);
+        assert!(prompt.contains("echo"), "{prompt}");
+
+        clear_mcp_dynamic_for_test();
+        assert!(find("echo").is_none());
     }
 }
