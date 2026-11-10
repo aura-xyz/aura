@@ -1,6 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "../store";
 import type { Todo } from "./todo";
+import { assembleChunks, type FileChunk } from "./filePreview";
 
 export interface SavedSession {
   id: string;
@@ -314,6 +315,13 @@ export interface DirEntry {
   absolute_path?: string;
 }
 
+/** 目录列举结果（v0.8.1 P06）：超过后端上限时明确告知，不静默少显示。 */
+export interface DirectoryListing {
+  entries: DirEntry[];
+  truncated: boolean;
+  total: number;
+}
+
 /**
  * 列出某个目录下的条目（右侧文件浏览面板用）。
  *
@@ -323,7 +331,7 @@ export interface DirEntry {
 export function listDirectory(
   sessionId: string,
   path: string,
-): Promise<DirEntry[]> {
+): Promise<DirectoryListing> {
   return invoke("list_directory", { sessionId, path });
 }
 
@@ -331,12 +339,56 @@ export function listDirectory(
  * 读取文本文件内容（右侧文件浏览面板预览用）。
  *
  * 上限 256KB，超限或非 UTF-8 会返回可读错误（可能是二进制文件）。
+ * 文件面板已改用 `readFileStream`，这里保留给「只要一小段文本」的调用方。
  */
 export function readFileText(
   sessionId: string,
   path: string,
 ): Promise<string> {
   return invoke("read_file_text", { sessionId, path });
+}
+
+export interface FilePreview {
+  content: string;
+  truncated: boolean;
+  total_bytes: number;
+  sent_bytes: number;
+}
+
+interface FileStreamMeta {
+  total_bytes: number;
+  sent_bytes: number;
+  truncated: boolean;
+}
+
+/**
+ * 分块读取文本文件内容（v0.8.1 P06）。
+ *
+ * 后端按 256KB 推 Channel 块，上限 2MB 并回传 total/sent，避免把整个
+ * 大文件塞进一次 invoke 的 JSON 响应。Channel 消息与命令响应在同一
+ * WebView 消息队列里按序到达，命令发完所有块才返回，因此 invoke
+ * resolve 时块已齐；`assembleChunks` 仍按 index 排一次做保险。
+ */
+export async function readFileStream(
+  sessionId: string,
+  path: string,
+): Promise<FilePreview> {
+  const chunks: FileChunk[] = [];
+  const channel = new Channel<FileChunk>();
+  channel.onmessage = (msg) => {
+    if (!msg.done) chunks.push(msg);
+  };
+  const meta = await invoke<FileStreamMeta>("read_file_stream", {
+    sessionId,
+    path,
+    channel,
+  });
+  return {
+    content: assembleChunks(chunks),
+    truncated: meta.truncated,
+    total_bytes: meta.total_bytes,
+    sent_bytes: meta.sent_bytes,
+  };
 }
 
 /** 本机可用于「在…中打开」的应用；资源管理器始终在首位。 */

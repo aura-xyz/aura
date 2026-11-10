@@ -1606,6 +1606,19 @@ fn panel_context(
     Ok((workspace, allowlist))
 }
 
+/// 目录列举结果（v0.8.1 P06）。
+///
+/// 超上限时不再把几千条一次性塞进 JSON：只回前 [`MAX_DIR_ENTRIES`] 条，
+/// 并用 `truncated` / `total` 让前端明确提示「已截断」，而不是静默少显示。
+#[derive(serde::Serialize)]
+pub struct DirectoryListing {
+    pub entries: Vec<DirEntryView>,
+    pub truncated: bool,
+    pub total: usize,
+}
+
+const MAX_DIR_ENTRIES: usize = 2000;
+
 /// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
 ///
 /// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
@@ -1619,7 +1632,7 @@ pub async fn list_directory(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
-) -> Result<Vec<DirEntryView>, String> {
+) -> Result<DirectoryListing, String> {
     let (workspace, allowlist) = panel_context(&state, &session_id)?;
     tokio::task::spawn_blocking(move || {
         list_directory_blocking(workspace, allowlist, &path)
@@ -1633,9 +1646,9 @@ fn list_directory_blocking(
     workspace: PathBuf,
     allowlist: Vec<PathBuf>,
     path: &str,
-) -> Result<Vec<DirEntryView>, String> {
+) -> Result<DirectoryListing, String> {
     if workspace.as_os_str().is_empty() || !workspace.is_dir() {
-        return Ok(Vec::new());
+        return Ok(DirectoryListing { entries: Vec::new(), truncated: false, total: 0 });
     }
     let scope = crate::tools::AccessScope::new(workspace, allowlist)
         .map_err(|e| format!("{e}"))?;
@@ -1648,8 +1661,17 @@ fn list_directory_blocking(
     }
 
     let mut out: Vec<DirEntryView> = Vec::new();
+    let mut total = 0usize;
+    let mut truncated = false;
     for entry in std::fs::read_dir(&target).map_err(|e| format!("读取目录失败: {e}"))? {
         let entry = entry.map_err(|e| format!("读取目录失败: {e}"))?;
+        total += 1;
+        if out.len() >= MAX_DIR_ENTRIES {
+            truncated = true;
+            // 只计数、不再逐条 metadata：超大目录不该为「告诉用户有多少条」
+            // 付几千次系统调用。
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().to_string();
         let next_path = join_panel_path(path, &name);
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -1688,7 +1710,7 @@ fn list_directory_blocking(
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    Ok(out)
+    Ok(DirectoryListing { entries: out, truncated, total })
 }
 
 /// 读取文本文件内容（右侧文件浏览面板预览用，v0.8.0）。
@@ -1735,6 +1757,142 @@ fn read_file_text_blocking(
         ));
     }
     std::fs::read_to_string(&target).map_err(|_| "无法读取为 UTF-8 文本（可能是二进制文件）".to_string())
+}
+
+/// 流式文件块（v0.8.1 P06）。`done` 是结束标记，不带文本。
+#[derive(Clone, serde::Serialize)]
+pub struct FileChunk {
+    pub index: u32,
+    pub text: String,
+    pub done: bool,
+}
+
+/// 流式读取的收尾信息，作为 `invoke` 的返回值。
+#[derive(serde::Serialize)]
+pub struct FileStreamMeta {
+    pub total_bytes: u64,
+    pub sent_bytes: u64,
+    pub truncated: bool,
+}
+
+const FILE_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_FILE_STREAM_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 分块读取文本文件（v0.8.1 P06）。
+///
+/// 旧版 `read_file_text` 把整个文件字符串作为一次 `invoke` 返回值：
+/// 2MB 文本会同时存在「读取 → 克隆 → JSON 序列化」三份拷贝，单次超大
+/// IPC 载荷还会让 WebView 反序列化顿一下。这里用 `Channel` 按 256KB
+/// 分块推送；超过 2MB 明确截断并回传 total / sent，前端给出提示。
+///
+/// `read_file_text` 保留给「只要一小段文本」的调用方（<=256KB），
+/// 文件面板预览统一走这条通道。
+#[tauri::command]
+pub async fn read_file_stream(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    channel: tauri::ipc::Channel<FileChunk>,
+) -> Result<FileStreamMeta, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        let batch = read_file_chunks(workspace, allowlist, &path)?;
+        let last = batch.chunks.len() as u32;
+        for (i, text) in batch.chunks.iter().enumerate() {
+            channel
+                .send(FileChunk {
+                    index: i as u32,
+                    text: text.clone(),
+                    done: false,
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        channel
+            .send(FileChunk {
+                index: last,
+                text: String::new(),
+                done: true,
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(FileStreamMeta {
+            total_bytes: batch.total_bytes,
+            sent_bytes: batch.sent_bytes,
+            truncated: batch.truncated,
+        })
+    })
+    .await
+    .map_err(|e| format!("文件流式读取异常: {e}"))?
+}
+
+struct FileChunkBatch {
+    chunks: Vec<String>,
+    total_bytes: u64,
+    sent_bytes: u64,
+    truncated: bool,
+}
+
+/// 读文件并切成 UTF-8 安全的块。
+///
+/// 按**行**累积到 256KB 再切：换行是 ASCII，多字节字符绝不会跨块被切断，
+/// 不需要额外的字符边界修补。非 UTF-8 字节用 lossy 替换，预览不至于
+/// 整个打不开（旧版是直接报错）。
+fn read_file_chunks(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<FileChunkBatch, String> {
+    use std::io::{BufRead, BufReader};
+
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Err("尚未选择工作区".into());
+    }
+    let scope = crate::tools::AccessScope::new(workspace, allowlist)
+        .map_err(|e| format!("{e}"))?;
+    let target = crate::tools::resolve_path(&scope, path)?;
+    let target = crate::tools::ensure_allowed(&scope, &target)?;
+    let meta = std::fs::metadata(&target).map_err(|e| format!("文件不存在: {e}"))?;
+    if meta.is_dir() {
+        return Err("是目录，无法作为文本预览".into());
+    }
+    let total_bytes = meta.len();
+    let file = std::fs::File::open(&target).map_err(|e| format!("无法打开文件: {e}"))?;
+    let mut reader = BufReader::new(file);
+
+    let mut chunks = Vec::new();
+    let mut pending = Vec::<u8>::new();
+    let mut line = Vec::<u8>::new();
+    let mut sent_bytes = 0u64;
+    let mut truncated = false;
+
+    loop {
+        line.clear();
+        let n = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|e| format!("读取文件失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if sent_bytes + pending.len() as u64 + line.len() as u64 > MAX_FILE_STREAM_BYTES {
+            truncated = true;
+            break;
+        }
+        pending.extend_from_slice(&line);
+        if pending.len() >= FILE_CHUNK_BYTES {
+            sent_bytes += pending.len() as u64;
+            chunks.push(String::from_utf8_lossy(&pending).into_owned());
+            pending.clear();
+        }
+    }
+    if !pending.is_empty() {
+        sent_bytes += pending.len() as u64;
+        chunks.push(String::from_utf8_lossy(&pending).into_owned());
+    }
+    Ok(FileChunkBatch {
+        chunks,
+        total_bytes,
+        sent_bytes,
+        truncated,
+    })
 }
 
 /// 列出全部白名单条目（内置 + 用户添加）。
@@ -2953,8 +3111,8 @@ mod tests {
 
 }
 
-/// v0.8.1 P05：文件面板的阻塞部分抽成纯函数后，无需构造 AppState / SQLite
-/// 就能直接验证排序、路径语义与文件大小闸门。
+/// v0.8.1 P05/P06：文件面板的阻塞部分抽成纯函数后，无需构造 AppState /
+/// SQLite 就能验证排序、路径语义、目录上限与流式分块的 UTF-8 安全性。
 #[cfg(test)]
 mod file_panel_tests {
     use super::*;
@@ -2980,12 +3138,27 @@ mod file_panel_tests {
         std::fs::write(root.join("beta.txt"), "b").unwrap();
         std::fs::write(root.join("Alpha.txt"), "a").unwrap();
 
-        let got = list_directory_blocking(root.clone(), vec![], "/").unwrap();
-        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+        let listing = list_directory_blocking(root.clone(), vec![], "/").unwrap();
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["docs", "Alpha.txt", "beta.txt"]);
-        assert!(got[0].is_dir);
+        assert!(listing.entries[0].is_dir);
+        assert!(!listing.truncated);
+        assert_eq!(listing.total, 3);
         // 前端靠这个相对路径下钻，不能被换成带盘符的绝对磁盘路径
-        assert_eq!(got[0].path, "/docs");
+        assert_eq!(listing.entries[0].path, "/docs");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn huge_directory_is_truncated_but_total_is_exact() {
+        let root = scratch();
+        for i in 0..MAX_DIR_ENTRIES + 7 {
+            std::fs::write(root.join(format!("f{i:05}.txt")), "").unwrap();
+        }
+        let listing = list_directory_blocking(root.clone(), vec![], "/").unwrap();
+        assert!(listing.truncated);
+        assert_eq!(listing.entries.len(), MAX_DIR_ENTRIES);
+        assert_eq!(listing.total, MAX_DIR_ENTRIES + 7);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3009,9 +3182,41 @@ mod file_panel_tests {
     }
 
     #[test]
+    fn small_stream_is_one_chunk_and_keeps_trailing_text() {
+        let root = scratch();
+        let text = "你好 Aura\n第二行末尾无换行";
+        std::fs::write(root.join("a.txt"), text).unwrap();
+        let batch = read_file_chunks(root.clone(), vec![], "/a.txt").unwrap();
+        assert!(!batch.truncated);
+        assert_eq!(batch.chunks.len(), 1);
+        assert_eq!(batch.chunks[0], text);
+        assert_eq!(batch.sent_bytes, text.len() as u64);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_stream_splits_without_breaking_utf8_and_reports_truncation() {
+        let root = scratch();
+        // 每行含多字节中文，且长度远小于一块：跨块边界必定落在行边界上。
+        let line = format!("{}\n", "中文abc".repeat(200));
+        std::fs::write(root.join("big.txt"), line.repeat(1200)).unwrap();
+        let batch = read_file_chunks(root.clone(), vec![], "/big.txt").unwrap();
+
+        assert!(batch.truncated);
+        assert!(batch.sent_bytes <= MAX_FILE_STREAM_BYTES);
+        assert!(batch.chunks.len() >= 2);
+        let joined = batch.chunks.concat();
+        assert!(joined.starts_with("中文abc"));
+        // lossy 替换会把无效字节吃掉；这里全是合法 UTF-8，字节数应完全一致
+        assert_eq!(joined.len() as u64, batch.sent_bytes);
+        assert!(joined.ends_with('\n'));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn unset_workspace_yields_empty_listing_instead_of_error() {
         // 新建会话尚未选工作区时，面板应该显示空目录而不是弹错误
         let out = list_directory_blocking(PathBuf::new(), vec![], "/").unwrap();
-        assert!(out.is_empty());
+        assert!(out.entries.is_empty());
     }
 }
