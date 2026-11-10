@@ -13,12 +13,32 @@ pub mod config;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use tokio::sync::RwLock;
 
-pub use client::{ConnStatus, Connection};
+pub use client::{ConnStatus, Connection, McpToolDef};
 pub use config::McpServerConfig;
+
+/// 事件观察者：`(kind, payload)`。由应用层安装为向前端 emit。
+pub type Observer = Box<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+
+static OBSERVER: StdMutex<Option<Observer>> = StdMutex::new(None);
+
+/// 安装事件观察者（启动时调用；未安装时 [`emit`] 为 no-op）。
+pub fn set_observer(observer: Observer) {
+    let mut guard = OBSERVER.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(observer);
+}
+
+/// 向观察者发一条事件（连接状态、工具集变化）。
+pub fn emit(kind: &str, payload: serde_json::Value) {
+    if let Ok(guard) = OBSERVER.lock() {
+        if let Some(cb) = guard.as_ref() {
+            cb(kind, payload);
+        }
+    }
+}
 
 /// 连接管理器：按服务器 id 持有活连接。
 pub struct Manager {

@@ -22,6 +22,17 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// stderr 环形缓冲保留的行数。
 const MAX_STDERR_LINES: usize = 50;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const LIST_TIMEOUT: Duration = Duration::from_secs(10);
+/// 单服务器工具数上限：防失控服务器撑爆 prompt。
+const MAX_TOOLS: usize = 50;
+
+/// 服务器声明的单个工具（原始名与 schema 原样保留）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct McpToolDef {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
 
 /// 连接状态。`Down` 携带原因（退出码 / 握手失败文案），供 UI 展示。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -78,6 +89,8 @@ pub struct Connection {
     pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     status: RwLock<ConnStatus>,
     stderr_tail: StdMutex<VecDeque<String>>,
+    /// 最近一次 `tools/list` 的发现结果（C60）。
+    tools: RwLock<Vec<McpToolDef>>,
     /// `tools/call` 串行化（第一部分不做并发，避免服务器实现差异）。
     call_lock: AsyncMutex<()>,
 }
@@ -93,6 +106,7 @@ impl Connection {
             pending: StdMutex::new(HashMap::new()),
             status: RwLock::new(ConnStatus::Connecting),
             stderr_tail: StdMutex::new(VecDeque::new()),
+            tools: RwLock::new(Vec::new()),
             call_lock: AsyncMutex::new(()),
         }
     }
@@ -102,7 +116,19 @@ impl Connection {
     }
 
     async fn set_status(&self, s: ConnStatus) {
-        *self.status.write().await = s;
+        *self.status.write().await = s.clone();
+        // 状态变化推给前端（未安装观察者时为 no-op）。
+        if let Ok(payload) = serde_json::to_value(&s) {
+            crate::mcp::emit(
+                "mcp:status",
+                serde_json::json!({ "serverId": self.server_id, "status": payload }),
+            );
+        }
+    }
+
+    /// 最近一次发现的工具集（克隆，供注册表同步与状态查询）。
+    pub async fn tools(&self) -> Vec<McpToolDef> {
+        self.tools.read().await.clone()
     }
 
     /// stderr 尾部（最近若干行），供连接排错展示。
@@ -209,8 +235,57 @@ impl Connection {
         }
     }
 
-    /// 工具列表变更钩子（C60 覆盖实现；C59 阶段为空占位）。
-    async fn on_tools_changed(&self) {}
+    /// 拉取工具集：`tools/list` 支持 cursor 翻页，逐页取尽后截断到上限。
+    pub async fn refresh_tools(&self) -> Result<Vec<McpToolDef>, String> {
+        let mut all: Vec<McpToolDef> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let params = match &cursor {
+                Some(c) => json!({ "cursor": c }),
+                None => json!({}),
+            };
+            let res = self.request("tools/list", params, LIST_TIMEOUT).await?;
+            if let Some(arr) = res.get("tools").and_then(|t| t.as_array()) {
+                for t in arr {
+                    let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let description = t
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .filter(|d| !d.trim().is_empty())
+                        .unwrap_or("（服务器未提供描述）")
+                        .to_string();
+                    let input_schema = t.get("inputSchema").cloned().unwrap_or(Value::Null);
+                    all.push(McpToolDef {
+                        name: name.to_string(),
+                        description,
+                        input_schema,
+                    });
+                }
+            }
+            match res.get("nextCursor").and_then(|c| c.as_str()) {
+                Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
+                _ => break,
+            }
+        }
+        all.truncate(MAX_TOOLS);
+        *self.tools.write().await = all.clone();
+        crate::mcp::emit(
+            "mcp:tools",
+            json!({ "serverId": self.server_id, "count": all.len() }),
+        );
+        Ok(all)
+    }
+
+    /// `notifications/tools/list_changed`：重扫本服务器工具集。
+    async fn on_tools_changed(&self) {
+        // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
+        if let Err(e) = self.refresh_tools().await {
+            self.push_stderr(format!("刷新工具列表失败：{e}"));
+        }
+    }
 
     /// 关闭连接：关 stdin 让服务器自行退出，再兜底 kill + 回收。
     pub async fn shutdown(&self) {
@@ -330,6 +405,10 @@ pub async fn connect(
     match conn.handshake().await {
         Ok(_) => {
             conn.set_status(ConnStatus::Running).await;
+            // 首次工具发现：失败不阻断连接（工具数为 0，状态仍 Running）。
+            if let Err(e) = conn.refresh_tools().await {
+                conn.push_stderr(format!("首次拉取工具列表失败：{e}"));
+            }
             Ok(conn)
         }
         Err(e) => {
