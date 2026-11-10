@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { workspaceInitial, workspaceTint } from "../lib/workspaceBadge";
 import { groupSessionsByTime, relativeTime } from "../lib/history";
+import { useShowSessionTime } from "../hooks/useShowSessionTime";
 import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
@@ -73,6 +74,9 @@ export default function Sidebar({
     cancelRename,
     renameSession,
   } = useStore();
+
+  // 设置页可关闭的会话行时间戳（默认开启）。关闭只影响显示，不影响排序。
+  const showSessionTime = useShowSessionTime();
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   // 删除是唯一不可撤销的动作，误触一下整个对话就没了（实测反馈）。
@@ -388,12 +392,14 @@ const isOpen = expanded.has(w);
                                       className="min-w-0 flex-1 px-2 py-1 text-left"
                                     >
                                       <div className="truncate text-sm">{s.title}</div>
-                                      {/* A1 第二段：会话行第二行 11px 相对时间（C52 补齐） */}
-                                      {relativeTime(s.updated_at * 1000) && (
-                                        <div className="truncate text-[11px] text-subtle">
-                                          {relativeTime(s.updated_at * 1000)}
-                                        </div>
-                                      )}
+                                      {/* A1 第二段：会话行第二行 11px 相对时间（C52 补齐）。
+                                          设置页可关闭（小屏 / 多对话时省行高）。 */}
+                                      {showSessionTime &&
+                                        relativeTime(s.updated_at * 1000) && (
+                                          <div className="truncate text-[11px] text-subtle">
+                                            {relativeTime(s.updated_at * 1000)}
+                                          </div>
+                                        )}
                                     </button>
                                   )}
                                   {renamingId !== s.id && (

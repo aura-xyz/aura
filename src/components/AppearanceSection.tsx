@@ -12,7 +12,10 @@ import {
 } from "../lib/theme";
 import { saveMarkdownLive } from "../lib/markdownLive";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
+import { saveShowSessionTime } from "../lib/sessionTime";
+import { useShowSessionTime } from "../hooks/useShowSessionTime";
 import { Check, RotateCcw } from "lucide-react";
+import Switch from "./Switch";
 
 type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 
@@ -48,6 +51,7 @@ const THEMES: { id: ThemeApi["theme"]; label: string }[] = [
 
 export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
   const markdownLive = useMarkdownLive();
+  const showSessionTime = useShowSessionTime();
   const fontRows: {
     label: string;
     value: number;
@@ -178,6 +182,20 @@ export default function AppearanceSection({ theme }: { theme: ThemeApi }) {
             }`}
           />
         </button>
+      </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3 border-t border-line pt-5">
+        <div className="min-w-0">
+          <span className="text-sm font-medium">显示会话时间戳</span>
+          <p className="mt-1 text-xs leading-relaxed text-subtle">
+            在侧栏会话行显示相对时间（今天 14:20 / 昨天 / 3 天前）。关闭后列表更紧凑，适合小屏幕与多对话。
+          </p>
+        </div>
+        <Switch
+          checked={showSessionTime}
+          label="显示会话时间戳"
+          onChange={() => saveShowSessionTime(!showSessionTime)}
+        />
       </div>
     </section>
   );
