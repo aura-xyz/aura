@@ -567,6 +567,15 @@ export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
   return invoke("remove_skill_source", { url });
 }
 
+/** 自定义技能源镜像前缀（空串 = 直连；仅作用于自定义源下载）。 */
+export function getSkillMirror(): Promise<string> {
+  return invoke("get_skill_mirror");
+}
+
+export function setSkillMirror(prefix: string): Promise<void> {
+  return invoke("set_skill_mirror", { prefix });
+}
+
 // ── 操作时间线（v0.6.2）─────────────────────────────────────────
 
 export type TimelineKind =

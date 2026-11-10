@@ -7,6 +7,7 @@ pub mod db;
 pub mod history;
 pub mod market;
 pub mod mcp;
+pub mod mirrors;
 pub mod paths;
 pub mod proc_group;
 pub mod power;
@@ -38,6 +39,7 @@ use commands::{
     security_list_events, security_export_events, truncate_history,
     mcp_list_servers, mcp_add_server, mcp_update_server, mcp_remove_server,
     mcp_set_server_enabled, mcp_server_status, mcp_rescan_tools, mcp_test_connect,
+    get_skill_mirror, set_skill_mirror,
     AppState,
 };
 use terminal::{
@@ -361,6 +363,13 @@ pub fn run() {
             // 供文件面板 / 附件的图片预览走 asset:// 直接加载。
             register_asset_scope(app.handle(), &db);
 
+            // 自定义技能源镜像：启动时从设置恢复，供 GitHub 技能源下载使用。
+            crate::mirrors::set_custom_prefix(
+                crate::db::get_setting(&db, crate::mirrors::SETTING_KEY)
+                    .ok()
+                    .flatten(),
+            );
+
             app.manage(AppState::new(api_key, db));
 
             // 安全事件落库通道（v0.8.0 C42）。工具层是纯函数，拿不到
@@ -539,6 +548,8 @@ pub fn run() {
             mcp_server_status,
             mcp_rescan_tools,
             mcp_test_connect,
+            get_skill_mirror,
+            set_skill_mirror,
             list_shells,
             terminal_create,
             terminal_write,

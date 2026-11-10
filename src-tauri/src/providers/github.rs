@@ -110,10 +110,28 @@ fn mirror(url: &str) -> Option<String> {
     Some(format!("{REPO_CDN}{rest}"))
 }
 
+/// 去重（保序），镜像前缀可能产生与直连重复的条目。
+fn dedupe(mut urls: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
+    urls
+}
+
+/// 追加镜像候选：
+/// - 官方源（Aura 自家 registry）用内置 7 家轮换，保证国内可达与速度；
+/// - 自定义源只应用用户在设置页配置的镜像前缀（内置镜像不接管第三方源）。
+fn push_mirrors(urls: &mut Vec<String>, primary: &str, official: bool) {
+    if official {
+        urls.extend(crate::mirrors::official_candidates(primary, &[]));
+    } else if let Some(prefix) = crate::mirrors::custom_prefix() {
+        urls.extend(crate::mirrors::custom_candidates(primary, Some(&prefix)));
+    }
+}
+
 /// 某来源的**快线**候选地址：并发抢答。
 ///
 /// Contents API 不在其中——它有 60 次/小时的无鉴权限额，不能每次开市场都打一遍。
-fn registry_urls(src: &RegistrySource) -> Vec<String> {
+fn registry_urls(src: &RegistrySource, official: bool) -> Vec<String> {
     let mut urls = vec![format!("{}{}", src.url, REGISTRY_JSON)];
     if src.url.ends_with("/HEAD/") {
         // HEAD 是默认分支的别名；个别代理会改写它，补一条 main 兜底
@@ -126,7 +144,9 @@ fn registry_urls(src: &RegistrySource) -> Vec<String> {
     if let Some(m) = mirror(&urls[0]) {
         urls.push(m);
     }
-    urls
+    let primary = urls[0].clone();
+    push_mirrors(&mut urls, &primary, official);
+    dedupe(urls)
 }
 
 /// Contents API 把文件内容 base64 塞在 JSON 里，这里还原成原始字节。
@@ -263,7 +283,7 @@ impl GitHubProvider {
 
     /// 拉取并解析清单（原始 registry 条目，保留 `source` 供下载用）。
     async fn fetch_registry(&self) -> Result<Vec<RegistryEntry>, String> {
-        let urls = registry_urls(&self.src);
+        let urls = registry_urls(&self.src, self.official);
         // 清单只有几 KB，直接并发抢答；失败原因汇总成「连接超时 / HTTP 404」这种短句
         let bytes = match http::fetch_race(&urls).await {
             Ok(b) => b,
@@ -282,14 +302,17 @@ impl GitHubProvider {
         Ok(parsed.skills)
     }
 
-    /// 条目的包下载地址。
+    /// 条目的包下载地址。镜像排在直连前面：raw 在国内可能极慢或不通，
+    /// 而包完整性最终由清单里的 sha256 兜底，走镜像不影响安全性。
     fn download_urls(&self, entry: &RegistryEntry) -> Result<Vec<String>, String> {
         let primary = resolve_source(&self.src.url, &entry.source)?;
-        let mut urls = vec![primary.clone()];
+        let mut urls: Vec<String> = Vec::new();
+        push_mirrors(&mut urls, &primary, self.official);
         if let Some(m) = mirror(&primary) {
             urls.push(m);
         }
-        Ok(urls)
+        urls.push(primary);
+        Ok(dedupe(urls))
     }
 }
 
@@ -499,5 +522,39 @@ mod tests {
         assert_eq!(decode_contents_api(wrapped.as_bytes()).unwrap(), b"{\"skills\":[]}");
         assert!(decode_contents_api(br#"{"message":"Not Found"}"#).is_err());
         assert!(decode_contents_api(b"not json").is_err());
+    }
+
+    /// 官方源必须带上内置镜像候选（国内直连 raw 基本不可用）。
+    #[test]
+    fn official_registry_urls_include_builtin_mirrors() {
+        let urls = registry_urls(&official_source(), true);
+        assert!(
+            urls.iter().any(|u| u.contains("v4.gh-proxy.org")),
+            "{urls:?}"
+        );
+        assert!(urls.iter().any(|u| u.contains("ghfast.top")), "{urls:?}");
+    }
+
+    /// 自定义源默认不套内置镜像；配了自定义前缀才加速。
+    #[test]
+    fn custom_source_uses_only_configured_prefix() {
+        crate::mirrors::set_custom_prefix(None);
+        let src = RegistrySource {
+            name: "team".into(),
+            url: "https://raw.githubusercontent.com/team/skills/HEAD/".into(),
+        };
+        let plain = registry_urls(&src, false);
+        assert!(
+            !plain.iter().any(|u| u.contains("gh-proxy")),
+            "自定义源不应套内置镜像：{plain:?}"
+        );
+
+        crate::mirrors::set_custom_prefix(Some("https://my.mirror/".into()));
+        let mirrored = registry_urls(&src, false);
+        assert!(
+            mirrored.iter().any(|u| u.starts_with("https://my.mirror/")),
+            "{mirrored:?}"
+        );
+        crate::mirrors::set_custom_prefix(None);
     }
 }

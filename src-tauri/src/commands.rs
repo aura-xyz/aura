@@ -2653,6 +2653,34 @@ pub async fn mcp_test_connect(
     }
 }
 
+// ── 自定义技能源镜像（v0.8.0）────────────────────────────────
+
+/// 读取自定义镜像前缀（空串 = 直连）。
+#[tauri::command]
+pub fn get_skill_mirror(state: State<'_, AppState>) -> Result<String, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    Ok(crate::db::get_setting(&db, crate::mirrors::SETTING_KEY)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default())
+}
+
+/// 设置自定义镜像前缀。仅作用于**自定义 skill 源**的下载，
+/// 不接管用户本人的浏览，也不改变官方源使用的内置 7 家镜像。
+#[tauri::command]
+pub fn set_skill_mirror(state: State<'_, AppState>, prefix: String) -> Result<(), String> {
+    let p = prefix.trim().to_string();
+    if !p.is_empty() && !p.starts_with("https://") {
+        return Err("自定义镜像必须是 https:// 开头的地址".into());
+    }
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::db::set_setting(&db, crate::mirrors::SETTING_KEY, &p)
+            .map_err(|e| e.to_string())?;
+    }
+    crate::mirrors::set_custom_prefix(if p.is_empty() { None } else { Some(p) });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
