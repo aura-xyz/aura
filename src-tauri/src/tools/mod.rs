@@ -1,5 +1,6 @@
 pub mod exec;
 pub mod fs_ops;
+pub mod async_tool;
 pub mod registry;
 pub mod scope;
 pub mod search;
@@ -76,11 +77,9 @@ pub struct ToolFail {
     pub error: String,
 }
 
-/// 生成 UI 动作文案。工具列表见 `registry::TOOLS`。
+/// 生成 UI 动作文案。内置工具走各自 label，MCP 工具显示「服务器/原始名」。
 pub fn tool_label(name: &str, args: &Value) -> String {
-    registry::find(name)
-        .map(|t| (t.label)(args))
-        .unwrap_or_else(|| name.to_string())
+    registry::label_for(name, args)
 }
 
 /// 把模型给的路径解析成实际路径。
@@ -172,6 +171,15 @@ pub fn ensure_allowed(scope: &AccessScope, target: &Path) -> Result<PathBuf, Str
         .canonicalize()
         .map_err(|e| format!("路径不存在或无法访问: {}", e))?;
     if !scope.allows(&target_c) {
+        // 越权访问是最值得留痕的一类：模型「猜到」了工作区外的路径时，
+        // 用户需要知道它试过。
+        crate::security::log_simple(
+            crate::security::Kind::PathDenied,
+            "",
+            &target_c.to_string_lossy(),
+            "路径越出允许访问的范围（工作区与已授权目录）",
+            "path_scope",
+        );
         return Err("路径越出允许访问的范围（工作区与已授权目录），已拦截".into());
     }
     Ok(target_c)
@@ -292,13 +300,12 @@ pub async fn execute(
     args: Value,
 ) -> Result<ToolOutput, ToolFail> {
     let label = tool_label(&name, &args);
+    // 分发走 AsyncTool trait（v0.8.1 C50）：内置工具内部包 spawn_blocking，
+    // MCP 工具（rc.3）直接 await 网络调用，调用方无差别。
     let result = match registry::find(&name) {
         Some(spec) => {
-            let run = spec.run;
-            match tokio::task::spawn_blocking(move || run(&scope, &args)).await {
-                Ok(r) => r,
-                Err(e) => Err(format!("工具执行异常: {}", e)),
-            }
+            let tool = async_tool::adapter(spec);
+            tool.run(scope, args).await
         }
         None => Err(format!("未知工具: {}", name)),
     };

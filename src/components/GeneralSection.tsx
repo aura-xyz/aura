@@ -1,9 +1,14 @@
 /**
  * 通用设置区块（v0.8.0，从 SettingsPage 拆分）。
  *
- * 包含路径白名单与全局规则。状态通过 props 传入，供 SettingsShell 调用。
+ * 包含系统集成、路径白名单与全局规则。状态通过 props 传入，供 SettingsShell 调用。
  */
+import { useEffect, useState } from "react";
 import AllowlistSection from "./AllowlistSection";
+import SystemSettingsSection from "./SystemSettingsSection";
+import { resetFrecency } from "../lib/frecency";
+import { notify } from "../lib/notices";
+import { getSkillMirror, setSkillMirror } from "../lib/api";
 
 interface Props {
   rules: string;
@@ -39,9 +44,34 @@ export default function GeneralSection({
     <section className="rounded-card border border-line p-6">
       <h2 className="eyebrow">通用</h2>
 
-      <div className="mt-4 border-b border-line pb-5">
+      <div className="mt-4">
+        <SystemSettingsSection />
+      </div>
+
+      <div className="mt-5 border-b border-line pb-5">
         <AllowlistSection />
       </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3 border-b border-line pb-5">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">最近使用</p>
+          <p className="mt-0.5 text-xs text-subtle">
+            命令面板与 /skill 列表按最近使用排序，最近用过的排前面
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            resetFrecency();
+            notify("ok", "已清空最近使用");
+          }}
+          className="shrink-0 rounded-full border border-line px-3 py-1 text-xs text-subtle transition-colors hover:border-brand hover:text-brand"
+        >
+          重置
+        </button>
+      </div>
+
+      <SkillMirrorSetting />
 
       <label htmlFor="global-rules" className="mt-5 block text-sm font-medium">
         全局规则
@@ -72,5 +102,61 @@ export default function GeneralSection({
         </button>
       </div>
     </section>
+  );
+}
+
+/**
+ * 自定义技能源镜像。
+ *
+ * 只作用于「用户自己添加的 GitHub skill 源」的下载：官方源自带 7 家内置镜像，
+ * 无需配置；这里留空即直连。镜像只服务 Aura 后端的请求，不接管用户本人的浏览。
+ */
+function SkillMirrorSetting() {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getSkillMirror()
+      .then((v) => setValue(v))
+      .catch(() => {});
+  }, []);
+
+  async function save() {
+    const prefix = value.trim();
+    setSaving(true);
+    try {
+      await setSkillMirror(prefix);
+      notify("ok", prefix ? "已保存自定义镜像" : "已恢复直连");
+    } catch (e) {
+      notify("error", `保存失败：${String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 border-b border-line pb-5">
+      <p className="text-sm font-medium">自定义技能源镜像</p>
+      <p className="mt-0.5 text-xs leading-relaxed text-subtle">
+        仅加速「自定义 skill 源」的下载（例如 https://ghfast.top/）。官方源已内置多家镜像，无需填写；留空即直连。镜像只用于 Aura 自身的请求，不影响你浏览器的访问。
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="https://your-mirror.example/"
+          spellCheck={false}
+          className="min-w-0 flex-1 rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
+        />
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="shrink-0 rounded-full border border-line px-3 py-1.5 text-xs text-subtle transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+        >
+          {saving ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </div>
   );
 }

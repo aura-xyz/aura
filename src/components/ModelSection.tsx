@@ -17,13 +17,15 @@ import {
 } from "lucide-react";
 import { useStore } from "../store";
 import {
+  clearProviderKey,
   fetchRemoteModels,
+  getKeystoreStatus,
   getProviderStatuses,
   getProviders,
   pullOllamaModel,
-  refreshProviderModels,
-  setPinnedModels,
+  saveProviderCatalog,
   setProviders,
+  type KeyStoreStatus,
   type ProviderConfig,
   type ProviderKind,
   type ProviderStatus,
@@ -62,6 +64,8 @@ export default function ModelSection() {
   })();
 
   const [providers, setProvidersState] = useState<ProviderConfig[]>([]);
+  /** 密钥存储后端状态（v0.8.1 C47）：降级档要显式告知用户。 */
+  const [keyStore, setKeyStore] = useState<KeyStoreStatus | null>(null);
   const [provSaved, setProvSaved] = useState(false);
   const [provError, setProvError] = useState("");
   const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
@@ -143,6 +147,23 @@ export default function ModelSection() {
       (x) => x.baseUrl && x.baseUrl === p.base_url.replace(/\/+$/, ""),
     );
     return hit?.id ?? CUSTOM_PRESET_ID;
+  }
+
+  // 密钥存在哪、强度如何：面板一进来就说清楚，别让用户以为进了系统密钥环
+  useEffect(() => {
+    void getKeystoreStatus()
+      .then(setKeyStore)
+      .catch(() => {});
+  }, []);
+
+  /** 清除某个供应商的 Key（v0.8.1 C46/C47）。 */
+  async function clearKey(index: number, providerId: string) {
+    try {
+      await clearProviderKey(providerId);
+      updateProvider(index, { api_key: "" });
+    } catch (e) {
+      setProvError(`清除密钥失败：${String(e)}`);
+    }
   }
 
   function updateProvider(index: number, patch: Partial<ProviderConfig>) {
@@ -376,11 +397,11 @@ export default function ModelSection() {
     setCatalogBusy((b) => ({ ...b, [p.id]: true }));
     setCatalogError((e) => ({ ...e, [p.id]: "" }));
     try {
-      if ((catalogList[p.id] ?? []).length > 0) {
-        await refreshProviderModels(p.id);
-      }
+      // 先保存供应商草稿（改过 Key / 地址才生效），再用同一份目录列表
+      // 原子完成「合并远端模型 + 写收藏」。后端 set_pinned 只给已存在条目
+      // 打标记，不新增模型；少了合并这一步，目录里新勾选的模型永远收藏不上。
       await persistProviders();
-      await setPinnedModels(p.id, keys);
+      await saveProviderCatalog(p.id, catalogList[p.id] ?? [], keys);
       await refreshModels();
       setCatalogSaved((s) => ({ ...s, [p.id]: true }));
       window.setTimeout(
@@ -624,9 +645,28 @@ export default function ModelSection() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-xs text-subtle">
-                    API Key
-                  </label>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="block text-xs text-subtle">
+                      API Key
+                    </label>
+                    {keyStore && (
+                      <span
+                        className={`text-[10px] ${
+                          keyStore.degraded ? "text-warning" : "text-subtle"
+                        }`}
+                        title={keyStore.strength}
+                      >
+                        {keyStore.degraded ? "⚠ " : ""}
+                        {keyStore.name}
+                      </span>
+                    )}
+                  </div>
+                  {keyStore?.degraded && (
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-warning">
+                      当前使用应用内文件加密：主密钥与密文同盘，
+                      保护弱于系统密钥环。建议安装并启用系统密钥服务。
+                    </p>
+                  )}
                   <div className="relative mt-1">
                     <input
                       type={showKey ? "text" : "password"}
@@ -639,8 +679,19 @@ export default function ModelSection() {
                           ? "本地服务通常无需密钥"
                           : "sk-…"
                       }
-                      className="w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 pr-8 font-mono text-xs outline-none transition-colors placeholder:text-subtle focus:border-brand"
+                      className="w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 pr-14 font-mono text-xs outline-none transition-colors placeholder:text-subtle focus:border-brand"
                     />
+                    {p.api_key && (
+                      <button
+                        type="button"
+                        onClick={() => void clearKey(i, p.id)}
+                        aria-label="清除密钥"
+                        title="清除该供应商的 API Key"
+                        className="absolute right-7 top-1/2 -translate-y-1/2 text-subtle transition-colors hover:text-danger"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() =>

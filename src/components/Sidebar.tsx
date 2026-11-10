@@ -1,11 +1,17 @@
 import {
   ChevronRight,
   PanelLeft,
+  Plus,
   Settings,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import { workspaceInitial, workspaceTint } from "../lib/workspaceBadge";
+import { groupSessionsByTime, relativeTime } from "../lib/history";
+import { useShowSessionTime } from "../hooks/useShowSessionTime";
+import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
 
@@ -61,6 +67,7 @@ export default function Sidebar({
     sessions,
     activeId,
     switchWorkspace,
+    newSession,
     openSession,
     deleteSession,
     renamingId,
@@ -68,7 +75,16 @@ export default function Sidebar({
     renameSession,
   } = useStore();
 
+  // 设置页可关闭的会话行时间戳（默认开启）。关闭只影响显示，不影响排序。
+  const showSessionTime = useShowSessionTime();
+
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // 删除是唯一不可撤销的动作，误触一下整个对话就没了（实测反馈）。
+  // 点删除只记下目标，真正调 deleteSession 必须过二次确认。
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [innerCollapsed, setInnerCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
@@ -115,14 +131,12 @@ function toggleExpand(w: string) {
   const labelOff = "max-w-0 opacity-0";
   const labelOn = "max-w-40 opacity-100";
 
+  // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
+  // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
+  // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
+  // 两态都保留 1px 边框（展开态透明）避免 border-width 跳变。
   return (
-    // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
-    // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
-    // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
-    // 两态都保留 1px 边框（展开态透明），避免 border-width 跳变。
-    //
-    // 高度：self-start + min-height 控制，展开态撑满、折叠态收成内容高；
-    // min-height 在「确定值 ↔ 0」之间可插值，配合宽度一起做 200ms 过渡。
+    <>
     <aside
       className={`aura-sidebar flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height,max-height,margin,background-color,border-color,border-radius,box-shadow] duration-200 ease-in-out ${
         collapsed
@@ -193,17 +207,26 @@ function toggleExpand(w: string) {
               aria-current={active ? "page" : undefined}
               title={isNew ? "新建对话 · Ctrl + N" : collapsed ? block.label : undefined}
               className={`group flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
-                collapsed ? "justify-center gap-0 px-0" : "gap-2.5 px-2"
+                collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
               } ${
                 isNew && !collapsed
                   ? "mb-2 border border-line bg-surface shadow-sm hover:border-brand"
                   : ""
               } ${
                 active
-                  ? "bg-bubble font-medium text-foreground"
+                  ? "bg-bubble-user font-medium text-foreground"
                   : "text-subtle hover:bg-bubble hover:text-foreground"
               }`}
             >
+              {/* 竖线常驻占位，只切换颜色：否则激活瞬间图标会横移 2px */}
+              {!collapsed && (
+                <span
+                  aria-hidden="true"
+                  className={`ml-1 h-4 w-0.5 shrink-0 rounded-full ${
+                    active ? "bg-brand" : "bg-transparent"
+                  }`}
+                />
+              )}
               <block.icon size={15} className="shrink-0" />
               <span className={`${label} ${collapsed ? labelOff : labelOn}`}>
                 {block.label}
@@ -234,25 +257,41 @@ function toggleExpand(w: string) {
       >
         {collapsed ? (
           <div className="px-2 py-1">
-            {workspaces.map((w) => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => {
-                  switchWorkspace(w);
-                  onNavigate?.();
-                }}
-                title={w}
-                aria-label={w}
-                className="mx-auto flex w-full items-center justify-center rounded-tag py-2 transition-colors hover:bg-bubble"
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    w === workspace ? "bg-brand" : "bg-line"
-                  }`}
-                />
-              </button>
-            ))}
+            {workspaces.map((w) => {
+              // 只数真正进侧栏的会话（草稿不进列表，也不该进角标）
+              const count = sessions.filter(
+                (x) => x.workspace === w && x.messages.length > 0,
+              ).length;
+              const isCurrent = w === workspace;
+              return (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => {
+                    switchWorkspace(w);
+                    onNavigate?.();
+                  }}
+                  title={count > 0 ? `${w} · ${count} 个对话` : w}
+                  aria-label={w}
+                  className="mx-auto flex w-full items-center justify-center rounded-tag py-1.5 transition-colors hover:bg-bubble"
+                >
+                  {/* 首字方块替代圆点：56px 宽里只有颜色的话三个工作区分不开。
+                      当前工作区用品牌色描边，不抢底色（底色已经表示「是哪一个」）。 */}
+                  <span
+                    className={`relative flex h-4 w-4 items-center justify-center rounded-[5px] text-[9px] font-semibold leading-none ${workspaceTint(
+                      basename(w),
+                    )} ${isCurrent ? "ring-1 ring-brand" : ""}`}
+                  >
+                    {workspaceInitial(basename(w))}
+                    {count > 0 && (
+                      <span className="absolute -bottom-1.5 -right-1.5 rounded-full bg-surface px-1 text-[9px] leading-[12px] text-subtle ring-1 ring-line">
+                        {count}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="px-3">
@@ -299,69 +338,107 @@ const isOpen = expanded.has(w);
 
                   {isOpen && (
                     <ul className="ml-5 mt-0.5 space-y-0.5">
-                      {wsSessions.map((s) => (
-                        <li key={s.id}>
-                          <div
-                            data-ctx-session={s.id}
-                            className={`group flex items-center rounded-tag transition-colors ${
-                              // 选中态用品牌蓝浅底 + 左侧品牌色竖线，与页签激活线同源
-                              s.id === activeId
-                                ? "bg-bubble-user font-medium text-foreground"
-                                : "hover:bg-bubble"
-                            }`}
-                          >
-                            {s.id === activeId && (
-                              <span
-                                aria-hidden="true"
-                                className="ml-1 h-4 w-0.5 shrink-0 rounded-full bg-brand"
-                              />
-                            )}
-                            {renamingId === s.id ? (
-                              <input
-                                autoFocus
-                                defaultValue={s.title}
-                                onFocus={(e) => e.target.select()}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    renameSession(s.id, e.currentTarget.value);
-                                    cancelRename();
-                                  } else if (e.key === "Escape") {
-                                    cancelRename();
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  renameSession(s.id, e.currentTarget.value);
-                                  cancelRename();
-                                }}
-                                className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  openSession(s.id);
-                                  onNavigate?.();
-                                }}
-                                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
-                              >
-                                {s.title}
-                              </button>
-                            )}
-                            {renamingId !== s.id && (
-                              <button
-                                type="button"
-                                onClick={() => deleteSession(s.id)}
-                                aria-label="删除对话"
-                                className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
-                          </div>
-                        </li>
-                      ))}
+                      {/* C52：工作区内再按「今天 / 昨天 / 7 天内 / 更早」分段，
+                          节头用 11px eyebrow；空节不渲染，避免一堆空白分组。 */}
+                      {groupSessionsByTime(wsSessions).map((bucket) =>
+                        bucket.sessions.length === 0 ? null : (
+                          <Fragment key={bucket.key}>
+                            <li className="px-2 pb-0.5 pt-1.5 text-[11px] font-medium tracking-[0.06em] text-subtle">
+                              {bucket.label}
+                            </li>
+                            {bucket.sessions.map((s) => (
+                              <li key={s.id}>
+                                <div
+                                  data-ctx-session={s.id}
+                                  className={`group flex items-center rounded-tag transition-colors ${
+                                    // 选中态用品牌蓝浅底 + 左侧品牌色竖线，与页签激活线同源
+                                    s.id === activeId
+                                      ? "bg-bubble-user font-medium text-foreground"
+                                      : "hover:bg-bubble"
+                                  }`}
+                                >
+                                  {s.id === activeId && (
+                                    <span
+                                      aria-hidden="true"
+                                      className="ml-1 h-4 w-0.5 shrink-0 rounded-full bg-brand"
+                                    />
+                                  )}
+                                  {renamingId === s.id ? (
+                                    <input
+                                      autoFocus
+                                      defaultValue={s.title}
+                                      onFocus={(e) => e.target.select()}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          renameSession(s.id, e.currentTarget.value);
+                                          cancelRename();
+                                        } else if (e.key === "Escape") {
+                                          cancelRename();
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        renameSession(s.id, e.currentTarget.value);
+                                        cancelRename();
+                                      }}
+                                      className="min-w-0 flex-1 rounded-lg border border-brand bg-surface px-2 py-1.5 text-sm text-foreground outline-none"
+                                    />
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        openSession(s.id);
+                                        onNavigate?.();
+                                      }}
+                                      className="min-w-0 flex-1 px-2 py-1 text-left"
+                                    >
+                                      <div className="truncate text-sm">{s.title}</div>
+                                      {/* A1 第二段：会话行第二行 11px 相对时间（C52 补齐）。
+                                          设置页可关闭（小屏 / 多对话时省行高）。 */}
+                                      {showSessionTime &&
+                                        relativeTime(s.updated_at * 1000) && (
+                                          <div className="truncate text-[11px] text-subtle">
+                                            {relativeTime(s.updated_at * 1000)}
+                                          </div>
+                                        )}
+                                    </button>
+                                  )}
+                                  {renamingId !== s.id && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPendingDelete({ id: s.id, title: s.title })
+                                      }
+                                      aria-label={`删除对话：${s.title}`}
+                                      className="mr-1 rounded-tag p-1 text-subtle opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  )}
+                                </div>
+                              </li>
+                            ))}
+                          </Fragment>
+                        ),
+                      )}
                       {wsSessions.length === 0 && (
-                        <li className="px-2 py-1.5 text-xs text-subtle">暂无对话</li>
+                        <li className="px-2 py-1.5">
+                          <p className="text-xs text-subtle">暂无对话</p>
+                          {/* 只在当前工作区给出口：新会话落在当前工作区，
+                              在别的分组里点会「凭空跑到别处去」。 */}
+                          {isCurrent && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void newSession();
+                                onNavigate?.();
+                              }}
+                              className="mt-1 flex items-center gap-1 text-xs text-brand hover:underline"
+                            >
+                              <Plus size={11} aria-hidden />
+                              新建对话
+                            </button>
+                          )}
+                        </li>
                       )}
                     </ul>
                   )}
@@ -383,17 +460,44 @@ const isOpen = expanded.has(w);
           onClick={onOpenSettings}
           aria-current={view === "settings" ? "page" : undefined}
           className={`flex w-full items-center rounded-tag py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
-            collapsed ? "justify-center gap-0 px-0" : "gap-2 px-2"
+            collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
           } ${
             view === "settings"
-              ? "bg-bubble font-medium text-foreground"
+              ? "bg-bubble-user font-medium text-foreground"
               : "text-subtle"
           }`}
         >
+          {!collapsed && (
+            <span
+              aria-hidden="true"
+              className={`ml-1 h-4 w-0.5 shrink-0 rounded-full ${
+                view === "settings" ? "bg-brand" : "bg-transparent"
+              }`}
+            />
+          )}
           <Settings size={14} className="shrink-0" />
           <span className={`${label} ${collapsed ? labelOff : labelOn}`}>设置</span>
         </button>
       </footer>
     </aside>
+    {pendingDelete &&
+      createPortal(
+        <ConfirmDialog
+          title="删除对话？"
+          confirmText="删除"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            deleteSession(pendingDelete.id);
+            setPendingDelete(null);
+          }}
+        >
+          <p className="text-sm leading-relaxed text-subtle">
+            将永久删除「{pendingDelete.title}」及其全部消息记录，此操作不可撤销。
+          </p>
+        </ConfirmDialog>,
+        document.body,
+      )}
+    </>
   );
 }

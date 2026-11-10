@@ -384,6 +384,43 @@ mod tests {
         assert_eq!(cfg.selected, cfg.models[0].key());
     }
 
+    /// 目录里新勾选的模型必须先 merge 才能被收藏：set_pinned 只给
+    /// cfg.models 里**已存在**的条目打标记，不新增模型。
+    /// v0.8.0 实测「保存收藏按钮无效」正是漏掉了这一步。
+    #[test]
+    fn merged_remote_model_can_be_pinned_in_one_pass() {
+        let mut cfg = default_config();
+        let provider = cfg.providers[0].id.clone();
+        let remote = vec![RemoteModel {
+            id: "brand-new-model".to_string(),
+            label: "新模型".to_string(),
+            context_limit: 8192,
+        }];
+        let key = model_key(&provider, "brand-new-model");
+
+        // 只调 set_pinned：新模型不在 cfg.models 里，收藏数为 0
+        assert_eq!(set_pinned(&mut cfg, &provider, &[key.clone()]), 0);
+
+        // 先合并再收藏：新模型被写入且成功打上 pinned
+        assert_eq!(
+            merge_remote_models(&mut cfg, &provider, remote.clone(), &[], false),
+            1
+        );
+        assert_eq!(set_pinned(&mut cfg, &provider, &[key.clone()]), 1);
+        let added = cfg
+            .models
+            .iter()
+            .find(|m| m.key() == key)
+            .expect("远端模型应已合并进配置");
+        assert!(added.pinned, "目录里勾选的新模型必须能被收藏");
+
+        // 幂等：重复合并不会新增条目
+        assert_eq!(
+            merge_remote_models(&mut cfg, &provider, remote, &[], false),
+            0
+        );
+    }
+
     #[test]
     fn serde_roundtrip_preserves_structure() {
         let cfg = default_config();

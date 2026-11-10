@@ -6,6 +6,7 @@ import {
   SIDEBAR_COLLAPSED,
   clampWidth,
   computeColumns,
+  rightbarDefaultWidth,
 } from "./columns";
 
 describe("三栏几何", () => {
@@ -43,5 +44,15 @@ describe("三栏几何", () => {
     expect(clampWidth(10, 220, 420)).toBe(220);
     expect(clampWidth(999, 220, 420)).toBe(420);
     expect(clampWidth(300, 220, 420)).toBe(300);
+  });
+
+  it("右栏默认宽度随视口放大，但有上下限", () => {
+    // 1280 屏给 410 左右，1920 屏给 614——都明显大于旧的固定 320
+    expect(rightbarDefaultWidth(1280)).toBe(410);
+    expect(rightbarDefaultWidth(1920)).toBe(614);
+    // 下限：小屏也留出可用宽度
+    expect(rightbarDefaultWidth(900)).toBe(360);
+    // 上限：超宽屏不许把对话区挤没
+    expect(rightbarDefaultWidth(3440)).toBe(640);
   });
 });

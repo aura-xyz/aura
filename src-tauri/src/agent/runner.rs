@@ -224,6 +224,11 @@ pub struct TurnContext<'a> {
     /// 与 `persist_todos` 同一思路：库里查好传进来，agent 层不碰数据库。
     /// 命中者既不进 L1 索引，也不会被登记为激活技能。
     pub disabled_skills: &'a [String],
+    /// 命令审批管理器（v0.8.0 C40）。`None` 表示不启用审批（测试与
+    /// 无界面调用方的兼容路径）——此时按旧行为：命中即拒。
+    pub approvals: Option<&'a crate::agent::approval::ApprovalManager>,
+    /// 本轮生效的审批策略。默认 dangerous，由会话或全局设置决定。
+    pub approval_policy: crate::agent::approval::Policy,
 }
 
 enum Next {
@@ -273,6 +278,146 @@ fn record_timeline(
 
 fn emit_text(app: &AppHandle, session_id: &str, event: &str, text: &str) {
     let _ = app.emit(event, json!({ "session_id": session_id, "text": text }));
+}
+
+/// 命令首行：审批卡的空间有限，长命令只显示开头，全文另给字段。
+fn first_line(text: &str) -> String {
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.chars().count() > 120 {
+        format!("{}…", line.chars().take(120).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+/// 命令审批闸门（v0.8.0 C40）。
+///
+/// 返回 `Some(回填文案)` 表示**不许执行**，`None` 表示放行。
+///
+/// 只有 `run_script` 需要审批：其他工具的作用范围已经被 `ensure_allowed`
+/// 锁在授权目录里，而命令能做的事没有边界。
+async fn approval_gate(
+    ctx: &TurnContext<'_>,
+    name: &str,
+    args: &Value,
+) -> Option<String> {
+    use crate::agent::approval::{decide, Gate, APPROVAL_TIMEOUT, EV_APPROVAL};
+
+    // 需要审批的两类工具：内置 `run_script`，以及 rc.3 起的 MCP 工具。
+    // MCP 工具一律 Exec 且 annotation 不可信，走「最高审批档」：策略放行
+    // 也仍需确认，用户可在本会话内按服务器「记住」。
+    let mcp = crate::tools::registry::mcp_entry(name);
+    let command = if mcp.is_some() {
+        format!("{name} {}", summarize_args(args))
+    } else if name == "run_script" {
+        args.get("command").and_then(|v| v.as_str())?.trim().to_string()
+    } else {
+        return None;
+    };
+    if command.is_empty() {
+        return None;
+    }
+    let mgr = ctx.approvals?;
+
+    // 规则硬拒对两类工具都生效（MCP 参数里出现危险特征同样拦）。
+    let decision = decide(ctx.approval_policy, &command);
+    if let Gate::Reject { reason } = &decision {
+        crate::security::log_simple(
+            crate::security::Kind::BlockedCommand,
+            ctx.session_id,
+            &command,
+            reason,
+            "",
+        );
+        return Some(format!(
+            "操作被安全策略拦截（{reason}）：{command}\n\
+             如确需执行，请调整参数以避开该模式。"
+        ));
+    }
+
+    // 是否需要询问：MCP 工具最高档（记住即免问）；run_script 按策略。
+    let ask = if let Some(entry) = &mcp {
+        let key = format!("mcp_server_{}", entry.server_name);
+        if mgr.is_remembered(ctx.session_id, &key) {
+            None
+        } else {
+            Some((
+                key,
+                "mcp_tool_call".to_string(),
+                "MCP 工具调用需确认".to_string(),
+            ))
+        }
+    } else {
+        match decision {
+            Gate::Ask { key, rule_id, reason } => Some((key, rule_id, reason)),
+            _ => None,
+        }
+    };
+    let Some((key, rule_id, reason)) = ask else {
+        return None;
+    };
+
+    let id = crate::agent::approval::next_request_id();
+    let rx = mgr.register(&id, ctx.session_id);
+    let _ = ctx.app.emit(
+        EV_APPROVAL,
+        json!({
+            "id": id,
+            "session_id": ctx.session_id,
+            "tool": name,
+            "command": &command,
+            "preview": first_line(&command),
+            "rule_id": &rule_id,
+            "reason": &reason,
+            "timeout_ms": APPROVAL_TIMEOUT.as_millis() as u64,
+            "mcp": mcp.is_some(),
+        }),
+    );
+    match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+        Ok(Ok(decision)) if decision.approved => {
+            let kind = if mcp.is_some() {
+                crate::security::Kind::McpCall
+            } else {
+                crate::security::Kind::ApprovalAllowed
+            };
+            crate::security::log_simple(kind, ctx.session_id, &command, &reason, &rule_id);
+            if decision.remember {
+                mgr.remember(ctx.session_id, &key);
+            }
+            None
+        }
+        Ok(Ok(_)) => {
+            let kind = if mcp.is_some() {
+                crate::security::Kind::McpCall
+            } else {
+                crate::security::Kind::ApprovalDenied
+            };
+            crate::security::log_simple(kind, ctx.session_id, &command, "用户拒绝", &rule_id);
+            Some(format!("用户拒绝了该操作，未执行：{command}"))
+        }
+        // 发送端被丢弃：stop_message 兜底决议或会话被清
+        Ok(Err(_)) => Some(format!("审批被取消，操作未执行：{command}")),
+        Err(_) => {
+            // 超时后必须清理登记，否则 pending 表只增不减
+            mgr.forget(&id);
+            Some(format!(
+                "等待用户确认超时（{} 秒），操作未执行：{command}",
+                APPROVAL_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// 把工具参数压成一行摘要（审批卡与安全事件用）。
+fn summarize_args(args: &Value) -> String {
+    let text = serde_json::to_string(args).unwrap_or_default();
+    if text.chars().count() > 200 {
+        let mut s: String = text.chars().take(200).collect();
+        s.push('…');
+        s
+    } else {
+        text
+    }
 }
 
 /// 工具动作事件。`ok` 区分成功与失败；`detail` 携带可折叠的详细输出
@@ -659,6 +804,11 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         // v0.6.0：每轮重扫技能库。目录只有寥寥几个小文件，相对一次 LLM
         // 往返（~2s）开销可忽略；换来的是会话中途新增的技能当轮即可见，
         // 且 L1 索引始终与磁盘一致。
+        // rc.3：按当前会话工作区重建 MCP 动态工具（工作区限定在这里生效），
+        // 随后的 prompt 才会把可见的 MCP 工具注入进去。
+        let ws_for_mcp = ctx.workspace.to_string_lossy().to_string();
+        crate::tools::registry::sync_mcp_tools(Some(ws_for_mcp.as_str())).await;
+
         let skills = skill::without_disabled(
             skill::scan_with_globals(ctx.workspace),
             ctx.disabled_skills,
@@ -983,7 +1133,18 @@ if tool_jsons.is_empty() {
                     let norm = normalize_tool_name(&name);
                     match tool_permitted(ctx.mode, &norm, &active_skills) {
                         Ok(()) => Next::Tool(norm, args),
-                        Err(msg) => Next::Reject(msg),
+                        Err(msg) => {
+                            // 模式闸门的拒绝要留痕：用户切到 Chat 模式后
+                            // 模型仍在试着写文件，这件事界面上看不出来。
+                            crate::security::log_simple(
+                                crate::security::Kind::ModeDenied,
+                                ctx.session_id,
+                                &norm,
+                                &msg,
+                                "mode_gate",
+                            );
+                            Next::Reject(msg)
+                        }
                     }
                 }
                 Err(msg) => Next::Reject(msg),
@@ -1087,6 +1248,36 @@ if tool_jsons.is_empty() {
                         );
                         "Error: 连续调用次数超限，请尝试其他工具或基于现有信息直接回复。"
                             .to_string()
+                    } else if let Some(feedback) =
+                        approval_gate(ctx, &name, &args).await
+                    {
+                        // 未获批准/被策略拒绝：与「工具执行失败」同一条回填
+                        // 通道，模型能读懂，用户也能在时间线里看到。
+                        record_timeline(
+                            ctx,
+                            tl_seq,
+                            rounds as i64,
+                            crate::timeline::EntryKind::Denied,
+                            format!("{tool_label}（未获批准）"),
+                            Some(feedback.clone()),
+                            false,
+                            None,
+                        );
+                        tl_seq += 1;
+                        emit_action_detail(
+                            ctx.app,
+                            ctx.session_id,
+                            &name,
+                            &format!("{}（未获批准）", tool_label),
+                            false,
+                            Some(feedback.clone()),
+                            None,
+                            None,
+                        );
+                        // 计入拒绝计数：模型反复尝试同一条被拒命令时，
+                        // 与「工具名反复出错」共用同一套刹车。
+                        let _ = rejects.record(&name, max_parse_retries);
+                        feedback
                     } else {
                         let tool_started = std::time::Instant::now();
                         let tool_result = tools::execute(

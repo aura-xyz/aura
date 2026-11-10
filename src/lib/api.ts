@@ -6,6 +6,8 @@ export interface SavedSession {
   id: string;
   title: string;
   workspace: string;
+  /** 最近更新时间（Unix 秒）。C51 起后端返回，旧库为 0 */
+  updated_at: number;
   messages: ChatMessage[];
   /** 任务清单。旧版本会话可能没有该字段，按空处理 */
   todos?: Todo[];
@@ -24,12 +26,28 @@ export interface ModelInfo {
   pinned: boolean;
 }
 
+/**
+ * 一条图片附件（v0.8.0，C55 图片粘贴 / 拖放）。
+ *
+ * - `path`：本地文件绝对路径（拖放 / 文件选择器所得），预览走 asset protocol（C54 通道）。
+ * - `url`：剪贴板粘贴的图片没有真实路径，用 blob: 对象 URL 做缩略图与预览。
+ * 二者至多其一存在。`name` 始终有值，用于 chip 与消息流展示。
+ * 后端多模态尚未就绪时，发送端降级为只携带 path 引用；后端就绪后此处无需改动，
+ * 只需在 `send_message` 命令里消费 `images` 即可无缝切换。
+ */
+export interface ImageRef {
+  name: string;
+  path?: string;
+  url?: string;
+}
+
 export function sendMessage(
   sessionId: string,
   message: string,
   mode: string,
+  images?: ImageRef[],
 ): Promise<void> {
-  return invoke("send_message", { sessionId, message, mode });
+  return invoke("send_message", { sessionId, message, mode, images });
 }
 
 /**
@@ -95,6 +113,21 @@ export function setPinnedModels(
   return invoke("set_pinned_models", { provider, keys });
 }
 
+/**
+ * 保存模型目录：把设置页已拉到的远端列表合并进配置并写入收藏。
+ *
+ * 不能只调 setPinnedModels —— 后端只给已有条目打标记，目录里新勾选的
+ * 模型必须先合并。旧链路用 refresh_provider_models 做合并，但它会重新
+ * 联网且依赖已启用的执行器，供应商未就绪就整条失败（实测「收藏不了」）。
+ */
+export function saveProviderCatalog(
+  provider: string,
+  remote: RemoteModel[],
+  keys: string[],
+): Promise<number> {
+  return invoke("save_provider_catalog", { provider, remote, keys });
+}
+
 export function getSelectedModel(): Promise<string> {
   return invoke("get_selected_model");
 }
@@ -105,11 +138,35 @@ export function setSelectedModel(id: string): Promise<void> {
 
 export interface ApiConfig {
   provider: string;
+  /** 掩码后的 Key（`sk-***8f2a`），不是真 Key */
   api_key: string;
+  /** 是否已配置 Key */
+  has_key: boolean;
 }
 
 export function getApiConfig(): Promise<ApiConfig> {
   return invoke("get_api_config");
+}
+
+/** 清除某个供应商的 API Key（v0.8.1 C46）。 */
+export function clearProviderKey(provider: string): Promise<void> {
+  return invoke("clear_provider_key", { provider });
+}
+
+/** 密钥存储后端状态（v0.8.1 C45/C47）。 */
+export interface KeyStoreStatus {
+  /** 后端名：Windows DPAPI / 系统密钥环（SecretService）/ 应用内文件加密 */
+  name: string;
+  /** 强度说明 */
+  strength: string;
+  /** 是否可用 */
+  available: boolean;
+  /** 是否为降级档（弱于系统密钥环） */
+  degraded: boolean;
+}
+
+export function getKeystoreStatus(): Promise<KeyStoreStatus> {
+  return invoke("get_keystore_status");
 }
 
 export function setApiConfig(provider: string, apiKey: string): Promise<void> {
@@ -249,6 +306,12 @@ export interface DirEntry {
   size: number;
   /** 修改时间（Unix 毫秒，0 表示读不到） */
   modified_ms: number;
+  /**
+   * 绝对路径（不含 `\\?\` 前缀，正斜杠）。
+   * 图片预览走 asset protocol 时前端据此拼 `asset://localhost/<此路径>`；
+   * 旧后端可能不含此字段，调用方需做空值兜底。
+   */
+  absolute_path?: string;
 }
 
 /**
@@ -290,6 +353,32 @@ export function listOpenApps(): Promise<OpenApp[]> {
 /** 在指定应用里打开当前会话的工作区；目录由后端从会话取，不由前端传。 */
 export function openInApp(appId: string, sessionId: string): Promise<void> {
   return invoke("open_in_app", { appId, sessionId });
+}
+
+/** 系统集成设置：运行时防休眠、开机自启。 */
+export interface SystemSettings {
+  prevent_sleep: boolean;
+  autostart: boolean;
+  /** 当前平台是否支持防休眠（Linux 无进程级电源抑制原语） */
+  prevent_sleep_supported: boolean;
+}
+
+export function getSystemSettings(): Promise<SystemSettings> {
+  return invoke("get_system_settings");
+}
+
+/** 返回系统**实际**状态，前端应直接用它覆盖显示，避免「显示已开、其实没生效」。 */
+export function setSystemSettings(
+  preventSleep: boolean,
+  autostart: boolean,
+): Promise<SystemSettings> {
+  // Tauri v2 命令参数按 camelCase 匹配（与全库其它 invoke 一致，如 sessionId）。
+  // 曾误用 snake_case（prevent_sleep），Tauri 找不到 preventSleep 会直接报
+  // 「missing required key preventSleep」——切换开关时必现。
+  return invoke("set_system_settings", {
+    preventSleep,
+    autostart,
+  });
 }
 
 /** `/goal` 长期目标：按会话存 settings 表，每轮注入 system prompt。 */
@@ -476,6 +565,15 @@ export function addSkillSource(url: string): Promise<SkillSourceView[]> {
 
 export function removeSkillSource(url: string): Promise<SkillSourceView[]> {
   return invoke("remove_skill_source", { url });
+}
+
+/** 自定义技能源镜像前缀（空串 = 直连；仅作用于自定义源下载）。 */
+export function getSkillMirror(): Promise<string> {
+  return invoke("get_skill_mirror");
+}
+
+export function setSkillMirror(prefix: string): Promise<void> {
+  return invoke("set_skill_mirror", { prefix });
 }
 
 // ── 操作时间线（v0.6.2）─────────────────────────────────────────
@@ -704,4 +802,64 @@ export function checkUpdate(): Promise<UpdateInfoView | null> {
  */
 export function downloadUpdate(): Promise<void> {
   return invoke("download_update");
+}
+
+// ── 命令审批（v0.8.0 C40/C41）────────────────────────────────
+
+export type ApprovalPolicyId = "strict" | "dangerous" | "auto";
+
+export interface ApprovalPolicyView {
+  policy: ApprovalPolicyId;
+  /** 中文名，直接显示，避免前端再维护一份文案 */
+  label: string;
+  /** `session` = 本会话覆盖，`global` = 继承全局默认 */
+  scope: "session" | "global";
+}
+
+/**
+ * 决议一次审批。返回 `false` 表示后端已无此请求（超时或已决议）。
+ *
+ * `remember` 只在允许时有意义：记住拒绝等于把这条规则永久拉黑，
+ * 而用户往往只是这次不想跑。
+ */
+export function resolveApproval(
+  id: string,
+  approved: boolean,
+  remember = false,
+): Promise<boolean> {
+  return invoke("resolve_approval", { id, approved, remember });
+}
+
+export function getApprovalPolicy(sessionId: string): Promise<ApprovalPolicyView> {
+  return invoke("get_approval_policy", { sessionId });
+}
+
+/** `sessionId` 省略时写全局默认。 */
+export function setApprovalPolicy(
+  policy: ApprovalPolicyId,
+  sessionId?: string,
+): Promise<void> {
+  return invoke("set_approval_policy", { policy, sessionId: sessionId ?? null });
+}
+
+// ── 安全事件（v0.8.0 C42/C43）────────────────────────────────
+
+export interface SecurityEvent {
+  id: number;
+  ts_ms: number;
+  session_id: string;
+  /** blocked_command / path_denied / mode_denied / approval_denied / approval_allowed / risky_install / mcp_call */
+  kind: string;
+  subject: string;
+  reason: string;
+  rule_id: string;
+}
+
+export function listSecurityEvents(limit = 100): Promise<SecurityEvent[]> {
+  return invoke("security_list_events", { limit });
+}
+
+/** 导出 CSV，返回写入的事件条数。 */
+export function securityExportEvents(path: string): Promise<number> {
+  return invoke("security_export_events", { path });
 }

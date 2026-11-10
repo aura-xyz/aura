@@ -36,6 +36,7 @@ use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 use crate::commands::AppState;
+use crate::mirrors::MIRRORS;
 
 /// 探测时取的字节数。只取头一段就够判断快慢，不必下整个安装包。
 pub const PROBE_BYTES: u64 = 256 * 1024;
@@ -49,28 +50,7 @@ pub const MIN_SPEED_BPS: f64 = 100.0 * 1024.0;
 /// 下载整体超时上限。正常源 2 分钟内下完，这个只是防挂死。
 pub const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
-/// 镜像前缀表。
-///
-/// 镜像都是第三方服务，可能随时下线或变慢——所以它们只是**候选**，
-/// 选源逻辑会实测速度，并且失败会自动回退。官方直连永远在候选里。
-///
-/// v0.7.2-rc.1 从 2 个扩到 7 个：单靠 ghfast/gh-proxy.com 两家，任一抖动
-/// 就只剩官方的 0.05 MB/s。多留几个同族镜像，两级探测会挑当前最快的那个。
-///
-/// 注：`gh-proxy.org` 与 `gh-proxy.com` 是**不同服务**，不是同一个域名的新旧写法，
-/// 两家都保留。
-const MIRRORS: &[(&str, &str)] = &[
-    // 2026-11-01 实测 v4 秒下 latest.json 与安装包
-    ("gh-proxy-v4", "https://v4.gh-proxy.org/"),
-    ("gh-proxy-cdn", "https://cdn.gh-proxy.org/"),
-    ("gh-proxy", "https://gh-proxy.org/"),
-    ("gh-proxy-v6", "https://v6.gh-proxy.org/"),
-    ("gh-proxy-axis", "https://axisnow.gh-proxy.org/"),
-    // 2026-10-25 实测 0.37 MB/s
-    ("ghfast", "https://ghfast.top/"),
-    // 2026-10-25 实测 0.12 MB/s
-    ("gh-proxy.com", "https://gh-proxy.com/"),
-];
+/// 镜像前缀表已收敛到 [`crate::mirrors`]，更新与技能市场共用一份。
 
 /// 一个候选下载源。
 #[derive(Debug, Clone, Serialize)]

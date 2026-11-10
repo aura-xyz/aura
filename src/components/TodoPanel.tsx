@@ -79,6 +79,7 @@ export default function TodoPanel({
 
   const ordered = useMemo(() => displayOrder(todos), [todos]);
   const done = doneCount(todos);
+  const percent = todos.length === 0 ? 0 : Math.round((done / todos.length) * 100);
 
   if (todos.length === 0) return null;
 
@@ -99,8 +100,24 @@ export default function TodoPanel({
           <ChevronDown size={13} className="text-subtle" aria-hidden />
         )}
         <span className="text-xs font-medium">任务清单</span>
-        <span className="ml-auto text-[11px] text-subtle tabular-nums">
-          {done}/{todos.length}
+        {/* 60px 微进度条：数字之外给一眼可读的进度，不占额外一行 */}
+        <span className="ml-auto flex items-center gap-1.5">
+          <span
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="任务进度"
+            className="h-1 w-[60px] overflow-hidden rounded-full bg-bubble"
+          >
+            <span
+              className="block h-full rounded-full bg-brand transition-[width] duration-300"
+              style={{ width: `${percent}%` }}
+            />
+          </span>
+          <span className="text-[11px] text-subtle tabular-nums">
+            {done}/{todos.length}
+          </span>
         </span>
       </button>
 
@@ -117,6 +134,13 @@ export default function TodoPanel({
                     : "text-subtle",
                 ].join(" ")}
               >
+                {/* 进行中的项左侧加 2px 品牌竖线，与侧栏会话选中线同语言 */}
+                {t.status === "in_progress" && (
+                  <span
+                    aria-hidden="true"
+                    className="mt-1 h-3.5 w-0.5 shrink-0 rounded-full bg-brand"
+                  />
+                )}
                 <button
                   type="button"
                   aria-label={`步骤状态：${statusLabel(t.status)}`}

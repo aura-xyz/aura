@@ -5,13 +5,15 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
-import { ArrowUp, Plus, Square } from "lucide-react";
+import { ArrowUp, Pencil, Plus, Square, X } from "lucide-react";
 import type { LexicalEditor } from "lexical";
-import type { ModelInfo, SkillView } from "../lib/api";
+import type { ImageRef, ModelInfo, SkillView } from "../lib/api";
 import type { Mode } from "../lib/mode";
-import { estimateTokens } from "../lib/tokens";
+import { assetUrl } from "../lib/assetUrl";
+import { fileKindOf } from "../lib/fileIcon";
 import { loadInputDraft, saveInputDraft } from "../lib/draft";
 import { fileItems, findTrigger, type MentionItem, type MentionTrigger } from "../lib/mentions";
 import {
@@ -30,12 +32,14 @@ import {
   exportCommandItems,
   modelCommandItems,
   modeCommandItems,
-  nextMode,
   rootCommandItems,
   skillCommandItems,
   type CommandItem,
 } from "../lib/commandItems";
 import { downloadSessionZip } from "../lib/exportSession";
+import { CONTENT_WIDTH } from "../lib/layout";
+import { loadFrecency, rankByFrecency, recordUse } from "../lib/frecency";
+import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
 import MarkdownEditor, {
   insertAtCaret,
@@ -44,17 +48,19 @@ import MarkdownEditor, {
   type EditorSnapshot,
 } from "./MarkdownEditor";
 import CommandMenu from "./CommandMenu";
+import AlertBar from "./AlertBar";
 import GoalBar from "./GoalBar";
 import GoalPanel from "./GoalPanel";
 import MentionMenu from "./MentionMenu";
 import ModeTabs from "./ModeTabs";
 import ModelSelect from "./ModelSelect";
 import { StatsPills } from "./StatsPills";
+import { ContextWaterBar } from "./ContextWaterBar";
 import { TurnUsagePanel } from "./TurnUsagePanel";
 import WorkspaceSelect from "./WorkspaceSelect";
 
 interface Props {
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: ImageRef[]) => void;
   onStop: () => void;
   busy: boolean;
   models: ModelInfo[];
@@ -86,9 +92,9 @@ interface Props {
   onCancelEdit?: () => void;
   /**
    * 提交入口。普通发送与「编辑后重发」由 store 内部区分，
-   * 输入框只调这一个。
+   * 输入框只调这一个。images 为图片附件（C55），后端多模态就绪前降级携带。
    */
-  onSubmit?: (text: string) => void;
+  onSubmit?: (text: string, images?: ImageRef[]) => void;
   /**
    * 布局变体：`bottom`（默认）贴在对话区底部 / `inline` 嵌在开始界面里。
    */
@@ -102,6 +108,15 @@ interface Props {
 }
 
 type CommandView = CommandId | "root";
+
+/** 输入框本地的图片附件：在 ImageRef 基础上加一个稳定 id 方便增删。 */
+type Attachment = ImageRef & { id: string };
+
+/** 单条、且为图片扩展名的路径（拖放单张图片时 inputInsert 会是这种形态）。 */
+function isSingleImagePath(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  return fileKindOf(text) === "image";
+}
 
 interface CommandState {
   view: CommandView;
@@ -126,7 +141,12 @@ const CMD_TITLES: Record<CommandView, string> = {
 const CMD_HINT = "↑↓ 选择 · Enter 确认 · Esc 关闭 · 可直接点击";
 
 /** 文本节点内容 + 光标，供触发判定；textarea 的 line 就是全文。 */
-const EMPTY_SNAPSHOT: EditorSnapshot = { line: "", caret: 0, markdown: "" };
+const EMPTY_SNAPSHOT: EditorSnapshot = {
+  line: "",
+  caret: 0,
+  markdown: "",
+  indentable: false,
+};
 
 /**
  * 输入框消费一次按键：除了阻止默认行为，还要阻止继续冒泡到
@@ -170,6 +190,9 @@ export default function InputArea({
   /** Esc 关掉的那一版触发文本：文本没变就不要因光标变动重新弹出来。 */
   const dismissedRef = useRef<string | null>(null);
 
+  // ── 图片附件（C55）：粘贴 / 拖放产生的图片，发送前以 chip 展示 ──────
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
   const liveSetting = useMarkdownLive();
   const markdownLive = markdownLiveProp ?? liveSetting;
 
@@ -190,7 +213,6 @@ export default function InputArea({
   const [skills, setSkills] = useState<SkillView[]>([]);
   const [goal, setGoal] = useState("");
   const goalRef = useRef("");
-  const [notice, setNotice] = useState<string | null>(null);
 
   // 切会话：装入该会话的草稿，同时把富文本编辑器内容一起换掉。
   useEffect(() => {
@@ -217,9 +239,18 @@ export default function InputArea({
     mentionReqRef.current += 1;
   }, [editPrefill, setValue]);
 
-  // 拖放插入的路径：追加到当前内容末尾。用 id 做依赖，连续插入同段文本也能生效。
+  // 拖放插入的路径：单张图片转成附件 chip（走 asset 通道），其余当作文本追加。
   useEffect(() => {
     if (!inputInsert) return;
+    const text = inputInsert.text.trim();
+    if (isSingleImagePath(text)) {
+      const name = text.split(/[\\/]/).pop() ?? text;
+      setAttachments((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), name, path: text },
+      ]);
+      return;
+    }
     const next = valueRef.current.trim()
       ? `${valueRef.current} ${inputInsert.text}`
       : inputInsert.text;
@@ -280,8 +311,13 @@ export default function InputArea({
     switch (cmd.view) {
       case "root":
         return rootCommandItems(cmd.query);
-      case "skill":
-        return skillCommandItems(skills, cmd.query);
+      case "skill": {
+        const items = skillCommandItems(skills, cmd.query);
+        // 与全局面板同一套「最近使用」排序，位置不算搜索时由它决定
+        return cmd.query
+          ? items
+          : rankByFrecency(items, loadFrecency(), Date.now());
+      }
       case "model":
         return modelCommandItems(models, selectedModel, cmd.query);
       case "mode":
@@ -371,7 +407,10 @@ export default function InputArea({
   function handleTextareaChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const text = e.currentTarget.value;
     const caret = e.currentTarget.selectionStart ?? text.length;
-    handleSnapshot({ line: text, caret, markdown: text }, false);
+    handleSnapshot(
+      { line: text, caret, markdown: text, indentable: false },
+      false,
+    );
   }
 
   /**
@@ -417,16 +456,41 @@ export default function InputArea({
 
   function submit() {
     const text = valueRef.current.trim();
-    if (!text || busy) return;
-    // 没定工作区就发不出去：后端拿不到执行目录，工具会落到默认目录。
+    if (busy) return;
+    // 没内容也没附件就发不出去；没定工作区同样不行。
+    if (!text && attachments.length === 0) return;
     if (!workspace) return;
+    const imgs: ImageRef[] = attachments.map(({ id: _id, ...rest }) => rest);
+    // 无附件时保持单参数调用（历史行为，测试与既有调用方都按这个签名断言）。
     if (onSubmit) {
-      onSubmit(text);
+      if (imgs.length) onSubmit(text, imgs);
+      else onSubmit(text);
+    } else if (imgs.length) {
+      onSend(text, imgs);
     } else {
       onSend(text);
     }
     applyText("");
     saveInputDraft(sessionId, "");
+    setAttachments([]);
+  }
+
+  /** 粘贴图片：从剪贴板取出图片文件，生成缩略图 chip（无真实路径，用 blob URL）。 */
+  function handlePaste(e: ClipboardEvent<HTMLDivElement>) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const files = Array.from(dt.items)
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const added = files.map<Attachment>((f) => ({
+      id: crypto.randomUUID(),
+      name: f.name || `pasted-image-${Date.now()}.png`,
+      url: URL.createObjectURL(f),
+    }));
+    setAttachments((prev) => [...prev, ...added]);
   }
 
   /** 选中面板条目后的收尾：清掉触发词（plus 来源则按需插入文本）。 */
@@ -446,9 +510,9 @@ export default function InputArea({
   async function runExport() {
     try {
       const ok = await downloadSessionZip(sessionId, sessionTitle);
-      if (ok) setNotice("日志已导出");
+      if (ok) notify("ok", "日志已导出");
     } catch (e) {
-      setNotice(`导出失败：${String(e)}`);
+      notify("error", `导出失败：${String(e)}`);
     }
   }
 
@@ -459,7 +523,7 @@ export default function InputArea({
       goalRef.current = trimmed;
       setGoal(trimmed);
     } catch (e) {
-      setNotice(`目标保存失败：${String(e)}`);
+      notify("error", `目标保存失败：${String(e)}`);
     }
     finishCommand("");
   }
@@ -480,6 +544,7 @@ export default function InputArea({
     }
     switch (c.view) {
       case "skill":
+        recordUse(`skill:${item.id}`);
         finishCommand(`/${item.id} `);
         break;
       case "model":
@@ -545,8 +610,9 @@ export default function InputArea({
         dismiss();
         return;
       }
+      // 面板开着时 Tab 只关面板、不拦默认行为：吞掉 Tab 等于把
+      // 键盘用户锁在输入框里（WCAG 2.1.2 无键盘陷阱）。
       if (e.key === "Tab") {
-        consume(e);
         closeCommand();
         return;
       }
@@ -582,12 +648,6 @@ export default function InputArea({
       applyText(lastUserMessage);
       return;
     }
-    // 焦点在输入框时 Tab 直接切模式（Chat → Plan → Build → Chat）。
-    if (e.key === "Tab") {
-      consume(e);
-      onModeChange(nextMode(mode));
-      return;
-    }
     if (e.key === "Enter" && !e.shiftKey) {
       consume(e);
       submit();
@@ -605,31 +665,24 @@ export default function InputArea({
     <div className={variant === "inline" ? "w-full" : "px-6 pb-5 pt-3"}>
       {/* 编辑历史消息时的提示条 */}
       {editing && (
-        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-card border border-brand bg-bubble-user px-3 py-1.5 text-xs">
+        <AlertBar
+          variant="edit"
+          className={`mx-auto mb-2 ${CONTENT_WIDTH}`}
+          icon={<Pencil size={12} />}
+          action={
+            onCancelEdit && (
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded-md border border-line px-2 py-0.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
+              >
+                取消
+              </button>
+            )
+          }
+        >
           <span className="text-foreground">正在编辑之前的消息，发送后将替换它</span>
-          {onCancelEdit && (
-            <button
-              type="button"
-              onClick={onCancelEdit}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
-            >
-              取消
-            </button>
-          )}
-        </div>
-      )}
-      {notice && (
-        <div className="mx-auto mb-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-2 rounded-tag border border-line bg-surface px-3 py-1.5 text-xs">
-          <span className="min-w-0 flex-1 text-foreground">{notice}</span>
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            aria-label="关闭提示"
-            className="shrink-0 rounded-md border border-line px-1.5 text-[11px] text-subtle hover:border-brand"
-          >
-            关闭
-          </button>
-        </div>
+        </AlertBar>
       )}
       <GoalBar
         goal={goal}
@@ -677,10 +730,46 @@ export default function InputArea({
               ? "正在加载技能…"
               : CMD_HINT
           }
+          emptyText={
+            cmd.view === "model" && models.length === 0
+              ? "还没有可用模型，请先在设置页添加"
+              : undefined
+          }
         />
       )}
+      {/* 图片附件 chip：粘贴 / 拖放图片后出现在输入框上方 */}
+      {attachments.length > 0 && (
+        <div className={`mx-auto mb-2 flex flex-wrap gap-2 ${CONTENT_WIDTH}`}>
+          {attachments.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-center gap-2 rounded-tag border border-line bg-surface px-2 py-1.5"
+            >
+              <img
+                src={a.path ? assetUrl(a.path) : a.url}
+                alt={a.name}
+                className="h-9 w-9 shrink-0 rounded object-cover"
+              />
+              <span className="max-w-[10rem] truncate text-[11px] text-foreground" title={a.name}>
+                {a.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
+                aria-label="移除附件"
+                className="shrink-0 rounded p-0.5 text-subtle transition-colors hover:bg-bubble hover:text-danger"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {/* 不给卡片加 focus-within 描边：整块亮蓝边是网页表单的观感。 */}
-      <div className="mx-auto flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs">
+      <div
+        onPaste={handlePaste}
+        className={`mx-auto flex ${CONTENT_WIDTH} flex-col rounded-card border border-line bg-surface px-4 py-3 shadow-xs transition-[border-color,box-shadow] duration-200 focus-within:border-brand/30 focus-within:shadow-sm`}
+      >
         {markdownLive ? (
           <MarkdownEditor
             initialValue={value}
@@ -741,7 +830,7 @@ export default function InputArea({
               <button
                 type="button"
                 onClick={submit}
-                disabled={!value.trim() || !workspace}
+                disabled={(!value.trim() && attachments.length === 0) || !workspace}
                 aria-label={workspace ? "发送" : "请先选择工作区"}
                 className="rounded-full bg-brand p-2 text-white transition-colors enabled:hover:bg-brand-strong disabled:opacity-30"
               >
@@ -751,15 +840,22 @@ export default function InputArea({
           </div>
         </div>
       </div>
-      <div className="mx-auto mt-2 flex w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl items-center justify-between gap-3">
-        <StatsPills />
-        <TurnUsagePanel />
-        {value.trim() && (
-          <span className="text-xs text-subtle" title="按后端同口径估算">
-            约 {estimateTokens(value)} tokens
-          </span>
-        )}
-        <p className="text-xs text-subtle">Enter 发送 · Shift+Enter 换行 · Tab 切模式</p>
+      {/* 统计行固定两段：左侧数据、右侧提示。此前按「有没有输入」插入第三个
+          子元素，justify-between 会把两侧一起推着左右跳。 */}
+      <div className={`mx-auto mt-2 flex ${CONTENT_WIDTH} items-center justify-between gap-3`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <StatsPills />
+          <TurnUsagePanel />
+          <ContextWaterBar
+            contextLimit={
+              models.find((m) => m.key === selectedModel)?.context_limit ??
+              models.find((m) => m.id === selectedModel)?.context_limit
+            }
+          />
+        </div>
+        <p className="shrink-0 text-xs text-subtle">
+          Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
+        </p>
       </div>
     </div>
   );

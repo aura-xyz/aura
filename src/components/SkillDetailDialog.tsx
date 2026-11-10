@@ -26,6 +26,11 @@ const SEVERITY_CLASS: Record<string, string> = {
   info: "text-subtle",
 };
 
+/** 高危行整块淡红底：扫一眼就知道哪些必须先读，不必逐条看标签。 */
+const SEVERITY_ROW: Record<string, string> = {
+  high: "border-danger/30 bg-danger/5",
+};
+
 /**
  * 安装前审查弹窗。
  *
@@ -141,7 +146,9 @@ export default function SkillDetailDialog({
             {findings.map((f, i) => (
               <li
                 key={`${f.rule}-${f.file}-${f.line}-${i}`}
-                className="rounded-card border border-line px-3 py-2"
+                className={`rounded-card border px-3 py-2 ${
+                  SEVERITY_ROW[f.severity] ?? "border-line"
+                }`}
               >
                 <p className="flex flex-wrap items-baseline gap-2 text-[11px]">
                   <span

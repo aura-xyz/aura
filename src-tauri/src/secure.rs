@@ -20,66 +20,46 @@
 //! 非 Windows 平台使用 SecretService（keyring crate）做加密，不再明文直穿。
 //! Windows 保留 DPAPI。
 
-#[cfg(not(windows))]
-use keyring::Keyring;
-
 /// 附加熵，Windows DPAPI 加解密必须一致。
-const ENTROPY: &[u8] = b"aura-local-secret-v1";
+pub(crate) const ENTROPY: &[u8] = b"aura-local-secret-v1";
 
 /// Linux 上标记密文由 keyring 保管的前缀。`protect` 输出此标记，
 /// 实际密文存在 SecretService 中；`unprotect` 识别此前缀后从 keyring 读取。
 #[cfg(not(windows))]
-const KEYRING_MARKER: &str = "keyring:";
+pub(crate) const KEYRING_MARKER: &str = "keyring:";
+
+/// 密钥服务不可用时的排查提示。
+///
+/// Linux 桌面上最常见的失败是「没有 SecretService」：精简发行版没装
+/// gnome-keyring，或者装了但会话里没启动；KDE 下还需要 Wallet 的兼容层。
+/// 只说「保存失败」用户无从下手，所以把三条出路写进错误里。
+pub const KEYRING_HINT: &str =
+    "未检测到系统密钥服务：请安装并启动 gnome-keyring，或在 KDE 中启用 Wallet 的 SecretService 兼容层";
 
 /// keyring 的服务名与账户名。
 #[cfg(not(windows))]
-const KEYRING_SERVICE: &str = "aura";
+pub(crate) const KEYRING_SERVICE: &str = "aura";
 #[cfg(not(windows))]
-const KEYRING_USER: &str = "api_key";
+pub(crate) const KEYRING_USER: &str = "api_key";
 
-/// 加密，输出 hex 字符串（Windows）或 keyring 标记（Linux）。
+/// 加密，输出可持久化的 blob。
 ///
-/// 失败时返回 Err 而非回落明文：调用方（`save_config`）应让保存失败，
-/// 静默写成明文等于悄悄拆掉这道防线。
+/// 实现已搬到 [`crate::secure_store`]：按平台挑选后端（Windows DPAPI /
+/// 系统密钥环 / 文件加密降级档），并给密文加类型前缀以便分派解密。
 pub fn protect(plain: &str) -> Result<String, String> {
-    #[cfg(windows)]
-    {
-        win::protect(plain.as_bytes(), ENTROPY).map(|bytes| hex_encode(&bytes))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = ENTROPY;
-        let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
-        kr.set_password(plain)
-            .map_err(|e| format!("keyring 保存密码失败: {e}"))?;
-        Ok(KEYRING_MARKER.to_string())
-    }
+    crate::secure_store::protect(plain)
 }
 
-/// 解密 hex 密文（Windows）或 keyring 标记（Linux）。
+/// 解密 blob。
 ///
-/// 输入不是合法 hex、或不是本应用加密的 blob 时返回 Err——调用方
-/// （`load_config`）据此走「旧版明文」兼容分支。
+/// 按前缀分派：文件加密档 / 系统密钥环 / 旧格式（Windows 视为 DPAPI hex，
+/// 非 Windows 视为 v0.6.0 之前的明文）。
 pub fn unprotect(blob: &str) -> Result<String, String> {
-    #[cfg(windows)]
-    {
-        let bytes = hex_decode(blob)?;
-        let plain = win::unprotect(&bytes, ENTROPY)?;
-        String::from_utf8(plain).map_err(|e| format!("解密结果不是合法 UTF-8: {}", e))
-    }
-    #[cfg(not(windows))]
-    {
-        if let Some(_rest) = blob.strip_prefix(KEYRING_MARKER) {
-            let kr = Keyring::new(KEYRING_SERVICE, KEYRING_USER);
-            return kr.get_password().map_err(|e| format!("keyring 读取密码失败: {e}"));
-        }
-        // 非 keyring 标记：旧版明文兼容，按明文返回
-        Ok(blob.to_string())
-    }
+    crate::secure_store::unprotect(blob)
 }
 
 #[cfg(windows)]
-mod win {
+pub(crate) mod win {
     use std::os::raw::c_void;
 
     #[repr(C)]
@@ -201,7 +181,7 @@ mod win {
 }
 
 #[cfg(windows)]
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
@@ -211,7 +191,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
     if s.len() % 2 != 0 {
         return Err("hex 长度不为偶数".into());
@@ -339,5 +319,15 @@ mod tests {
             let back = hex_decode(&s).unwrap();
             assert_eq!(back, vec![byte, 0xab, 0xff]);
         }
+    }
+
+    /// 提示语不能只说「失败」：得同时告诉用户缺什么、装哪个包、
+    /// KDE 下还要做什么，否则照样无从下手。
+    #[test]
+    fn keyring_hint_names_package_and_kde_path() {
+        assert!(KEYRING_HINT.contains("gnome-keyring"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("KDE"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("SecretService"), "{KEYRING_HINT}");
+        assert!(KEYRING_HINT.contains("未检测到系统密钥服务"), "{KEYRING_HINT}");
     }
 }

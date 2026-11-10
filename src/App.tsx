@@ -18,15 +18,24 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "./components/ConfirmDialog";
 import ContextMenu, { type MenuState } from "./components/ContextMenu";
+import ApprovalCard from "./components/ApprovalCard";
 import InputArea from "./components/InputArea";
 import MessageList from "./components/MessageList";
+import NoticeStack from "./components/NoticeStack";
 import Sidebar from "./components/Sidebar";
 import StartScreen from "./components/StartScreen";
 import TitleBar from "./components/TitleBar";
 import { useTheme } from "./hooks/useTheme";
 import { useRightbarTransition } from "./hooks/useRightbarTransition";
 import { useDropZone } from "./hooks/useDropZone";
-import { checkAllowlistPath } from "./lib/api";
+import { useConfirm } from "./hooks/useConfirm";
+import {
+  checkAllowlistPath,
+  listSkills,
+  listWorkspaceFiles,
+  type FileCandidate,
+  type SkillView,
+} from "./lib/api";
 import { decideDrop, formatAttachment, parentDir, stricter, type DropVerdict } from "./lib/drop";
 import {
   codeBlockMenuItems,
@@ -36,21 +45,52 @@ import {
   textMenuItems,
 } from "./lib/contextMenuItems";
 import { copyText } from "./lib/clipboard";
+import { downloadSessionZip } from "./lib/exportSession";
+import { bindApprovalEvents } from "./lib/approvals";
+import { notify } from "./lib/notices";
+import { recordUse } from "./lib/frecency";
+import { CONTENT_WIDTH } from "./lib/layout";
 import { workspaceMenuItems } from "./lib/workspaceMenu";
 import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
 import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
+import { shouldBlockDevtools } from "./lib/devtools";
+import {
+  actionCommandItems,
+  nextMode,
+  type CommandItem,
+} from "./lib/commandItems";
+import {
+  filePaletteItems,
+  sessionPaletteItems,
+  skillPaletteItems,
+} from "./lib/palette";
 import SessionSearch from "./components/SessionSearch";
+import CommandPalette from "./components/CommandPalette";
 import SettingsPage from "./pages/SettingsPage";
 import McpPage from "./pages/McpPage";
 import SkillsPage from "./pages/SkillsPage";
 import TimelinePage from "./pages/TimelinePage";
 import OpenInMenu from "./components/OpenInMenu";
-import { PANEL_BODIES, PANEL_ICONS } from "./components/PanelBodies";
+import SidebarTabBar from "./components/SidebarTabBar";
+import SidebarTabBody from "./components/SidebarTabBody";
 import { StoreProvider, useStore } from "./store";
-import { panelRegistry } from "./lib/panels";
 import {
-  RIGHTBAR_DEFAULT,
+  START_CONTENT_ID,
+  activateTab,
+  canCloseTab,
+  closeTab,
+  emptyTabsState,
+  loadTabsState,
+  openTab,
+  saveTabsState,
+  terminalContentId,
+  type SidebarTabKind,
+  type SidebarTabsState,
+} from "./lib/sidebarTabs";
+import { disposeTerminalSession } from "./lib/terminalSessions";
+import {
+  rightbarDefaultWidth,
   RIGHTBAR_MAX_RATIO,
   RIGHTBAR_MIN,
   SIDEBAR_AUTO_COLLAPSE,
@@ -169,18 +209,37 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     [newSession, setView],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [confirmWs, setConfirmWs] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [dropNotice, setDropNotice] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** 全局命令面板（Ctrl+K）。 */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteSkills, setPaletteSkills] = useState<SkillView[]>([]);
+  const [paletteFiles, setPaletteFiles] = useState<FileCandidate[]>([]);
+  const [paletteLoading, setPaletteLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTurn, setActiveTurn] = useState(0);
   const turnItems = useMemo(
     () => buildTurnItems(activeSession?.messages ?? []),
     [activeSession?.messages],
   );
-  const [rightbarWidth, setRightbarWidth] = useState(RIGHTBAR_DEFAULT);
-  const [rightbarTab, setRightbarTab] = useState<string>("files");
+  // 初始宽度按视口算一次：屏幕宽就多给右栏（网页/终端要横向空间），
+  // 之后再被用户拖拽覆盖。窗口尺寸变化不重新算——用户拖过的宽度不该
+  // 被一次最大化重置。
+  const [rightbarWidth, setRightbarWidth] = useState(() =>
+    rightbarDefaultWidth(typeof window === "undefined" ? 1280 : window.innerWidth),
+  );
   const [rightbarFullscreen, setRightbarFullscreen] = useState(false);
+  /**
+   * 右栏改成标签页后，状态从「选中的分区」变成「标签集合 + 当前标签」。
+   * 存档只认标签的**内容身份**，终端标签不持久化——shell 进程活不过重启。
+   */
+  const [tabsState, setTabsState] = useState<SidebarTabsState>(() => {
+    const saved = loadTabsState();
+    if (saved) return saved;
+    return openTab(emptyTabsState(), "start", START_CONTENT_ID, "开始页");
+  });
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [narrowExpanded, setNarrowExpanded] = useState(false);
@@ -190,6 +249,21 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     const onResize = () => setViewport(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // 命令审批事件（v0.8.0 C41）。绑在 Shell 上而不是审批卡里：
+  // 用户可能正在设置页翻东西，后端照样会发请求，卡片挂载时再订阅就漏了。
+  useEffect(() => {
+    let unbind: (() => void) | undefined;
+    let disposed = false;
+    void bindApprovalEvents().then((un) => {
+      if (disposed) un();
+      else unbind = un;
+    });
+    return () => {
+      disposed = true;
+      unbind?.();
+    };
   }, []);
 
   // 面板卸载后复位全屏态，避免下次打开仍是全屏（过渡 hook 不感知全屏）
@@ -216,7 +290,63 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const rightbarWidthPx = rightbarFullscreen
     ? Math.max(RIGHTBAR_MIN, viewport - cols.sidebar)
     : cols.rightbar || RIGHTBAR_MIN;
-  const panelList = panelRegistry.list();
+
+  /**
+   * 打开一个标签。
+   *
+   * 同类标签的内容身份决定它是不是同一个：
+   * - 文件 / 任务 / 用量 各只有一个，内容身份固定；
+   * - 网页每次新开一个身份（不同标签各自独立的历史）；
+   * - 终端用进程 id 当身份，所以开几个就是几个 shell。
+   */
+  const terminalSeq = useRef(0);
+  const openSidebarTab = useCallback(
+    (kind: SidebarTabKind, params?: Record<string, string>) => {
+      setTabsState((state) => {
+        switch (kind) {
+          case "start":
+            return openTab(state, "start", START_CONTENT_ID, "开始页");
+          case "files":
+            return openTab(state, "files", "workspace", "文件");
+          case "web":
+            return openTab(state, "web", `web:${crypto.randomUUID()}`, "新标签页");
+          case "terminal": {
+            terminalSeq.current += 1;
+            const id = `term${terminalSeq.current}`;
+            const n = state.tabs.filter((t) => t.kind === "terminal").length + 1;
+            return openTab(
+              state,
+              "terminal",
+              terminalContentId(id),
+              `终端 ${n}`,
+              params,
+            );
+          }
+          case "todo":
+            return openTab(state, "todo", "todo", "任务");
+          case "usage":
+            return openTab(state, "usage", "usage", "用量");
+        }
+      });
+    },
+    [],
+  );
+
+  /** 关闭标签。关掉终端标签要把对应的 shell 进程一并结束。 */
+  const closeSidebarTab = useCallback((tabId: string) => {
+    setTabsState((state) => {
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (!tab) return state;
+      if (tab.kind === "terminal") {
+        void disposeTerminalSession(tab.contentId.replace(/^terminal:/, ""));
+      }
+      return closeTab(state, tabId);
+    });
+  }, []);
+
+  useEffect(() => {
+    saveTabsState(tabsState);
+  }, [tabsState]);
 
   /**
    * v0.7.0：拖入文件 → 把路径附加到输入框。
@@ -323,6 +453,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
   // 本次只拦截不映射行为，留待后续按需定义应用内语义。
   //
+  /** 供全局快捷键读取最新模式：effect 只注册一次监听，不能依赖 mode。 */
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
   // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -332,37 +468,69 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         setView("chat");
         return;
       }
+      // 模式循环：Tab 已还给焦点移动（WCAG 无键盘陷阱），改用组合键。
+      // 放在 App 而不是输入框里，焦点在别处时也能切。
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        changeMode(nextMode(modeRef.current));
+        return;
+      }
+      // Ctrl+F 只搜会话（快、窄）；Ctrl+K 开全局面板（动作 / 会话 / 技能 / 文件）。
       if (e.ctrlKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
-        setSearchOpen((v) => !v);
+        setSearchOpen(true);
         return;
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+        setPaletteQuery("");
+        return;
+      }
+      // v0.8.0：侧栏三个入口的快捷键，与开始页卡片上标注的一致。
+      // Ctrl+P 在 WebView 里默认是「打印」，必须拦下来；
+      // Ctrl+T 默认是「恢复刚关闭的标签页」，同理。
+      if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === "p") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("files");
+          return;
+        }
+        if (key === "t") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("web");
+          return;
+        }
+        if (e.key === "`" || e.code === "Backquote") {
+          e.preventDefault();
+          openRightbar();
+          openSidebarTab("terminal");
+          return;
+        }
       }
       if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
       e.preventDefault();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [newSession, openRightbar, openSidebarTab]);
 
-  // 搜索数据：把会话里的消息转成纯文本
-  const searchable = useMemo(
-    () =>
-      sessions.map((sess) => ({
-        id: sess.id,
-        title: sess.title,
-        messages: sess.messages.map((m) => ({
-          role: m.role,
-          text:
-            m.role === "user"
-              ? m.content
-              : m.blocks
-                  .filter((b) => b.kind === "text")
-                  .map((b) => (b.kind === "text" ? b.text : ""))
-                  .join("\n"),
-        })),
-      })),
-    [sessions],
-  );
+  // v0.8.0：正式版吞掉 F12 / Ctrl+Shift+I/J/C，避免终端用户误开检查器。
+  // 开发模式（pnpm tauri dev，import.meta.env.PROD=false）**完全不注册**
+  // 这个监听，调试能力原样保留。用捕获阶段，抢在 WebView 处理之前。
+  useEffect(() => {
+    if (!import.meta.env.PROD) return;
+    const block = (e: KeyboardEvent) => {
+      if (!shouldBlockDevtools(true, e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", block, true);
+    return () => window.removeEventListener("keydown", block, true);
+  }, []);
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
@@ -386,7 +554,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     const wsEl = target.closest<HTMLElement>("[data-ctx-workspace]");
     if (wsEl) {
       const path = wsEl.dataset.ctxWorkspace ?? "";
-      const items = workspaceMenuItems(path, workspace, (p) => setConfirmWs(p));
+      const items = workspaceMenuItems(path, workspace, (p) => {
+        void confirm({
+          title: "删除工作区",
+          message: `将移除「${basename(p)}」的全部对话记录，磁盘文件不受影响。`,
+          confirmText: "删除",
+          danger: true,
+        }).then((ok) => {
+          if (ok) void removeWorkspace(p);
+        });
+      });
       // 当前工作区没有可提供的操作（不能删除自己）。
       // 此处必须放行原生菜单：若先 preventDefault 再判断，用户右键第一个
       // 工作区时会「自定义菜单不显示、系统菜单也不显示」——什么都不会发生。
@@ -448,6 +625,122 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
    * 输入框的 props。开始界面与普通对话区用的是同一个输入框，
    * 只是外边距不同（`variant`），所以 props 抽成一份。
    */
+  /**
+   * 「继续上次」的目标会话。
+   *
+   * 目前会话没有 updated_at（F2 未落地），只能按列表顺序取最后一条有内容的；
+   * 等时间戳补齐后换成按时间倒序，这里只改这一处。
+   */
+  const recentSession = [...sessions].reverse().find((s) => s.messages.length > 0);
+
+  // ── 全局命令面板（Ctrl+K）────────────────────────────────────
+  // 技能在打开时拉一次；文件随查询去后端捞（带 250ms 防抖，避免每敲一个字都发请求）。
+  useEffect(() => {
+    if (!paletteOpen) return;
+    let live = true;
+    listSkills()
+      .then((rows) => {
+        if (live) setPaletteSkills(rows);
+      })
+      .catch(() => {
+        if (live) setPaletteSkills([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [paletteOpen]);
+
+  useEffect(() => {
+    if (!paletteOpen) {
+      setPaletteFiles([]);
+      return;
+    }
+    const q = paletteQuery.trim();
+    if (!q || !activeId) {
+      setPaletteFiles([]);
+      setPaletteLoading(false);
+      return;
+    }
+    let live = true;
+    setPaletteLoading(true);
+    const timer = window.setTimeout(() => {
+      listWorkspaceFiles(activeId, q, 8)
+        .then((rows) => {
+          if (live) setPaletteFiles(rows);
+        })
+        .catch(() => {
+          if (live) setPaletteFiles([]);
+        })
+        .finally(() => {
+          if (live) setPaletteLoading(false);
+        });
+    }, 250);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [paletteOpen, paletteQuery, activeId]);
+
+  const paletteItems = useMemo<CommandItem[]>(() => {
+    if (!paletteOpen) return [];
+    return [
+      ...actionCommandItems({ mode, theme: theme.theme }),
+      ...sessionPaletteItems(sessions, paletteQuery),
+      ...skillPaletteItems(paletteSkills, paletteQuery),
+      ...filePaletteItems(paletteFiles),
+    ];
+    // 只用到 theme.theme，其余主题字段变化不该重建列表
+  }, [paletteOpen, mode, theme.theme, sessions, paletteQuery, paletteSkills, paletteFiles]);
+
+  /** 执行面板项：按 id 前缀分派，动作项再看具体键。 */
+  function runPaletteItem(item: CommandItem) {
+    // 先记一次使用，下次打开时它自己会浮上来
+    recordUse(item.id);
+    const [kind, ...rest] = item.id.split(":");
+    const value = rest.join(":");
+    setPaletteOpen(false);
+    if (kind === "session") {
+      // value 形如 `{sessionId}:{messageIndex}`；目前只切会话，
+      // 命中消息的定位留给会话内搜索（与 Ctrl+F 面板的现有行为一致）。
+      const [sessionId] = value.split(":");
+      void openSession(sessionId);
+      return;
+    }
+    if (kind === "skill") {
+      insertIntoInput(`/${value} `);
+      return;
+    }
+    if (kind === "file") {
+      insertIntoInput(`@${value}`);
+      return;
+    }
+    // action:*
+    if (value === "new") {
+      void newSession();
+      setView("chat");
+    } else if (value.startsWith("mode:")) {
+      changeMode(value.slice(5) as typeof mode);
+    } else if (value.startsWith("theme:")) {
+      theme.setTheme(value.slice(6) as "light" | "dark" | "system");
+    } else if (value === "settings") {
+      setView("settings");
+    } else if (value === "skills") {
+      setView("skills");
+    } else if (value === "mcp") {
+      setView("mcp");
+    } else if (value === "timeline") {
+      setView("timeline");
+    } else if (value === "export") {
+      if (activeSession) {
+        void downloadSessionZip(activeSession.id, activeSession.title)
+          .then((ok) => {
+            if (ok) notify("ok", "日志已导出");
+          })
+          .catch((e) => notify("error", `导出失败：${String(e)}`));
+      }
+    }
+  }
+
   const inputProps = {
     busy,
     onSend: sendMessage,
@@ -478,7 +771,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
    * 模型一定能读，实际可能读不到。
    */
   const dropBanner = dropNotice ? (
-    <div className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+    <div className={`mx-auto mb-2 ${CONTENT_WIDTH}`}>
       <div className="flex items-start gap-2 rounded-card border border-warning bg-surface px-3 py-1.5 text-xs text-foreground">
         <TriangleAlert size={13} className="mt-0.5 shrink-0 text-warning" />
         <span className="min-w-0 flex-1">{dropNotice}</span>
@@ -545,13 +838,23 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
       className="flex h-screen flex-col overflow-hidden bg-surface text-foreground"
       onContextMenu={onContextMenu}
     >
-      <TitleBar />
+      <TitleBar
+        onSearch={() => {
+          setPaletteOpen(true);
+          setPaletteQuery("");
+        }}
+      />
 
       <div className="flex min-h-0 flex-1 relative">
         <Sidebar
           view={view}
           navBlocks={navBlocks}
-          activePanel={rightbarShown ? rightbarTab : null}
+          activePanel={
+            rightbarShown
+              ? (tabsState.tabs.find((t) => t.id === tabsState.activeId)?.kind ??
+                null)
+              : null
+          }
           onOpenSettings={() => setView("settings")}
           onNavigate={() => setView("chat")}
           width={cols.sidebar}
@@ -593,7 +896,20 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                两块离得很远，看着像两个不相干的区域。 */
             <>
               {dropBanner}
-              <StartScreen onPick={(prompt) => insertIntoInput(prompt)}>
+              <StartScreen
+                onPick={(prompt) => insertIntoInput(prompt)}
+                recentSession={
+                  recentSession
+                    ? {
+                        title: recentSession.title,
+                        onOpen: () => {
+                          void openSession(recentSession.id);
+                          setView("chat");
+                        },
+                      }
+                    : undefined
+                }
+              >
                 <InputArea {...inputProps} variant="inline" />
               </StartScreen>
             </>
@@ -619,87 +935,103 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
                 />
               </div>
               {dropBanner}
+              {activeSession && <ApprovalCard sessionId={activeSession.id} />}
               <InputArea {...inputProps} />
             </>
           )}
         </main>
 
-        {rightbarShown && (
-          <aside
-            data-state={rightbarClosing ? "closing" : "open"}
-            className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
-              rightbarClosing ? "rightbar-leave" : "rightbar-enter"
-            } ${
-              rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
-            }`}
-            style={{ width: rightbarWidthPx }}
-          >
+        {/* 收起时**保持挂载**（仅 display:none），不卸载子组件：
+            否则已打开的文件夹/网页/终端标签与内容会在收起后丢失，
+            重新展开就是一张白板。 */}
+        <aside
+          data-state={
+            rightbarClosing ? "closing" : rightbarShown ? "open" : "hidden"
+          }
+          className={`relative flex shrink-0 flex-col overflow-hidden border-l border-line bg-surface ${
+            rightbarClosing ? "rightbar-leave" : "rightbar-enter"
+          } ${
+            rightbarOverlay ? "absolute right-0 top-0 bottom-0 z-20 shadow-lg" : ""
+          } ${rightbarShown ? "" : "hidden"}`}
+          style={{ width: rightbarWidthPx }}
+        >
             {!rightbarFullscreen && (
+              // 拖拽手柄：加宽到 6px 并给一条居中的抓手线——
+              // 原来只有 1px 宽、hover 才显色，几乎没人发现得了它能拖。
+              // 注意这里在 JS 表达式里，注释必须是 // 而不是 {/* */}。
               <div
-                className="absolute left-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-brand/30"
+                className="group absolute left-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize"
                 onPointerDown={startDrag("rightbar")}
                 onPointerMove={moveDrag}
                 onPointerUp={endDrag}
                 onPointerCancel={endDrag}
                 aria-hidden
-              />
+              >
+                <span className="absolute left-1/2 top-1/2 h-12 w-px -translate-x-1/2 -translate-y-1/2 rounded-full bg-line transition-colors group-hover:bg-brand" />
+              </div>
             )}
-            <div className="mx-2 mt-2 mb-1 flex items-center gap-0.5">
-              {/* tab 列表由注册表派生，新增面板不必再改外壳 */}
-              {panelList.map((panel) => {
-                const Icon = PANEL_ICONS[panel.id];
-                return (
+            <SidebarTabBar
+              tabs={tabsState.tabs}
+              activeId={tabsState.activeId}
+              canClose={(tabId) => canCloseTab(tabsState, tabId)}
+              onActivate={(tabId) =>
+                setTabsState((state) => activateTab(state, tabId))
+              }
+              onClose={closeSidebarTab}
+              onNew={openSidebarTab}
+              trailing={
+                <>
                   <button
-                    key={panel.id}
                     type="button"
-                    onClick={() => setRightbarTab(panel.id)}
-                    aria-current={rightbarTab === panel.id ? "page" : undefined}
-                    className={`flex items-center gap-1 rounded-tag px-2 py-1 text-[11px] font-medium tracking-[0.04em] transition-colors ${
-                      rightbarTab === panel.id
-                        ? "bg-bubble text-foreground"
-                        : "text-subtle hover:bg-bubble hover:text-foreground"
-                    }`}
+                    onClick={() => setRightbarFullscreen((v) => !v)}
+                    aria-label={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                    title={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
+                    className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
                   >
-                    {Icon && <Icon size={12} aria-hidden />}
-                    {panel.label}
+                    {rightbarFullscreen ? (
+                      <Minimize2 size={13} aria-hidden />
+                    ) : (
+                      <Maximize2 size={13} aria-hidden />
+                    )}
                   </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() => setRightbarFullscreen((v) => !v)}
-                aria-label={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
-                title={rightbarFullscreen ? "退出面板全屏" : "面板全屏"}
-                className="ml-auto rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                {rightbarFullscreen ? (
-                  <Minimize2 size={13} aria-hidden />
-                ) : (
-                  <Maximize2 size={13} aria-hidden />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={closeRightbar}
-                aria-label="关闭面板"
-                title="关闭面板"
-                className="rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
-              >
-                <PanelRight size={13} aria-hidden />
-              </button>
+                  <button
+                    type="button"
+                    onClick={closeRightbar}
+                    aria-label="关闭面板"
+                    title="关闭面板"
+                    className="shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
+                  >
+                    <PanelRight size={13} aria-hidden />
+                  </button>
+                </>
+              }
+            />
+            {/* 标签页的正文区。所有标签都保持挂载，未激活的用 hidden 藏起来——
+                终端进程要继续跑，切回来时屏幕还在；xterm 重建后由会话注册表
+                把此前的输出回放进去。 */}
+            <div className="relative min-h-0 flex-1">
+              {tabsState.tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  // flex flex-col：正文根节点是 flex-1 的纵向容器，
+                  // 父层不给 flex 上下文时它只能按内容高排，
+                  // iframe / xterm 这类「撑满父容器」的组件会塌成很小一块。
+                  className={`absolute inset-0 flex flex-col ${
+                    tab.id === tabsState.activeId ? "" : "hidden"
+                  }`}
+                >
+                  <SidebarTabBody
+                    tab={tab}
+                    sessionId={activeId}
+                    view={view}
+                    model={selectedModel}
+                    active={tab.id === tabsState.activeId}
+                    onOpen={openSidebarTab}
+                  />
+                </div>
+              ))}
             </div>
-            {(() => {
-              const Body = PANEL_BODIES[rightbarTab];
-              return Body ? (
-                <Body sessionId={activeId} view={view} />
-              ) : (
-                <p className="px-3 py-4 text-[11px] text-subtle">
-                  未注册的面板：{rightbarTab}
-                </p>
-              );
-            })()}
-          </aside>
-        )}
+        </aside>
         {rightbarShown && (
           <div
             className="absolute top-2 z-30"
@@ -726,9 +1058,22 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
 
+      {/* 全局轻提示：右下角堆叠，三处自建横条已归一到这里 */}
+      <NoticeStack />
+
+      {paletteOpen && (
+        <CommandPalette
+          items={paletteItems}
+          loading={paletteLoading}
+          onQueryChange={setPaletteQuery}
+          onPick={runPaletteItem}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
       {searchOpen && (
         <SessionSearch
-          sessions={searchable}
+          sessions={sessions}
           onClose={() => setSearchOpen(false)}
           onOpenSession={(sessionId) => {
             void openSession(sessionId);
@@ -737,44 +1082,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         />
       )}
 
-      {confirmWs && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
-          onClick={() => setConfirmWs(null)}
-        >
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="删除工作区"
-            className="w-80 rounded-card border border-line bg-surface p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-semibold">删除工作区</h3>
-            <p className="mt-2 text-sm leading-relaxed text-subtle">
-              将移除「{basename(confirmWs)}」的全部对话记录，磁盘文件不受影响。
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmWs(null)}
-                className="rounded-full border border-line px-4 py-1.5 text-sm text-subtle transition-colors hover:text-foreground"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  removeWorkspace(confirmWs);
-                  setConfirmWs(null);
-                }}
-                className="rounded-full bg-danger px-4 py-1.5 text-sm text-white transition-colors hover:opacity-90 dark:text-surface"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 删除工作区走统一确认（useConfirm），与删除会话、移除技能源同一基准线 */}
+      {confirmDialog}
 
       {sideEffectPrompt && (
         <ConfirmDialog

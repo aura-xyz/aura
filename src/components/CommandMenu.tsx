@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { CommandItem } from "../lib/commandItems";
+import MenuPopup from "./MenuPopup";
 
 /**
  * 统一的鼠标可点命令面板。键盘上下/回车由输入框统一处理，
@@ -13,6 +14,7 @@ export default function CommandMenu({
   onPick,
   header,
   hint,
+  emptyText,
 }: {
   title: string;
   items: CommandItem[];
@@ -21,15 +23,19 @@ export default function CommandMenu({
   onPick: (item: CommandItem) => void;
   header?: ReactNode;
   hint?: string;
+  /** 空面板的说明：模型/技能这类数据源为空时不能只说「没有匹配的命令」 */
+  emptyText?: string;
 }) {
   return (
-    <div
-      role="listbox"
-      aria-label={title}
-      className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl max-h-72 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
+    <MenuPopup
+      label={title}
+      header={
+        <>
+          <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
+          {header}
+        </>
+      }
     >
-      <div className="px-3 py-1 text-[11px] text-subtle">{title}</div>
-      {header}
       {items.map((item, i) => (
         <button
           key={item.id}
@@ -52,9 +58,11 @@ export default function CommandMenu({
         </button>
       ))}
       {items.length === 0 && !header && (
-        <p className="px-3 py-2 text-[11px] text-subtle">没有匹配的命令</p>
+        <p className="px-3 py-2 text-[11px] text-subtle">
+          {emptyText ?? "没有匹配的命令"}
+        </p>
       )}
       {hint && <div className="border-t border-line px-3 py-1 text-[10px] text-subtle">{hint}</div>}
-    </div>
+    </MenuPopup>
   );
 }

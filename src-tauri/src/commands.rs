@@ -53,6 +53,9 @@ pub struct AppState {
     /// 清单下发的镜像前缀（v0.7.2-rc.2）。检查更新时拉一次，下载时复用，
     /// 避免同一次更新读两遍清单。
     pub update_mirrors: Mutex<Vec<String>>,
+    /// 命令审批的管理器（v0.8.0 C40）。挂在全局是必须的：
+    /// 决议来自另一条命令（`resolve_approval`），与等待方不在同一个栈上。
+    pub approvals: crate::agent::approval::ApprovalManager,
 }
 
 /// Windows 上 `canonicalize()` 会返回 `\\?\` 扩展前缀路径，若与
@@ -104,6 +107,16 @@ impl AppState {
             .ok()
             .flatten()
             .unwrap_or_default();
+        // 防休眠是「运行时」语义：上次开着，这次启动也要立刻生效，
+        // 不能等用户打开设置页才 apply。
+        let prevent_sleep = db::get_setting(&db, crate::power::SETTING_PREVENT_SLEEP)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("1");
+        if prevent_sleep {
+            crate::power::set_keep_awake(true);
+        }
         let mut config = load_config(&db);
         // 环境变量作为 OpenRouter API Key 兜底（仅当该供应商未填 key 且地址为 openrouter.ai）
         if let Some(env_key) = env_api_key {
@@ -125,6 +138,7 @@ impl AppState {
             db: Mutex::new(db),
             updater: Mutex::new(None),
             update_mirrors: Mutex::new(Vec::new()),
+            approvals: crate::agent::approval::ApprovalManager::new(),
         }
     }
 }
@@ -186,6 +200,15 @@ pub async fn send_message(
         return Err("请先为这个对话选择工作区目录".into());
     }
     let global_rules = state.global_rules.lock().map_err(lock_err)?.clone();
+    // 复位取消标志：上一轮的「停止」不该让这一轮的合法命令立刻被取消
+    crate::tools::exec::set_cancelled(false);
+
+    // 审批策略：会话覆盖 > 全局默认 > 代码默认（仅危险命令询问）。
+    // 每轮读一次，用户在设置里改了下一条命令即生效。
+    let approval_policy = {
+        let db = state.db.lock().map_err(lock_err)?;
+        resolve_approval_policy(&db, &session_id).0
+    };
 
     // 工具访问域：工作区 + 用户授权的额外目录（路径白名单）。
     // 白名单每轮读一次：用户在设置里改了授权，下一轮发送即生效。
@@ -266,6 +289,8 @@ pub async fn send_message(
                 }
             }),
             disabled_skills: &disabled_skills,
+            approvals: Some(&state.approvals),
+            approval_policy,
             persist_timeline: Some(&|entry: crate::timeline::TimelineEntry| {
                 // 时间线落库：每条一次写。
                 // 写失败不阻断对话——时间线是「锦上添花」，不能反过来
@@ -277,8 +302,11 @@ pub async fn send_message(
         };
         run_turn(&mut ctx, message).await
     };
-    if let Ok(db) = state.db.lock() {
-        let _ = db::save_history(&db, &session_id, &session.history, session.model_idx);
+    // 增量落库（v0.8.1 C49）：只写本轮新增/变化的那几条，
+    // 不再每轮重写整份历史（长会话下那是 O(n²) 的写放大）。
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        let _ = persist_agent_history(&db, &session_id, &session.history, session.model_idx);
     }
     // 释放执行权必须在保存历史之后，否则刚结束的流可能被紧随其后的
     // 新请求抢跑，而旧流还没落盘
@@ -297,7 +325,137 @@ pub async fn stop_message(
         return Ok(());
     }
     state.cancelled.store(true, Ordering::Relaxed);
+    // 工具层是纯函数，拿不到 AppState：另置一个全局标志，
+    // 让正在跑的命令连同子孙进程一起停下来（C44）
+    crate::tools::exec::set_cancelled(true);
+    // 正在等审批的请求必须一起否掉：否则 runner 会卡在 120 秒超时上，
+    // 用户看到的是「已经停了但还在转」。
+    let cancelled = state.approvals.cancel_session(&session_id);
+    if cancelled > 0 {
+        crate::update_log::log_event(
+            "approval",
+            &format!("stop_message cancelled {cancelled} pending approvals"),
+        );
+    }
     Ok(())
+}
+
+/// 当前密钥存储后端的状态（v0.8.1 C45/C47）。
+///
+/// 设置页据此显示「你的 Key 存在哪、强度如何」——降级档必须让用户知情。
+#[derive(serde::Serialize)]
+pub struct KeyStoreStatus {
+    /// 后端名（Windows DPAPI / 系统密钥环 / 应用内文件加密）
+    pub name: String,
+    /// 强度说明
+    pub strength: String,
+    /// 是否可用
+    pub available: bool,
+    /// 是否为**降级档**（弱于系统密钥环）
+    pub degraded: bool,
+}
+
+#[tauri::command]
+pub fn get_keystore_status() -> KeyStoreStatus {
+    let store = crate::secure_store::choose_store();
+    KeyStoreStatus {
+        name: store.name().to_string(),
+        strength: store.strength().to_string(),
+        available: store.available(),
+        degraded: store.kind() == crate::secure_store::StoreKind::File,
+    }
+}
+
+/// 审批策略的当前取值。
+///
+/// 返回 `scope` 是为了让界面能如实显示「这条是会话级设置」还是
+/// 「继承自全局」——两者混在一起显示，用户改完全局却看不到变化会以为坏了。
+#[derive(serde::Serialize)]
+pub struct ApprovalPolicyView {
+    pub policy: String,
+    pub label: String,
+    pub scope: String,
+}
+
+/// 解析当前会话生效的审批策略：会话覆盖 → 全局默认 → 代码默认。
+fn resolve_approval_policy(
+    db: &Connection,
+    session_id: &str,
+) -> (crate::agent::approval::Policy, &'static str) {
+    use crate::agent::approval::Policy;
+
+    let session_value = db::get_setting(db, &format!("approval_policy:{session_id}"))
+        .ok()
+        .flatten();
+    if let Some(raw) = session_value {
+        return (Policy::parse(&raw), "session");
+    }
+    let global = db::get_setting(db, "approval_policy").ok().flatten();
+    (
+        global
+            .map(|v| Policy::parse(&v))
+            .unwrap_or_else(Policy::default),
+        "global",
+    )
+}
+
+#[tauri::command]
+pub fn get_approval_policy(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<ApprovalPolicyView, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    let (policy, scope) = resolve_approval_policy(&db, &session_id);
+    Ok(ApprovalPolicyView {
+        policy: policy.as_str().to_string(),
+        label: policy.label().to_string(),
+        scope: scope.to_string(),
+    })
+}
+
+/// 设置审批策略。`session_id` 为空时写全局默认。
+#[tauri::command]
+pub fn set_approval_policy(
+    state: State<'_, AppState>,
+    policy: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    use crate::agent::approval::Policy;
+    let parsed = Policy::parse(&policy);
+    // 传进来的值必须是已知档位：写进库里一个拼错的字符串，读的时候会
+    // 静默回落默认档，用户以为设置生效了其实没有。
+    if parsed.as_str() != policy.trim() {
+        return Err(format!("未知的审批策略：{policy}"));
+    }
+    let key = match session_id.filter(|s| !s.is_empty()) {
+        Some(id) => format!("approval_policy:{id}"),
+        None => "approval_policy".to_string(),
+    };
+    let db = state.db.lock().map_err(lock_err)?;
+    db::set_setting(&db, &key, parsed.as_str()).map_err(|e| e.to_string())
+}
+
+/// 决议一次审批请求。
+///
+/// 返回 `false` 表示这个请求已经不在了（超时或已决议）——前端据此提示
+/// 「已超时」而不是假装点了有用。
+#[tauri::command]
+pub fn resolve_approval(
+    state: State<'_, AppState>,
+    id: String,
+    approved: bool,
+    remember: Option<bool>,
+) -> Result<bool, String> {
+    use crate::agent::approval::Decision;
+
+    let decision = if approved {
+        Decision::allow(remember.unwrap_or(false))
+    } else {
+        // 拒绝时不该记住：记住拒绝等于把这条规则永久拉黑，
+        // 而用户只是这次不想跑。
+        Decision::denied()
+    };
+    Ok(state.approvals.resolve(&id, decision))
 }
 
 #[tauri::command]
@@ -390,6 +548,10 @@ pub async fn truncate_history(
         let db = state.db.lock().map_err(lock_err)?;
         db::save_history(&db, &session_id, &session.history, session.model_idx)
             .map_err(|e| e.to_string())?;
+        // 增量表也要截断：否则 agent_history 里多出来的旧行会被
+        // 下次读取当成历史，模型看到已经「删掉」的对话。
+        db::truncate_agent_history(&db, &session_id, session.history.len())
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(TruncateResult {
@@ -397,6 +559,46 @@ pub async fn truncate_history(
         keep_user_messages: plan.keep_user_messages,
         clamped: plan.keep_user_messages < keep_through_user,
     })
+}
+
+/// **增量**落库 agent 历史（v0.8.1 C49）。
+///
+/// 库里已有的条数与内存长度对比后，只写差量：
+///
+/// - 库里比内存多 → 说明历史被截断过，以内存为准，重置后全量写；
+/// - 条数相同 → 最后一条可能被流式改写，覆盖它即可；
+/// - 库里更少 → 追加新增的几条，并把可能改写的最后一条覆盖掉。
+///
+/// `model_idx` 单独更新（它在 sessions 表上，与消息无关）。
+fn persist_agent_history(
+    db: &Connection,
+    session_id: &str,
+    history: &[Value],
+    model_idx: usize,
+) -> Result<(), String> {
+    let stored = db::count_agent_history(db, session_id).map_err(|e| e.to_string())?;
+    let len = history.len();
+
+    if stored > len {
+        db::truncate_agent_history(db, session_id, 0).map_err(|e| e.to_string())?;
+        db::append_history(db, session_id, 0, history).map_err(|e| e.to_string())?;
+    } else if stored == len {
+        if let Some(last) = history.last() {
+            db::replace_last(db, session_id, len.saturating_sub(1), last)
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        if stored > 0 {
+            if let Some(entry) = history.get(stored - 1) {
+                db::replace_last(db, session_id, stored - 1, entry)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        db::append_history(db, session_id, stored, &history[stored..])
+            .map_err(|e| e.to_string())?;
+    }
+
+    db::set_model_index(db, session_id, model_idx).map_err(|e| e.to_string())
 }
 
 /// 侧作用检查结果（前端投影）。
@@ -439,6 +641,7 @@ pub struct SessionSnapshot {
     pub id: String,
     pub title: String,
     pub workspace: String,
+    pub updated_at: i64,
     pub messages: Vec<Value>,
     pub todos: Vec<Todo>,
 }
@@ -453,6 +656,7 @@ pub fn load_sessions(state: State<'_, AppState>) -> Result<Vec<SessionSnapshot>,
             id: s.id,
             title: s.title,
             workspace: s.workspace,
+            updated_at: s.updated_at,
             messages: s.messages,
             todos: s.todos,
         })
@@ -490,7 +694,11 @@ pub fn save_session(
 }
 
 #[tauri::command]
-pub fn set_workspace(state: State<'_, AppState>, path: String) -> Result<String, String> {
+pub fn set_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
     let p = PathBuf::from(path.trim());
     let meta = std::fs::metadata(&p).map_err(|_| "路径不存在".to_string())?;
     if !meta.is_dir() {
@@ -502,7 +710,10 @@ pub fn set_workspace(state: State<'_, AppState>, path: String) -> Result<String,
         let db = state.db.lock().map_err(lock_err)?;
         let _ = db::set_setting(&db, "last_workspace", &normalized);
     }
-    *state.workspace.lock().map_err(lock_err)? = c;
+    *state.workspace.lock().map_err(lock_err)? = c.clone();
+    // C53：新工作区注册进资产协议范围，文件面板 / 附件的图片预览立即可用。
+    // 安全边界与 read_file_text 同源（AccessScope），不放大访问范围。
+    let _ = app.asset_protocol_scope().allow_directory(c, true);
     Ok(normalized)
 }
 
@@ -604,7 +815,34 @@ pub fn set_selected_model(state: State<'_, AppState>, id: String) -> Result<(), 
 #[derive(serde::Serialize)]
 pub struct ApiConfig {
     pub provider: String,
+    /// **掩码后的** Key（形如 `sk-***8f2a`），不是真 Key。
+    ///
+    /// v0.8.1 之前这里回传的是完整 Key：设置页一打开，密钥就进了前端
+    /// 的内存与任何一次调试导出。掩码后用户仍能认出「这是哪个 Key」，
+    /// 但拿不到它。
     pub api_key: String,
+    /// 是否已配置 Key（前端据此显示「已保存」而不是空输入框）。
+    pub has_key: bool,
+}
+
+/// 生成 Key 掩码：前 3 后 4，中间用 `***`。
+///
+/// 短 Key（≤ 8 位）只显示前 1 后 1——掩码比原 Key 还长就毫无意义，
+/// 而且会把完整 Key 拼出来。
+pub fn mask_key(key: &str) -> String {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 8 {
+        let head = chars.first().copied().unwrap_or('*');
+        let tail = chars.last().copied().unwrap_or('*');
+        return format!("{head}***{tail}");
+    }
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}***{tail}")
 }
 
 /// 返回全部供应商配置（设置页编辑用）。
@@ -758,6 +996,94 @@ pub async fn fetch_remote_models(
         return Err("请先填写 API Key".into());
     }
     exec.list_models().await.map_err(|e| e.to_string())
+}
+
+/// 一次性保存某供应商的模型目录与收藏（v0.8.0）。
+///
+/// `set_pinned` 只会给**已经存在于 cfg.models** 的条目打标记，不新增模型。
+/// 目录里刚勾选的远端模型必须先 merge_remote_models 写进配置，否则永远收藏不上。
+/// 旧实现用 refresh_provider_models 做这件事，但它走 executor_for 重新拉一次
+/// 远端，供应商未启用/未填 Key 时直接抛错，整条保存链就断了。
+///
+/// 这里直接复用设置页已经拉到、用户亲眼看到的 catalogList，不再联网，
+/// 也不依赖执行器；合并与收藏在同一个配置快照上完成，一次落盘。
+/// 系统集成设置的当前状态。autostart 以**系统实际状态**为准而不是本地缓存，
+/// 否则用户从系统设置里关掉后这里还会显示开着。
+#[derive(serde::Serialize)]
+pub struct SystemSettings {
+    pub prevent_sleep: bool,
+    pub autostart: bool,
+    /// 当前平台是否支持防休眠（Linux 无进程级电源抑制原语）
+    pub prevent_sleep_supported: bool,
+}
+
+#[tauri::command]
+pub fn get_system_settings(state: State<'_, AppState>) -> SystemSettings {
+    let db = state.db.lock();
+    let prevent_sleep = db
+        .ok()
+        .and_then(|conn| db::get_setting(&conn, crate::power::SETTING_PREVENT_SLEEP).ok())
+        .flatten()
+        .as_deref()
+        == Some("1");
+    SystemSettings {
+        prevent_sleep,
+        autostart: crate::power::autostart_enabled(),
+        prevent_sleep_supported: crate::power::keep_awake_supported(),
+    }
+}
+
+/// 一次性写入两个设置。任一步失败都不该留下「界面显示已开、实际没生效」：
+/// 先把能持久化的落库，再分别 apply，最后回读真实状态交给前端覆盖显示。
+#[tauri::command]
+pub fn set_system_settings(
+    state: State<'_, AppState>,
+    prevent_sleep: bool,
+    autostart: bool,
+) -> Result<SystemSettings, String> {
+    // 不支持的平台不能把「已开启」持久化下来，否则下次启动仍会尝试 apply，
+    // 界面也会显示一个实际上没生效的开关。
+    let effective_sleep = prevent_sleep && crate::power::keep_awake_supported();
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::set_setting(
+            &db,
+            crate::power::SETTING_PREVENT_SLEEP,
+            if effective_sleep { "1" } else { "0" },
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    crate::power::set_autostart(autostart)?;
+    crate::power::set_keep_awake(effective_sleep);
+    Ok(get_system_settings(state))
+}
+
+#[tauri::command]
+pub fn save_provider_catalog(
+    state: State<'_, AppState>,
+    provider: String,
+    remote: Vec<crate::api::RemoteModel>,
+    keys: Vec<String>,
+) -> Result<usize, String> {
+    let mut cfg = state.router.config();
+    let is_local = cfg
+        .providers
+        .iter()
+        .find(|p| p.id == provider)
+        .map(|p| p.kind.is_local())
+        .ok_or_else(|| format!("供应商不存在：{}", provider))?;
+    let tags: Vec<String> = if is_local {
+        vec!["local".to_string()]
+    } else {
+        Vec::new()
+    };
+    crate::api::config::merge_remote_models(&mut cfg, &provider, remote, &tags, false);
+    let count = crate::api::config::set_pinned(&mut cfg, &provider, &keys);
+    let cfg = normalize(cfg);
+    state.router.set_config(cfg.clone());
+    let db = state.db.lock().map_err(lock_err)?;
+    save_config(&db, &cfg)?;
+    Ok(count)
 }
 
 /// 设置某供应商的模型收藏：传入完整的已收藏模型 key 列表（幂等覆盖）。
@@ -1152,6 +1478,10 @@ pub struct DirEntryView {
     pub size: u64,
     /// 修改时间（Unix 毫秒，0 表示读不到）
     pub modified_ms: u64,
+    /// 绝对路径（不含 `\\?\` 扩展前缀，盘符用正斜杠）。
+    /// 图片预览走 asset protocol 时，前端据此拼 `asset://` URL 定位真实文件；
+    /// 与 `path`（工作区相对、用于后续 list/read）互为补充。
+    pub absolute_path: String,
 }
 
 /// 列出工作区里匹配的文件（`@` 引用面板用）。
@@ -1303,6 +1633,15 @@ pub fn list_directory(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        // 绝对路径：以已解析的目录绝对路径为基拼接文件名，再剥离 `\\?\`
+        // 扩展前缀、统一为正斜杠——前端拿来直接拼 `asset://localhost/<此路径>`，
+        // 资产协议侧会自行 canonicalize 命中 scope，无需我们保留前缀。
+        let abs = target.join(&name);
+        let abs_str = abs.to_string_lossy().to_string();
+        let abs_str = abs_str
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&abs_str)
+            .replace('\\', "/");
         out.push(DirEntryView {
             name,
             // 工作区相对路径（前导 /）；工作区外的白名单目录才用盘符绝对路径。
@@ -1311,6 +1650,7 @@ pub fn list_directory(
             is_dir,
             size,
             modified_ms,
+            absolute_path: abs_str,
         });
     }
 
@@ -1448,6 +1788,7 @@ fn verify_allowlist_add(
 /// 添加白名单路径。
 #[tauri::command]
 pub fn add_allowlist_path(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     label: Option<String>,
@@ -1459,6 +1800,10 @@ pub fn add_allowlist_path(
         db::add_allowlist(&db, &addition.path, &addition.label, false)
             .map_err(|e| e.to_string())?;
     }
+    // C53：新白名单目录注册进资产协议范围（与 read_file_text 同一闸门）。
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(PathBuf::from(&addition.path), true);
     list_allowlist_paths(state)
 }
 
@@ -1676,7 +2021,21 @@ pub async fn install_market_skill(
         build_registry(&db)?
     };
     let entry = registry.resolve(&id).await?;
-    crate::market::install(&registry, &entry, &root, accept_risky, update).await
+    let result = crate::market::install(&registry, &entry, &root, accept_risky, update).await;
+    // 高风险安装只在**确实装了**之后记：审查阶段就放弃的安装不算事件，
+    // 否则用户每点一次「取消」都会在安全面板里多一条噪音。
+    if accept_risky {
+        if let Ok(summary) = &result {
+            crate::security::log_simple(
+                crate::security::Kind::RiskyInstall,
+                "",
+                &id,
+                &format!("用户确认后安装了高风险技能（{}）", summary.skill_name),
+                "install_risky",
+            );
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -1684,10 +2043,45 @@ pub fn get_api_config(state: State<'_, AppState>) -> ApiConfig {
     let cfg = state.router.config();
     // 取第一个启用的供应商，不再硬编码 OpenRouter
     let target = cfg.providers.iter().find(|p| p.enabled);
+    let key = target.map(|p| p.api_key.clone()).unwrap_or_default();
     ApiConfig {
         provider: target.map(|p| p.id.clone()).unwrap_or_default(),
-        api_key: target.map(|p| p.api_key.clone()).unwrap_or_default(),
+        api_key: mask_key(&key),
+        has_key: !key.trim().is_empty(),
     }
+}
+
+/// 清除某个供应商的 API Key（v0.8.1 C46）。
+///
+/// 单独一条命令，而不是靠 `set_api_config` 传空串——空串在旧语义里表示
+/// 「不变」，用户想删 Key 时分不清自己是没生效还是没触发。
+#[tauri::command]
+pub fn clear_provider_key(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<(), String> {
+    let target_id = {
+        let cfg = state.router.config();
+        cfg.providers
+            .iter()
+            .find(|p| p.id == provider)
+            .map(|p| p.id.clone())
+            .ok_or_else(|| "供应商不存在".to_string())?
+    };
+    state.router.set_provider_key(&target_id, Some(String::new()));
+    let mut cfg = state.router.config();
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::api::config::save_config(&db, &cfg)?;
+    }
+    crate::security::log_simple(
+        crate::security::Kind::BlockedCommand,
+        "",
+        &target_id,
+        "用户清除了该供应商的 API Key",
+        "clear_provider_key",
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -1856,16 +2250,453 @@ pub fn export_session_bundle(
     })
 }
 
+/// 允许通过 `write_export_bundle` 落盘的扩展名。
+///
+/// 这条命令能把任意字节写到用户任选的路径，是绕开 plugin-fs 权限的
+/// **唯一出口**——不设白名单，前端就等于持有一个任意文件写入原语
+/// （写个 `.bat` 到启动目录即可持久化）。名单只收真实在用的导出格式：
+/// 会话日志 `.zip`、用量 `.csv`，以及计划内的 `.md`。
+const EXPORT_EXTENSIONS: &[&str] = &["zip", "csv", "md"];
+
+/// 最近的安全事件（v0.8.0 C42）。
+///
+/// 默认 100 条：够看清「刚才发生了什么」，又不会让设置页一次拉几十兆。
+#[tauri::command]
+pub fn security_list_events(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<db::SecurityEvent>, String> {
+    let limit = limit.unwrap_or(100).clamp(1, 5000);
+    let db = state.db.lock().map_err(lock_err)?;
+    db::list_security_events(&db, limit).map_err(|e| e.to_string())
+}
+
+/// 导出全部安全事件为 CSV。
+///
+/// 走 [`write_export_bundle`] 同一条落盘通道，因此**自动继承**扩展名白名单
+/// 与系统目录拦截（C36）——安全导出不能成为绕过安全校验的后门。
+#[tauri::command]
+pub fn security_export_events(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<usize, String> {
+    let events = {
+        let db = state.db.lock().map_err(lock_err)?;
+        db::list_security_events(&db, 10_000).map_err(|e| e.to_string())?
+    };
+    let csv = crate::security::events::to_csv(&events);
+    write_export_bundle(path, csv.into_bytes())?;
+    Ok(events.len())
+}
+
 /// 前端打包好 zip 后由后端落盘，绕开 plugin-fs 对任意保存路径的权限限制。
+///
+/// 落盘前两道闸（v0.8.0 C36）：
+/// 1. **扩展名白名单**——只写导出文件，不写可执行/脚本；
+/// 2. **路径复用 `paths::classify` 的硬拒档**——系统目录（Windows、
+///    Program Files）与密钥目录（`.ssh`、`.aws`）一律不写。
+///    警告档（桌面、下载）放行：那正是用户主动选保存位置的地方，
+///    在这里再拦一次只会让正常导出失败。
 #[tauri::command]
 pub fn write_export_bundle(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{e}"))
+    let p = PathBuf::from(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext.is_empty() {
+        return Err(format!("导出路径缺少扩展名：{path}"));
+    }
+    if !EXPORT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!(
+            "不支持导出为 .{ext}，仅允许 {}：{path}",
+            EXPORT_EXTENSIONS.join(" / ")
+        ));
+    }
+    if let crate::paths::Verdict::Reject { reason } = crate::paths::classify(&p) {
+        return Err(format!("拒绝写入：{reason}"));
+    }
+    std::fs::write(&p, &bytes).map_err(|e| format!("写入失败：{e}"))
+}
+
+// ── MCP 命令面（v0.8.0 rc.3 C64）──────────────────────────────
+//
+// 八条命令与既有风格对齐：`State<'_, AppState>` 注入、返回 `Result<_, String>`。
+// 注意：命令参数由 Tauri 按 camelCase 匹配（与 `sessionId` 一致），
+// 返回结构字段保持 snake_case（与本文件其它 struct 一致，前端按同名读）。
+
+/// 服务器卡片视图。
+#[derive(serde::Serialize)]
+pub struct McpServerView {
+    pub id: i64,
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub enabled: bool,
+    /// running / connecting / down / disabled
+    pub status: String,
+    pub status_reason: Option<String>,
+    pub tool_count: usize,
+    pub workspaces: Vec<String>,
+}
+
+/// 单个工具（详情展示用）。
+#[derive(serde::Serialize)]
+pub struct McpToolItem {
+    /// 服务器原始名（调用时用）
+    pub name: String,
+    /// 对外改写名（模型可见、可能与原名不同）
+    pub external_name: String,
+    pub description: String,
+    pub schema: Option<String>,
+}
+
+/// 单服务器状态详情（含 stderr 尾部、工具数与工具清单）。
+#[derive(serde::Serialize)]
+pub struct McpStatusView {
+    pub status: String,
+    pub reason: Option<String>,
+    pub stderr: Vec<String>,
+    pub tool_count: usize,
+    pub tools: Vec<McpToolItem>,
+}
+
+/// 添加前的连通性试跑结果（不落库）。
+#[derive(serde::Serialize)]
+pub struct McpTestResult {
+    pub ok: bool,
+    pub tool_count: usize,
+    pub error: Option<String>,
+    pub stderr: Vec<String>,
+}
+
+/// 状态 → (标签, 原因)。未连接时按 enabled 给出 down/disabled。
+fn mcp_status_parts(
+    status: Option<crate::mcp::ConnStatus>,
+    enabled: bool,
+) -> (String, Option<String>) {
+    match status {
+        Some(crate::mcp::ConnStatus::Down { reason }) => ("down".to_string(), Some(reason)),
+        Some(other) => (other.label().to_string(), None),
+        None if enabled => ("down".to_string(), Some("未连接".to_string())),
+        None => ("disabled".to_string(), None),
+    }
+}
+
+async fn mcp_view(cfg: &crate::mcp::McpServerConfig) -> McpServerView {
+    let conn = crate::mcp::manager().get(cfg.id).await;
+    let (status, status_reason) = match &conn {
+        Some(c) => mcp_status_parts(Some(c.status().await), cfg.enabled),
+        None => mcp_status_parts(None, cfg.enabled),
+    };
+    let tool_count = match &conn {
+        Some(c) => c.tools().await.len(),
+        None => 0,
+    };
+    McpServerView {
+        id: cfg.id,
+        name: cfg.name.clone(),
+        command: cfg.command.clone(),
+        args: cfg.args.clone(),
+        enabled: cfg.enabled,
+        status,
+        status_reason,
+        tool_count,
+        workspaces: cfg.workspaces.clone(),
+    }
+}
+
+fn mcp_cwd(state: &State<'_, AppState>) -> Option<std::path::PathBuf> {
+    state.workspace.lock().ok().map(|p| p.clone())
+}
+
+/// 列出全部服务器（含实时状态与工具数）。
+#[tauri::command]
+pub async fn mcp_list_servers(
+    state: State<'_, AppState>,
+) -> Result<Vec<McpServerView>, String> {
+    let list = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::list(&db)?
+    };
+    let mut out = Vec::with_capacity(list.len());
+    for cfg in &list {
+        out.push(mcp_view(cfg).await);
+    }
+    Ok(out)
+}
+
+/// 新增服务器：先静态审查命令，再落库并尝试连接。
+#[tauri::command]
+pub async fn mcp_add_server(
+    state: State<'_, AppState>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    workspaces: Vec<String>,
+) -> Result<McpServerView, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true)?
+    };
+    let cwd = mcp_cwd(&state);
+    if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
+        crate::mcp::emit(
+            "mcp:status",
+            serde_json::json!({ "serverId": cfg.id, "status": { "kind": "down", "reason": e } }),
+        );
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 更新服务器配置（运行中的先断开再按新配置重连）。
+#[tauri::command]
+pub async fn mcp_update_server(
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    workspaces: Vec<String>,
+) -> Result<McpServerView, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        // 环境变量里常含凭据，前端不回读明文；编辑时若表单留空则保留原值，
+        // 避免「只想改个参数却把 token 清掉」。
+        let env = if env.is_empty() {
+            crate::mcp::config::get(&db, id)?
+                .map(|c| c.env)
+                .unwrap_or_default()
+        } else {
+            env
+        };
+        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces)?
+    };
+    crate::mcp::disconnect_server(id).await;
+    if cfg.enabled {
+        let cwd = mcp_cwd(&state);
+        let _ = crate::mcp::connect_server(&cfg, cwd).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 删除服务器（先断连再删行）。
+#[tauri::command]
+pub async fn mcp_remove_server(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    crate::mcp::disconnect_server(id).await;
+    let db = state.db.lock().map_err(lock_err)?;
+    crate::mcp::config::remove(&db, id)
+}
+
+/// 启用即连接，关闭即断开。
+#[tauri::command]
+pub async fn mcp_set_server_enabled(
+    state: State<'_, AppState>,
+    id: i64,
+    enabled: bool,
+) -> Result<McpServerView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::set_enabled(&db, id, enabled)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    if enabled {
+        let cwd = mcp_cwd(&state);
+        if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
+            crate::mcp::emit(
+                "mcp:status",
+                serde_json::json!({ "serverId": id, "status": { "kind": "down", "reason": e } }),
+            );
+        }
+    } else {
+        crate::mcp::disconnect_server(id).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 单服务器状态：状态 + stderr 尾部 + 工具数（排错主通道）。
+#[tauri::command]
+pub async fn mcp_server_status(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpStatusView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    let conn = crate::mcp::manager().get(id).await;
+    match conn {
+        Some(c) => {
+            let (status, reason) = mcp_status_parts(Some(c.status().await), cfg.enabled);
+            let defs = c.tools().await;
+            let mapping = crate::tools::registry::mcp_snapshot();
+            let tools = defs
+                .into_iter()
+                .map(|t| {
+                    let external_name = mapping
+                        .iter()
+                        .find(|(_, server, original)| server == &cfg.name && original == &t.name)
+                        .map(|(ext, _, _)| ext.clone())
+                        .unwrap_or_else(|| t.name.clone());
+                    McpToolItem {
+                        name: t.name,
+                        external_name,
+                        description: t.description,
+                        schema: if t.input_schema.is_null() {
+                            None
+                        } else {
+                            Some(t.input_schema.to_string())
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(McpStatusView {
+                status,
+                reason,
+                stderr: c.stderr_tail(),
+                tool_count: tools.len(),
+                tools,
+            })
+        }
+        None => {
+            let (status, reason) = mcp_status_parts(None, cfg.enabled);
+            Ok(McpStatusView {
+                status,
+                reason,
+                stderr: Vec::new(),
+                tool_count: 0,
+                tools: Vec::new(),
+            })
+        }
+    }
+}
+
+/// 手动重扫工具列表。
+#[tauri::command]
+pub async fn mcp_rescan_tools(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpServerView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    if let Some(conn) = crate::mcp::manager().get(id).await {
+        conn.refresh_tools()
+            .await
+            .map_err(|e| format!("刷新工具列表失败：{e}"))?;
+        crate::tools::registry::sync_mcp_tools(None).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 添加前试连：不落库，只验证握手并返回工具数。
+#[tauri::command]
+pub async fn mcp_test_connect(
+    state: State<'_, AppState>,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+) -> Result<McpTestResult, String> {
+    if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
+        crate::security::log_simple(
+            crate::security::Kind::RiskyInstall,
+            "",
+            &command,
+            &warning,
+            "",
+        );
+    }
+    let cwd = mcp_cwd(&state);
+    match crate::mcp::client::connect(-1, name, command, args, env, Vec::new(), cwd).await {
+        Ok(conn) => {
+            let result = McpTestResult {
+                ok: true,
+                tool_count: conn.tools().await.len(),
+                error: None,
+                stderr: conn.stderr_tail(),
+            };
+            conn.shutdown().await;
+            Ok(result)
+        }
+        Err(e) => Ok(McpTestResult {
+            ok: false,
+            tool_count: 0,
+            error: Some(e),
+            stderr: Vec::new(),
+        }),
+    }
+}
+
+// ── 自定义技能源镜像（v0.8.0）────────────────────────────────
+
+/// 读取自定义镜像前缀（空串 = 直连）。
+#[tauri::command]
+pub fn get_skill_mirror(state: State<'_, AppState>) -> Result<String, String> {
+    let db = state.db.lock().map_err(lock_err)?;
+    Ok(crate::db::get_setting(&db, crate::mirrors::SETTING_KEY)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default())
+}
+
+/// 设置自定义镜像前缀。仅作用于**自定义 skill 源**的下载，
+/// 不接管用户本人的浏览，也不改变官方源使用的内置 7 家镜像。
+#[tauri::command]
+pub fn set_skill_mirror(state: State<'_, AppState>, prefix: String) -> Result<(), String> {
+    let p = prefix.trim().to_string();
+    if !p.is_empty() && !p.starts_with("https://") {
+        return Err("自定义镜像必须是 https:// 开头的地址".into());
+    }
+    {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::db::set_setting(&db, crate::mirrors::SETTING_KEY, &p)
+            .map_err(|e| e.to_string())?;
+    }
+    crate::mirrors::set_custom_prefix(if p.is_empty() { None } else { Some(p) });
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// 掩码：只露头尾，不能反推出完整 Key。
+    #[test]
+    fn mask_key_hides_the_middle() {
+        assert_eq!(mask_key("sk-or-v1-0123456789abcdef"), "sk-***cdef");
+        assert_eq!(mask_key(""), "");
+        assert_eq!(mask_key("   "), "");
+        // 短 Key 不该被拼出全文
+        let short = mask_key("abc");
+        assert!(short.contains("***"));
+        assert!(!short.contains("abc"), "短 Key 掩码不能还原原文: {short}");
+    }
 
     /// 停止操作的归属判定：只有正在跑的那个会话才能停掉它。
     ///
@@ -1884,6 +2715,7 @@ mod tests {
             db: Mutex::new(db::open(Path::new(":memory:")).unwrap()),
             updater: Mutex::new(None),
             update_mirrors: Mutex::new(Vec::new()),
+            approvals: crate::agent::approval::ApprovalManager::new(),
         };
 
         // 别的会话发起停止：忽略
@@ -2045,6 +2877,51 @@ mod tests {
         let section = crate::agent::runner::render_goal_section("  写完报告  ");
         assert!(section.contains("写完报告"));
         assert!(section.contains("持续推进"), "目标必须明确要求跨轮推进");
+    }
+
+    /// 导出通道只写导出格式：可执行与脚本一律拒绝。
+    /// 没有这道闸，前端等于握着一个任意文件写入原语。
+    #[test]
+    fn export_rejects_executable_and_script_extensions() {
+        for path in [
+            "C:/Users/x/aura-export.exe",
+            "C:/Users/x/aura-export.bat",
+            "C:/Users/x/aura-export.ps1",
+            "C:/Users/x/aura-export.dll",
+            "C:/Users/x/no-ext",
+        ] {
+            let err = write_export_bundle(path.into(), vec![0]).unwrap_err();
+            assert!(
+                err.contains("扩展名") || err.contains("不支持"),
+                "{path} 应被扩展名拦下，实际：{err}"
+            );
+        }
+    }
+
+    /// 系统目录与密钥目录一律不写，即便扩展名合法。
+    #[test]
+    fn export_rejects_system_and_key_directories() {
+        for path in [
+            "C:/Windows/System32/evil.zip",
+            "C:/Program Files/aura/evil.zip",
+            "C:/Users/x/.ssh/known.zip",
+            "C:/Users/x/.aws/cred.zip",
+        ] {
+            let err = write_export_bundle(path.into(), vec![0]).unwrap_err();
+            assert!(err.contains("拒绝写入"), "{path} 应被拒，实际：{err}");
+        }
+    }
+
+    /// 正常导出路径必须能写：白名单是「收紧」，不是「挡住功能」。
+    #[test]
+    fn export_writes_allowed_extension_to_normal_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("aura-export-gate.zip");
+        let _ = std::fs::remove_file(&path);
+        write_export_bundle(path.to_string_lossy().into(), b"PK\x03\x04".to_vec())
+            .expect("临时目录下的 zip 导出应当成功");
+        assert_eq!(std::fs::read(&path).unwrap(), b"PK\x03\x04");
+        let _ = std::fs::remove_file(&path);
     }
 
 }

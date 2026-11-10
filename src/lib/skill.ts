@@ -81,6 +81,22 @@ export function filterMarket<T extends MarketSkillView>(items: T[], query: strin
   );
 }
 
+/**
+ * 本地技能列表的筛选：匹配名称与说明。
+ *
+ * 与 `filterMarket` 同一取向——空查询返回原列表、顺序不变。
+ * 不含目录路径：路径是内部细节，用户是按名字和用途找技能的。
+ */
+export function filterSkills<
+  T extends Pick<SkillView, "name" | "description">,
+>(skills: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return skills;
+  return skills.filter((s) =>
+    `${s.name}\n${s.description}`.toLowerCase().includes(q),
+  );
+}
+
 // ── 审查报告 ────────────────────────────────────────────────────
 
 export const SEVERITY_LABEL: Record<FindingSeverity, string> = {
@@ -158,4 +174,37 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * 来源标识色（技能卡首字块）。
+ *
+ * 内置蓝 / 市场紫 / 本地与工作区绿——用户扫一眼就知道这条技能从哪来。
+ * 全部只用于 10% tint 底色，不参与文字对比度门禁。
+ */
+export const SOURCE_TINT: Record<SkillView["source"], string> = {
+  builtin: "bg-brand/10 text-brand",
+  market: "bg-skill-market/10 text-skill-market",
+  local: "bg-success/10 text-success",
+  workspace: "bg-success/10 text-success",
+};
+
+/** 技能名首字：按码点取，中文与 emoji 都不会被切坏。 */
+export function skillInitial(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  return Array.from(trimmed)[0].toUpperCase();
+}
+
+/**
+ * 标签 chips：超过上限折叠成「+N」。
+ *
+ * 卡片的第三行只留一行高，标签再多也只会把卡片撑高、让双列网格错位。
+ */
+export function tagChips(
+  tags: string[],
+  max = 3,
+): { shown: string[]; rest: number } {
+  if (tags.length <= max) return { shown: tags, rest: 0 };
+  return { shown: tags.slice(0, max), rest: tags.length - max };
 }

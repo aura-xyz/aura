@@ -166,4 +166,37 @@ describe("右侧时间线的轮次锚点", () => {
     const anchors = Array.from(container.querySelectorAll("[data-turn]"));
     expect(anchors.map((a) => a.getAttribute("data-turn"))).toEqual(["1", "2"]);
   });
+
+  /// C13：离屏消息加 content-visibility 省布局，但正在流式写入的最后一条
+  /// 不能挂——每次追加都会触发重排，占位高度还会跳。
+  it("历史消息标记为离屏渲染，最后一条流式消息不标记", async () => {
+    vi.doMock("./Markdown", () => ({
+      default: ({ content }: { content: string }) => <div>{content}</div>,
+    }));
+    const messages = [
+      msg("m1", "第一条回答"),
+      msg("m2", "第二条回答"),
+      msg("m3", "正在生成"),
+    ];
+    const store = {
+      get activeSession() {
+        return { messages };
+      },
+      get busy() {
+        return true;
+      },
+      resendFrom: vi.fn(),
+      switchMessageVersion: vi.fn(),
+      beginEdit: vi.fn(),
+    };
+    vi.doMock("../store", () => ({ useStore: () => store }));
+
+    const { default: MessageList } = await import("./MessageList");
+    const { container } = render(<MessageList />);
+
+    expect(container.querySelectorAll(".aura-msg-virtual")).toHaveLength(2);
+    const wrappers = Array.from(container.querySelectorAll(".group"));
+    expect(wrappers[0].className).toContain("aura-msg-virtual");
+    expect(wrappers[wrappers.length - 1].className).not.toContain("aura-msg-virtual");
+  });
 });

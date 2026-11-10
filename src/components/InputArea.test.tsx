@@ -170,21 +170,16 @@ describe("InputArea", () => {
     expect(screen.getByRole("textbox")).toHaveValue("abc");
   });
 
-  /// 令牌计数口径必须与后端一致（lib/tokens.ts 抄的是 context.rs 的实现），
-  /// 两处数字对不上会让用户以为估算坏了。
-  it("有内容时显示 token 计数，空输入框不显示", async () => {
+  /// C25：前端估算是按字符折算的，与计费口径无关，显示得像精确值反而误导。
+  /// 真实用量由 TurnUsagePanel 用后端 usage 展示。
+  it("输入内容不再显示估算 token 数", async () => {
     mount({ sessionId: "s1" });
     expect(screen.queryByText(/tokens/)).toBeNull();
 
-    await userEvent.type(screen.getByRole("textbox"), "hello");
-    // hello：5 个非 CJK 字符 → 5/4=1 + 1 = 2
-    expect(screen.getByText("约 2 tokens")).toBeInTheDocument();
-  });
-
-  it("中文按每字 1 token 计", async () => {
-    mount({ sessionId: "s1" });
-    await userEvent.type(screen.getByRole("textbox"), "你好世界");
-    expect(screen.getByText("约 5 tokens")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox"), "hello 你好世界");
+    expect(screen.queryByText(/tokens/)).toBeNull();
+    // 统计行结构固定：右侧提示始终在，不会因为输入被挤走
+    expect(screen.getByText(/Ctrl\+Shift\+M 切模式/)).toBeInTheDocument();
   });
 });
 
@@ -290,13 +285,43 @@ describe("InputArea 的 @ / 触发", () => {
     expect(screen.getByLabelText("给模型设定一个长期目标")).toBeInTheDocument();
   });
 
-  it("焦点在输入框时 Tab 依次切换模式，不会把消息发出去", async () => {
+  /// C24：输入框不再劫持 Tab（WCAG 2.1.2 无键盘陷阱），
+  /// 焦点可以用 Tab 移出输入框，模式切换改由 App 的 Ctrl+Shift+M 负责。
+  it("Tab 不再切模式，也不会把消息发出去", async () => {
     const { props } = mount({ sessionId: "s1", mode: "chat" });
     const box = screen.getByRole("textbox");
     await userEvent.type(box, "hello{Tab}");
-    expect(props.onModeChange).toHaveBeenCalledWith("plan");
+    expect(props.onModeChange).not.toHaveBeenCalled();
     expect(props.onSend).not.toHaveBeenCalled();
     expect(box).toHaveValue("hello");
+  });
+
+  it("底部提示写明组合键，不再宣传 Tab 切模式", () => {
+    mount({ sessionId: "s1" });
+    expect(screen.getByText(/Ctrl\+Shift\+M 切模式/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tab 切模式/)).toBeNull();
+  });
+
+  /// 实测反馈「/model 没有正常触发模型选择列表」：收藏为空时二级面板
+  /// 一条都没有，看起来就像命令没生效。回退到全部模型后必须能列出来。
+  it("/model 在未收藏任何模型时仍列出可用模型", async () => {
+    mount({
+      sessionId: "s1",
+      models: [
+        {
+          key: "p:a",
+          id: "a",
+          label: "模型甲",
+          provider: "p",
+          provider_name: "厂商",
+          context_limit: 100,
+          pinned: false,
+        },
+      ],
+    });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/model");
+    expect(await screen.findByText("模型甲")).toBeInTheDocument();
   });
 
   it("/model 面板列已收藏模型，点选后清掉触发词", async () => {

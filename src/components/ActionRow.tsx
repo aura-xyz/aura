@@ -27,7 +27,7 @@ export function ActionRow({
   const inFlight = running === true && ok === undefined;
 
   return (
-    <div className="font-mono text-[13px] leading-relaxed">
+    <div className="-mx-1.5 rounded-tag px-1.5 py-0.5 font-mono text-[13px] leading-relaxed transition-colors hover:bg-bubble">
       <div className="flex items-start gap-2">
         {hasDetail ? (
           <button

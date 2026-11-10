@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
-import { searchSessions, type SearchableSession } from "../lib/search";
+import type { Session } from "../store";
+import { buildSearchable, searchSessions } from "../lib/search";
 
 /**
  * 会话搜索面板（v0.7.0，Ctrl+F 呼出）。
@@ -13,13 +14,18 @@ export default function SessionSearch({
   onClose,
   onOpenSession,
 }: {
-  sessions: SearchableSession[];
+  sessions: Session[];
   onClose: () => void;
   /** 点击结果：跳到该会话并定位到那条消息 */
   onOpenSession: (sessionId: string, messageIndex: number) => void;
 }) {
   const [query, setQuery] = useState("");
-  const hits = useMemo(() => searchSessions(sessions, query), [sessions, query]);
+  // 索引在这里才建：面板没打开（本组件未挂载）时一次都不算，
+  // 流式输出期间不再为「没人搜的搜索」付出全量文本重建。
+  const hits = useMemo(
+    () => searchSessions(buildSearchable(sessions), query),
+    [sessions, query],
+  );
 
   return (
     <div

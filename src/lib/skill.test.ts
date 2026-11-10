@@ -8,10 +8,14 @@ import {
   deleteBlockedReason,
   enabledCount,
   filterMarket,
+  filterSkills,
   formatBytes,
   groupFindings,
   groupSkills,
   permissionLines,
+  skillInitial,
+  SOURCE_TINT,
+  tagChips,
   SEVERITY_LABEL,
   SOURCE_LABEL,
   toolsLabel,
@@ -162,6 +166,34 @@ describe("filterMarket", () => {
   });
 });
 
+describe("filterSkills", () => {
+  const list = [BUILTIN, LOCAL, WORKSPACE, MARKET];
+
+  it("空查询原样返回（同一个引用）", () => {
+    expect(filterSkills(list, "")).toBe(list);
+    expect(filterSkills(list, "  ")).toBe(list);
+  });
+
+  it("按名称与说明命中，大小写不敏感", () => {
+    expect(filterSkills(list, "HELPER").map((s) => s.name)).toEqual(["my-helper"]);
+    // 说明都是「说明」，命中全部；这里验证说明确实参与匹配
+    expect(filterSkills(list, "说明").map((s) => s.name)).toEqual([
+      "code-explainer",
+      "my-helper",
+      "ws-skill",
+      "market-skill",
+    ]);
+  });
+
+  it("不匹配目录路径这类内部细节", () => {
+    expect(filterSkills(list, "E:/skills")).toEqual([]);
+  });
+
+  it("无匹配返回空数组", () => {
+    expect(filterSkills(list, "zzz")).toEqual([]);
+  });
+});
+
 describe("审查报告", () => {
   function finding(
     partial: Partial<AuditFinding> & Pick<AuditFinding, "severity" | "rule">,
@@ -262,5 +294,34 @@ describe("formatBytes", () => {
     expect(formatBytes(900)).toBe("900 B");
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+});
+
+describe("技能卡视觉工具", () => {
+  it("来源色按四类各给一档，四个 key 都在", () => {
+    const keys: SkillView["source"][] = ["builtin", "market", "local", "workspace"];
+    for (const k of keys) {
+      expect(SOURCE_TINT[k]).toMatch(/^bg-\S+ text-\S+$/);
+    }
+    // 内置蓝、市场紫、本地/工作区绿
+    expect(SOURCE_TINT.builtin).toContain("bg-brand/10");
+    expect(SOURCE_TINT.market).toContain("bg-skill-market/10");
+    expect(SOURCE_TINT.local).toContain("bg-success/10");
+    expect(SOURCE_TINT.workspace).toBe(SOURCE_TINT.local);
+  });
+
+  it("首字按码点取，空名给占位符", () => {
+    expect(skillInitial("mcp-builder")).toBe("M");
+    expect(skillInitial("文档整理")).toBe("文");
+    expect(skillInitial("  ")).toBe("?");
+  });
+
+  it("标签超过 3 个折叠成 +N", () => {
+    expect(tagChips(["a", "b"])).toEqual({ shown: ["a", "b"], rest: 0 });
+    expect(tagChips(["a", "b", "c"])).toEqual({ shown: ["a", "b", "c"], rest: 0 });
+    expect(tagChips(["a", "b", "c", "d", "e"])).toEqual({
+      shown: ["a", "b", "c"],
+      rest: 2,
+    });
   });
 });

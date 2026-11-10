@@ -1,45 +1,13 @@
 /**
  * 会话统计 pills（v0.8.0）。
  *
- * LLM 耗时由后端 usage 事件按会话累计后传入；工具耗时仍从 action 块取。
- * 两者分开显示，避免把「恒为 0 的 llmMs」和工具耗时混成一个数字。
+ * 统计口径全在 `lib/stats.ts`：这里只负责订阅当前会话并渲染，
+ * 计算按消息对象记忆，流式期间只重算正在写的那一条。
  */
 import { memo, useMemo } from "react";
 import { Activity, Clock } from "lucide-react";
-import { useStore, type ChatMessage, type Session } from "../store";
-
-interface WindowStats {
-  turns: number;
-  steps: number;
-  llmMs: number;
-  toolMs: number;
-}
-
-export function deriveStats(
-  messages: ChatMessage[],
-  llmMs = 0,
-): WindowStats {
-  const turns = messages.filter((m) => m.role === "user").length;
-  let steps = 0;
-  let toolMs = 0;
-  for (const m of messages) {
-    if (m.role !== "assistant") continue;
-    steps += 1;
-    for (const b of m.blocks) {
-      if (b.kind === "action" && b.durationMs !== undefined) {
-        toolMs += b.durationMs;
-      }
-    }
-  }
-  return { turns, steps, llmMs, toolMs };
-}
-
-export function formatDuration(ms: number): string {
-  const s = ms / 1_000;
-  if (s < 60) return `${Math.round(s * 10) / 10}s`;
-  const whole = Math.round(s);
-  return `${Math.floor(whole / 60)}m${whole % 60}s`;
-}
+import { useStore, type Session } from "../store";
+import { deriveStats, formatDuration } from "../lib/stats";
 
 export const StatsPills = memo(function StatsPills() {
   let activeSession: Session | undefined;

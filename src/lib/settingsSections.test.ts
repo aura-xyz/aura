@@ -5,9 +5,10 @@ import {
 } from "./settingsSections";
 
 describe("设置分区注册表", () => {
-  it("默认四个分区按 order 排列，外观在第一位", () => {
+  it("默认分区按 order 排列，外观在第一位", () => {
     const ids = settingsSections().map((s) => s.id);
-    expect(ids).toEqual(["appearance", "model", "general", "about"]);
+    // 安全分区（v0.8.0 C43）插在通用与关于之间
+    expect(ids).toEqual(["appearance", "model", "general", "security", "about"]);
   });
 
   it("新增分区按 order 插队，卸载后列表恢复", () => {
@@ -17,6 +18,7 @@ describe("设置分区注册表", () => {
       "model",
       "plugins",
       "general",
+      "security",
       "about",
     ]);
     dispose();

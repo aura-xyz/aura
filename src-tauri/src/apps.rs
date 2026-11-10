@@ -230,15 +230,30 @@ fn find_exe_in_roots(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Linux 常见编辑器：(可执行文件名, 前端 id, 显示名)。
+///
+/// id 必须与 Windows 侧保持一致（如 `code` → `vscode`）——前端图标表按 id 取图，
+/// 之前在 Linux 上 id 直接用可执行文件名 `code`，图标表查不到，退成了资源管理器图标。
+#[cfg(target_os = "linux")]
+const LINUX_EDITORS: &[(&str, &str, &str)] = &[
+    ("code", "vscode", "VS Code"),
+    ("code-oss", "vscode-oss", "VS Code (OSS)"),
+    ("subl", "sublime", "Sublime Text"),
+    ("atom", "atom", "Atom"),
+    ("gedit", "gedit", "gedit"),
+    ("kate", "kate", "Kate"),
+    ("mousepad", "mousepad", "Mousepad"),
+];
+
 /// Linux 下用给定根做检测：探测常见桌面编辑器可执行文件。
 #[cfg(target_os = "linux")]
 fn detect_in(roots: &[PathBuf]) -> Vec<OpenApp> {
     let mut apps = Vec::new();
-    for exe in ["code", "code-oss", "subl", "atom", "gedit", "kate", "mousepad"] {
+    for &(exe, id, name) in LINUX_EDITORS {
         if let Some(path) = find_exe_in_roots(roots, exe) {
             apps.push(OpenApp {
-                id: exe.to_string(),
-                name: exe.to_string(),
+                id: id.to_string(),
+                name: name.to_string(),
                 exe: path,
             });
         }
@@ -449,8 +464,9 @@ mod tests {
 
         let apps = detect_in(&[root.clone()]);
         let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
-        assert!(ids.contains(&"code"), "应识别 VS Code：{ids:?}");
-        assert!(!ids.contains(&"subl"), "未安装的产品不能出现：{ids:?}");
+        // id 统一为 vscode（与 Windows 对齐），前端图标表才取得到 VS Code 图标。
+        assert!(ids.contains(&"vscode"), "应识别 VS Code：{ids:?}");
+        assert!(!ids.contains(&"sublime"), "未安装的产品不能出现：{ids:?}");
 
         let _ = fs::remove_dir_all(&root);
     }

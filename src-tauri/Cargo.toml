@@ -1,6 +1,6 @@
 [package]
 name = "aura"
-version = "0.7.2-rc.2"
+version = "0.8.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -19,7 +19,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # tray-icon: v0.7.0 的系统托盘（常驻后台、关闭按钮只隐藏到托盘）
-tauri = { version = "2", features = ["tray-icon"] }
+# protocol-asset: C53 资产协议运行时 scope 注册（图片预览走 asset://）
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -36,7 +37,7 @@ reqwest = { version = "0.13.5", features = ["stream", "json", "native-tls"] }
 futures-util = "0.3.34"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 bytes = "1.12.1"
-tokio = { version = "1.53.2", features = ["sync", "macros", "time", "rt", "rt-multi-thread", "process"] }
+tokio = { version = "1.53.2", features = ["sync", "macros", "time", "rt", "rt-multi-thread", "process", "io-util"] }
 # cmd 输出解码：中文 Windows 的 cmd 默认按 GBK(936) 输出，UTF-8 解码会得到乱码
 encoding_rs = "0.8"
 tauri-plugin-dialog = "2.8.1"
@@ -65,11 +66,23 @@ async-trait = "0.1.92"
 # 0.22.1 已在 Tauri 的依赖树中，声明为直接依赖不会新增编译。
 base64 = "0.22"
 tauri-plugin-notification = "2.7.0"
+# 平台判定（Q4）：Windows / macOS / Linux 三态，前端用它决定窗口按钮布局
+tauri-plugin-os = "2"
 # url：构造 updater 的下载地址（Update::download_url 是 url::Url）。
 # 0.2.1 已在依赖树中（updater 插件带入），声明为直接依赖不增加编译量。
 url = "2"
 # Linux 上 API Key 加密使用 SecretService（keyring crate）。Windows 保留 DPAPI。
 keyring = "1"
+# 降级档：Linux 上没有 SecretService 时，用 AES-256-GCM 加密整份配置，
+# 主密钥随机生成并以 0600 权限存在应用数据目录。
+aes-gcm = "0.10"
+getrandom = "0.2"
+portable-pty = "0.9.0"
+
+# Unix 下按进程组整树终结（proc_group.rs）：killpg 需要 libc。
+# Windows 走 Job Object + taskkill，不需要这个依赖。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # 发布校验工具用：验安装包的 minisign 签名（examples/verify_sig.rs）。

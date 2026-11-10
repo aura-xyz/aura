@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTodos } from "../lib/todo";
 
@@ -13,7 +12,7 @@ beforeEach(() => {
  * RightPanel 依赖 store，这里 mock 掉 useStore 而不是渲染真实 Provider。
  * 真实 Provider 会拉起 Tauri 的 invoke/listen，在单测里没有意义。
  */
-async function mount({ todos, mode }: { todos: unknown[]; mode: string }) {
+async function mount(todos: unknown[]) {
   const store = {
     sessions: [
       {
@@ -25,7 +24,6 @@ async function mount({ todos, mode }: { todos: unknown[]; mode: string }) {
       },
     ],
     activeId: "s1",
-    mode,
     deleteTodoStep: vi.fn(),
     addTodoStep: vi.fn(),
     setTodoStatus: vi.fn(),
@@ -35,69 +33,41 @@ async function mount({ todos, mode }: { todos: unknown[]; mode: string }) {
   return render(<RightPanel />);
 }
 
-describe("RightPanel", () => {
-  it("有清单且处于执行模式时显示", async () => {
-    await mount({ todos: [{ id: "s1", title: "建表" }], mode: "build" });
+describe("右栏任务面板内容体", () => {
+  it("有清单时直接展示清单，不再受 chat 模式限制", async () => {
+    await mount([{ id: "s1", title: "建表" }]);
     expect(screen.getByText("建表")).toBeInTheDocument();
   });
 
-  it("规划模式下同样显示", async () => {
-    await mount({ todos: [{ id: "s1", title: "调研" }], mode: "plan" });
-    expect(screen.getByText("调研")).toBeInTheDocument();
-  });
-
-  /// 对话模式是纯问答，不涉及流程，**清单内容**不展示
-  it("对话模式下不展示清单内容", async () => {
-    await mount({ todos: [{ id: "s1", title: "不应出现" }], mode: "chat" });
-    expect(screen.queryByText("不应出现")).toBeNull();
-  });
-
-  /// v0.6.3 用户实测反馈「右侧边栏没有显示」。
-  /// 对话模式（最常见场景）下右侧整块消失＝用户以为应用没有右栏。
-  /// 现在右侧**始终**留一条窄轨道。
-  it("无清单时仍渲染窄轨道，不再整块消失", async () => {
-    await mount({ todos: [], mode: "build" });
-    expect(screen.getByRole("complementary", { name: "任务面板" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开任务面板" })).toBeInTheDocument();
-    expect(screen.getByText(/任务 0/)).toBeInTheDocument();
-  });
-
-  it("对话模式下同样保留窄轨道", async () => {
-    await mount({ todos: [], mode: "chat" });
-    expect(screen.getByRole("complementary", { name: "任务面板" })).toBeInTheDocument();
-  });
-
-  it("窄轨道可展开，无清单时给出空状态说明", async () => {
-    await mount({ todos: [], mode: "build" });
-    await userEvent.click(screen.getByRole("button", { name: "展开任务面板" }));
+  it("无清单时给出空状态说明", async () => {
+    await mount([]);
     expect(screen.getByText("当前会话没有任务清单")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起任务面板" })).toBeInTheDocument();
+    expect(screen.getByText(/切到 Plan \/ Build 模式/)).toBeInTheDocument();
   });
 
-  it("可收起为窄条，收起后仍能看到步骤数", async () => {
-    await mount({
-      todos: [
-        { id: "s1", title: "建表" },
-        { id: "s2", title: "写测试" },
-      ],
-      mode: "build",
-    });
-    await userEvent.click(screen.getByRole("button", { name: "收起任务面板" }));
-    expect(screen.queryByText("建表")).toBeNull();
-    expect(screen.getByRole("button", { name: "展开任务面板" })).toBeInTheDocument();
-    expect(screen.getByText(/任务 2/)).toBeInTheDocument();
+  /// 实测反馈：说明文字左对齐、且因为旧 aside 固定 w-64，在更宽的右栏里
+  /// 看起来整体偏左。改成 flex 居中 + w-full 后必须钉住这三个类。
+  it("空状态整块水平垂直居中，宽度跟随右栏", async () => {
+    const { container } = await mount([]);
+    const empty = container.querySelector('[aria-label="任务面板"]');
+    expect(empty).not.toBeNull();
+    for (const token of ["w-full", "items-center", "justify-center", "text-center"]) {
+      expect(empty?.className).toContain(token);
+    }
+    expect(empty?.className).not.toContain("w-64");
+    expect(empty?.className).not.toContain("border-l");
   });
 
-  it("收起态可再次展开", async () => {
-    await mount({ todos: [{ id: "s1", title: "建表" }], mode: "build" });
-    await userEvent.click(screen.getByRole("button", { name: "收起任务面板" }));
-    await userEvent.click(screen.getByRole("button", { name: "展开任务面板" }));
-    expect(screen.getByText("建表")).toBeInTheDocument();
-  });
-
-  it("折叠偏好持久化到 localStorage", async () => {
-    await mount({ todos: [{ id: "s1", title: "建表" }], mode: "build" });
-    await userEvent.click(screen.getByRole("button", { name: "收起任务面板" }));
-    expect(localStorage.getItem("aura-right-panel-collapsed")).toBe("1");
+  /// 实测反馈：右栏拖窄后露出旧侧边栏的 PanelRight 按钮与竖排「任务」文字。
+  /// 外壳已全部交给 App.tsx，这里不能再有 aside / 展开收起按钮 / 竖排标签。
+  it("不残留旧侧边栏外壳与按钮", async () => {
+    const { container } = await mount([]);
+    expect(container.querySelector("aside")).toBeNull();
+    expect(screen.queryByRole("button", { name: "展开任务面板" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "收起任务面板" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "任务面板" })).toBeNull();
+    expect(screen.queryByText(/任务 0/)).toBeNull();
+    expect(container.querySelector("[style*='vertical-rl']")).toBeNull();
+    expect(localStorage.getItem("aura-right-panel-collapsed")).toBeNull();
   });
 });

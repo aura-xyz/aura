@@ -6,9 +6,16 @@ pub mod commands;
 pub mod db;
 pub mod history;
 pub mod market;
+pub mod mcp;
+pub mod mirrors;
 pub mod paths;
+pub mod proc_group;
+pub mod power;
 pub mod providers;
 pub mod secure;
+pub mod secure_store;
+pub mod security;
+pub mod terminal;
 pub mod timeline;
 pub mod tools;
 pub mod update_log;
@@ -17,16 +24,26 @@ pub mod updater;
 use commands::{
     add_allowlist_path, add_skill_source, check_allowlist_path, delete_skill,
     export_timeline, fetch_remote_models, get_api_config, get_global_rules, get_models,
-    get_provider_statuses, get_providers, get_selected_model, get_workspace,
+    get_provider_statuses, get_providers, get_selected_model, get_system_settings,
+    get_workspace,
     inspect_market_skill, inspect_side_effects, install_market_skill, list_allowlist_paths, list_directory, list_market_providers,
     list_open_apps, list_workspace_files, open_in_app, read_file_text,
     get_session_goal, set_session_goal, export_session_bundle, write_export_bundle,
     list_market_skills, list_skill_sources, list_skills, list_timeline, load_sessions,
     pull_ollama_model, refresh_provider_models, remove_allowlist_path, remove_session,
     remove_skill_source, remove_workspace, save_session, save_todos, send_message,
-    set_api_config, set_global_rules, set_pinned_models, set_providers, set_selected_model,
-    notify, quit_app, set_skill_enabled, set_workspace, stop_message, truncate_history,
+    set_api_config, set_global_rules, set_pinned_models, save_provider_catalog,
+    set_providers, set_selected_model, set_system_settings,
+    notify, quit_app, set_skill_enabled, set_workspace, stop_message, resolve_approval, get_keystore_status, get_approval_policy, set_approval_policy,
+    clear_provider_key,
+    security_list_events, security_export_events, truncate_history,
+    mcp_list_servers, mcp_add_server, mcp_update_server, mcp_remove_server,
+    mcp_set_server_enabled, mcp_server_status, mcp_rescan_tools, mcp_test_connect,
+    get_skill_mirror, set_skill_mirror,
     AppState,
+};
+use terminal::{
+    list_shells, terminal_close, terminal_create, terminal_resize, terminal_write, TerminalManager,
 };
 use updater::{check_update, download_update};
 use tauri::Manager;
@@ -76,9 +93,15 @@ fn greet(name: &str) -> String {
 /// - 生产：自定义协议 `tauri://`，或 Windows 上的 `http://tauri.localhost`
 /// - 开发：`http://localhost:1420`（tauri.conf.json 的 devUrl）
 /// 其余一律视为外部链接，交系统浏览器打开并阻止导航。
+///
+/// **`file:` 不再放行（v0.8.0 C35）**。放行它等于把 WebView 变成任意本地
+/// 文件的渲染器：模型在回答里写一个 `[点我](file:///C:/Users/x/.ssh/id_rsa)`，
+/// 用户点一下就把密钥内容渲染进页面；`file://` 下的脚本还能读到同源目录。
+/// 本地文件统一走 opener（系统默认程序打开），拖动文件走 drag-drop 事件，
+/// 两条路都不经过 WebView 导航，功能没有损失。
 fn is_app_url(url: &tauri::Url) -> bool {
     match url.scheme() {
-        "tauri" | "file" => true,
+        "tauri" => true,
         "http" | "https" => {
             let host = url.host_str().unwrap_or("");
             host == "localhost"
@@ -107,6 +130,60 @@ mod nav_tests {
         assert!(!is_app_url(&"http://localhost.evil.com/".parse().unwrap()));
         assert!(!is_app_url(&"ftp://files.example.com/".parse().unwrap()));
     }
+
+    /// **本地文件必须交给系统程序打开，不能让 WebView 渲染**。
+    ///
+    /// 放行 `file:` 时，模型输出里的一个 `file:///C:/Users/x/.ssh/id_rsa`
+    /// 链接被点开就能把密钥内容画进页面；`file://` 页面里的脚本还能顺着
+    /// 同源规则读同目录的其它文件。
+    #[test]
+    fn rejects_file_scheme() {
+        assert!(!is_app_url(&"file:///C:/Users/x/.ssh/id_rsa".parse().unwrap()));
+        assert!(!is_app_url(&"file:///etc/passwd".parse().unwrap()));
+        assert!(!is_app_url(&"file://localhost/C:/Windows/win.ini".parse().unwrap()));
+    }
+
+    /// 自定义协议只认 `tauri:`，别给 `data:` / `blob:` / `javascript:` 开口子。
+    #[test]
+    fn rejects_other_schemes() {
+        for raw in [
+            "data:text/html,<script>alert(1)</script>",
+            "blob:https://example.com/abc",
+            "javascript:alert(1)",
+            "about:blank",
+        ] {
+            assert!(!is_app_url(&raw.parse().unwrap()), "应拦截: {raw}");
+        }
+    }
+}
+
+/// C53：把工作区与白名单目录注册进 Tauri asset protocol 范围。
+///
+/// 前端图片预览走 `asset://`，目录必须先在协议 scope 内才可被加载；
+/// 安全边界与 `read_file_text` 同一闸门（AccessScope：工作区 + 白名单），
+/// 绝不放大访问范围——只放行已经授权读写的目录，未存在的目录跳过。
+fn register_asset_scope(app: &tauri::AppHandle, db: &rusqlite::Connection) {
+    let scope = app.asset_protocol_scope();
+    // 注册时同时登记「原始路径」与「规范化路径」两种形态：
+    // 资产协议侧会把请求路径 canonicalize 成 `\\?\...` 形态再做 scope 匹配，
+    // 只登记一种会因前缀不一致而 403。两者都登记即可覆盖。
+    let register = |scope: &tauri::scope::fs::Scope, p: std::path::PathBuf| {
+        if !p.is_dir() {
+            return;
+        }
+        let _ = scope.allow_directory(p.clone(), true);
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            let _ = scope.allow_directory(c, true);
+        }
+    };
+    if let Ok(ws) = db::list_workspaces(db) {
+        for w in ws {
+            register(&scope, std::path::PathBuf::from(&w));
+        }
+    }
+    for p in crate::commands::allowlist_paths(db) {
+        register(&scope, p);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -126,6 +203,7 @@ pub fn run() {
         // v0.5.0：自动更新。update-check 需在 check 命令后调用以安装下载好的包，
         // relaunch 负责重启应用；perms 授予 updater 默认权限集
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let dir = app.path().app_data_dir()?;
@@ -180,7 +258,7 @@ pub fn run() {
             // 跟随。窗口为无边框，一旦跳到外部页面就会失去标题栏与关闭按钮，
             // 用户只能杀进程。即便前端漏掉 preventDefault，这里也能拦住。
             let handle = app.handle().clone();
-            let window = tauri::WebviewWindowBuilder::new(
+            let mut builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::default(),
@@ -198,8 +276,15 @@ pub fn run() {
                     .opener()
                     .open_url(url.to_string(), None::<&str>);
                 false
-            })
-            .build()?;
+            });
+            // Linux 的无边框窗口没有 DWM 那样的原生圆角，只能靠透明窗口 +
+            // 前端 CSS 圆角裁剪（见 index.css 的 html[data-platform="linux"]）。
+            // Windows / macOS 保持不透明：它们的圆角由系统负责，透明反而会丢阴影。
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder.transparent(true);
+            }
+            let window = builder.build()?;
 
             #[cfg(any(windows, target_os = "linux"))]
             {
@@ -267,7 +352,86 @@ pub fn run() {
                 }
             }
 
+            // 密钥存储降级档要在应用数据目录放主密钥（v0.8.1 C45）。
+            // 目录可能还不存在，顺手建出来。
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                crate::secure_store::set_data_dir(dir);
+            }
+
+            // v0.8.0 C53：把历史工作区与白名单目录注册进资产协议范围，
+            // 供文件面板 / 附件的图片预览走 asset:// 直接加载。
+            register_asset_scope(app.handle(), &db);
+
+            // 自定义技能源镜像：启动时从设置恢复，供 GitHub 技能源下载使用。
+            crate::mirrors::set_custom_prefix(
+                crate::db::get_setting(&db, crate::mirrors::SETTING_KEY)
+                    .ok()
+                    .flatten(),
+            );
+
             app.manage(AppState::new(api_key, db));
+
+            // 安全事件落库通道（v0.8.0 C42）。工具层是纯函数，拿不到
+            // AppState，所以在这里装一个全局 sink：它们只管调
+            // `security::log_simple`，落库失败静默——记录不能反过来
+            // 影响主流程。
+            {
+                use tauri::Manager;
+                let handle = app.handle().clone();
+                crate::security::events::install(move |e| {
+                    if let Some(state) = handle.try_state::<commands::AppState>() {
+                        if let Ok(db) = state.db.lock() {
+                            let _ = crate::db::add_security_event(
+                                &db,
+                                crate::security::events::now_ms(),
+                                e.session_id,
+                                e.kind.as_str(),
+                                e.subject,
+                                e.reason,
+                                e.rule_id,
+                            );
+                        }
+                    }
+                });
+            }
+            // rc.3 C64：MCP 连接状态 / 工具集变化推给前端；并在启动时
+            // 连接所有已启用的服务器（失败只推状态，不影响启动）。
+            {
+                use tauri::{Emitter, Manager};
+                let emit_handle = app.handle().clone();
+                crate::mcp::set_observer(Box::new(move |kind, payload| {
+                    let _ = emit_handle.emit(kind, payload);
+                }));
+
+                let boot_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let Some(state) = boot_handle.try_state::<commands::AppState>() else {
+                        return;
+                    };
+                    let servers = state
+                        .db
+                        .lock()
+                        .ok()
+                        .and_then(|c| crate::mcp::config::list(&c).ok())
+                        .unwrap_or_default();
+                    let cwd = state.workspace.lock().ok().map(|p| p.clone());
+                    for cfg in servers.into_iter().filter(|c| c.enabled) {
+                        if let Err(e) = crate::mcp::connect_server(&cfg, cwd.clone()).await {
+                            crate::mcp::emit(
+                                "mcp:status",
+                                serde_json::json!({
+                                    "serverId": cfg.id,
+                                    "status": { "kind": "down", "reason": e }
+                                }),
+                            );
+                        }
+                    }
+                });
+            }
+            // 终端会话表独立于 AppState：它的生命周期跟着窗口走，
+            // 与会话/工作区状态无关。
+            app.manage(TerminalManager::default());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -314,6 +478,12 @@ pub fn run() {
             greet,
             send_message,
             stop_message,
+            resolve_approval,
+            get_keystore_status,
+            security_list_events,
+            security_export_events,
+            get_approval_policy,
+            set_approval_policy,
             remove_session,
             truncate_history,
             inspect_side_effects,
@@ -333,12 +503,16 @@ pub fn run() {
             set_selected_model,
             get_api_config,
             set_api_config,
+            clear_provider_key,
             get_providers,
             set_providers,
             get_provider_statuses,
             refresh_provider_models,
             fetch_remote_models,
             set_pinned_models,
+            save_provider_catalog,
+            get_system_settings,
+            set_system_settings,
             pull_ollama_model,
             remove_workspace,
             list_skills,
@@ -365,10 +539,32 @@ pub fn run() {
             add_allowlist_path,
             remove_allowlist_path,
             list_timeline,
-            export_timeline
+            export_timeline,
+            mcp_list_servers,
+            mcp_add_server,
+            mcp_update_server,
+            mcp_remove_server,
+            mcp_set_server_enabled,
+            mcp_server_status,
+            mcp_rescan_tools,
+            mcp_test_connect,
+            get_skill_mirror,
+            set_skill_mirror,
+            list_shells,
+            terminal_create,
+            terminal_write,
+            terminal_resize,
+            terminal_close
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // rc.3：退出前优雅关闭全部 MCP 子进程（否则 npx 等会残留在
+            // 后台，用户下次启动看到多个同名进程）。
+            if matches!(event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(crate::mcp::shutdown_all());
+            }
+        });
 }
 
 #[cfg(test)]

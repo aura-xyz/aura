@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod context;
 pub mod keepawake;
 pub mod mode;

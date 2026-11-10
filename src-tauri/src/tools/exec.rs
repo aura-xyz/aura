@@ -23,6 +23,26 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{scope::AccessScope, ToolOutput};
+use crate::proc_group::Group;
+use crate::security::rules::{check_command, Action, RULES_VERSION};
+
+/// 全局取消标志（v0.8.1 C44）。
+///
+/// 与 `AppState::cancelled` 同为全局语义（同一时刻只跑一个流），
+/// 这里再存一份是因为工具层是纯函数：拿不到 AppState 就没法知道
+/// 用户按了「停止」。停止时置位，执行中的命令会**连同子孙进程**一起
+/// 被终结——旧实现只杀直接子进程，后台还在写文件。
+static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 设置取消标志。停止时置 true，每轮对话开始时置 false。
+pub fn set_cancelled(cancelled: bool) {
+    CANCELLED.store(cancelled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 当前是否已被请求取消。
+pub fn is_cancelled() -> bool {
+    CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// 合并输出的字符上限，超出后头尾截断，防止撑爆模型上下文。
 const MAX_OUTPUT: usize = 5000;
@@ -33,133 +53,28 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// 超时上限，避免模型传入极大值导致任务挂死。
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
-/// 删除类动词。**必须与递归/强制标志同时出现**才判定危险。
+/// 命中规则表时返回原因说明。
 ///
-/// 单独出现并不危险：`rm file.txt`、`del app.log` 都是正常操作，
-/// 而 `rd`/`ri` 这类短别名还可能出现在文件名或 `mkdir` 里，
-/// 因此统一按词边界匹配，且要求后接危险标志。
-const DELETE_VERBS: &[&str] = &[
-    "remove-item",
-    "remove-itemproperty",
-    "rmdir",
-    "rd",
-    "ri",
-    "rm",
-    "del",
-    "erase",
-];
-
-/// 递归或强制标志。与 [`DELETE_VERBS`] 组合才构成危险操作。
-const DESTRUCTIVE_FLAGS: &[&str] = &["-recurse", "-rec", "-force", "/s", "/q"];
-
-/// 独立危险项：命中即拦，无需组合。
-const DANGEROUS: &[(&str, &str)] = &[
-    ("rm -rf /", "递归删除根目录"),
-    ("rm -rf ~", "递归删除用户主目录"),
-    ("rm -rf *", "递归删除当前目录全部内容"),
-    ("rmdir /s", "Windows 递归删除目录"),
-    ("del /f", "Windows 强制删除文件"),
-    ("del /q", "Windows 静默删除文件"),
-    ("format ", "磁盘格式化"),
-    ("format-volume", "格式化卷"),
-    ("mkfs", "文件系统格式化"),
-    ("diskpart", "磁盘分区操作"),
-    ("clear-disk", "清除磁盘"),
-    ("initialize-disk", "初始化磁盘"),
-    ("shutdown", "系统关机"),
-    ("stop-computer", "关机"),
-    ("restart-computer", "重启"),
-    ("halt", "系统停机"),
-    ("poweroff", "系统断电"),
-    ("reg delete", "删除注册表"),
-    ("takeown", "夺取文件所有权"),
-    ("icacls", "修改文件权限"),
-    (":(){", "fork 炸弹"),
-    ("dd if=", "裸设备写入"),
-    ("chmod -r 777 /", "递归放开根目录权限"),
-    ("chown -r", "递归变更属主"),
-    ("clear-content", "清空文件内容"),
-    ("invoke-webrequest", "疑似下载并执行远程脚本"),
-    ("iex", "疑似下载并执行远程脚本"),
-    ("invoke-expression", "执行动态构造的命令"),
-];
-
-/// 在 `hay` 中按词边界查找 `word`，返回其起始字节偏移。
-///
-/// 词边界定义为：前后都不是字母、数字或下划线。
-/// 这样 `rd` 不会命中 `mkdir` / `third`，`rm` 不会命中 `firm`。
-fn find_word(hay: &str, word: &str) -> Option<usize> {
-    let bytes = hay.as_bytes();
-    let w = word.as_bytes();
-    if w.is_empty() || hay.len() < w.len() {
-        return None;
-    }
-    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    for i in 0..=(bytes.len() - w.len()) {
-        if &bytes[i..i + w.len()] != w {
-            continue;
-        }
-        let before_ok = i == 0 || !is_word(bytes[i - 1]);
-        let after_idx = i + w.len();
-        let after_ok = after_idx >= bytes.len() || !is_word(bytes[after_idx]);
-        if before_ok && after_ok {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// 检测「删除动词 + 递归/强制标志」的组合。
-///
-/// 解决黑名单的根本缺口：原实现只做小写字面子串匹配，
-/// 而 `powershell -Command "Remove-Item -Recurse -Force x"` 把命令
-/// 当**数据**传给解释器，整条执行语义对匹配器不可见，
-/// 于是被拦的 `rmdir /s` 换个 `Remove-Item` 就绕过去了。
-///
-/// 这里改为识别语义组合而非命令字面量，因此解释器包装同样会被命中。
-fn check_destructive_delete(normalized: &str) -> Option<&'static str> {
-    for verb in DELETE_VERBS {
-        let Some(pos) = find_word(normalized, verb) else {
-            continue;
-        };
-        let tail = &normalized[pos + verb.len()..];
-        if DESTRUCTIVE_FLAGS
-            .iter()
-            .any(|flag| find_word(tail, flag).is_some())
-        {
-            return Some("递归或强制删除");
-        }
-        // `-rf` / `-fr` / `-frx` 这类紧凑短横线组合：拆成单个标志就漏了。
-        // 只认「短横线后紧跟 r/f/s/q 字母」的形式，避免把 `--force` 之类的
-        // 正常参数误当成递归标志
-        if let Some(i) = tail.find('-') {
-            let flags: Vec<char> = tail[i + 1..]
-                .chars()
-                .take_while(|c| matches!(c, 'r' | 'f' | 's' | 'q'))
-                .collect();
-            if flags.contains(&'r') || flags.contains(&'f') {
-                return Some("递归或强制删除");
-            }
-        }
-    }
-    None
-}
-
-/// 命中黑名单时返回原因说明，否则返回 None。
+/// 保留「有没有命中」的旧签名：判定逻辑已整体搬到 [`crate::security::rules`]
+/// （v0.8.0 C38），这里只是门面。真正决定「拦还是问」的调用方用
+/// [`crate::security::rules::check_command`]，它带回 action。
 pub fn check_dangerous(command: &str) -> Option<&'static str> {
-    let lower = command.to_lowercase();
-    // shell 布尔运算符会切断命令语义，绕过朴素的子串匹配
-    let normalized = lower
-        .replace("&&", " ")
-        .replace("||", " ")
-        .replace(';', " ")
-        .replace('|', " ")
-        .replace('\n', " ");
-    DANGEROUS
-        .iter()
-        .find(|(pat, _)| normalized.contains(pat))
-        .map(|(_, reason)| *reason)
-        .or_else(|| check_destructive_delete(&normalized))
+    check_command(command).map(|hit| hit.reason)
+}
+
+/// 被规则拦下时回给模型的说明。
+///
+/// 带上规则 id 与表版本：用户报「为什么这条命令跑不了」时，靠它定位是
+/// 哪条规则、什么时候加的，而不是对着自然语言猜。
+fn blocked_message(command: &str, hit: &crate::security::rules::CommandHit) -> String {
+    let ask = match hit.action {
+        Action::RequireApproval => "该类命令需要用户逐次确认（审批流见后续版本），当前一律拦下。",
+        _ => "如确需执行，请调整命令写法以避开该模式。",
+    };
+    format!(
+        "命令被安全策略拦截（疑似{}，规则 {} · 表 v{}）：{}\n{}",
+        hit.reason, hit.id, RULES_VERSION, command, ask
+    )
 }
 
 /// 解码子进程输出字节。
@@ -207,12 +122,20 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     if command.is_empty() {
         return Err("`command` 不能为空".into());
     }
-    if let Some(reason) = check_dangerous(command) {
-        return Err(format!(
-            "命令被安全策略拦截（疑似{}）：{}\n\
-             如确需执行，请调整命令写法以避开该模式。",
-            reason, command
-        ));
+    // 判定统一走规则表（v0.8.0 C38）。HardBlock 直接拒；RequireApproval
+    // 在审批流（C40）落地前也按拒绝处理——宁可少放行，不要静默执行。
+    if let Some(hit) = check_command(command) {
+        // 打点在**真正拦下的地方**，而不是前置的审批闸门：命令可能从
+        // 别的调用路径进来（未来的 MCP 工具），只有这里一定经过。
+        // 这里拿不到会话 id（纯函数），留在库里由用户按对象排查。
+        crate::security::log_simple(
+            crate::security::Kind::BlockedCommand,
+            "",
+            command,
+            hit.reason,
+            hit.id,
+        );
+        return Err(blocked_message(command, &hit));
     }
 
     let timeout_ms = args
@@ -225,10 +148,9 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("无法启动进程: {}", e))?;
+    // 接管整棵进程树：挂起创建 → 挂进作业 → 恢复执行，
+    // 这样它派生的子孙一个都跑不掉（v0.8.1 C44）
+    let (mut child, group) = Group::spawn(cmd)?;
 
     // ★ 必须**在**开始轮询之前就把管道交给后台线程读空。
     //
@@ -246,8 +168,29 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
         match child.try_wait() {
             Ok(Some(status)) => break status.code(),
             Ok(None) => {
+                // 用户点了「停止」：整树终结，不能只杀父进程
+                if is_cancelled() {
+                    group.terminate(&mut child);
+                    let _ = child.wait();
+                    let partial = drain.join();
+                    let (out, truncated) = truncate_output(&partial, MAX_OUTPUT);
+                    return Ok(ToolOutput {
+                        label: format!("Exec '{}'（已取消）", first_line(command)),
+                        result: format!(
+                            "命令已被用户取消，已终止整棵进程树。\n--- 部分输出 ---\n{}",
+                            if truncated {
+                                format!("{}\n（输出已截断）", out)
+                            } else {
+                                out
+                            }
+                        ),
+                        diff: None,
+                    });
+                }
                 if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
+                    // 超时同样要带走子孙：只杀父进程的话，它派生的
+                    // 安装/编译进程会继续在后台跑
+                    group.terminate(&mut child);
                     let _ = child.wait();
                     let partial = drain.join();
                     let (out, truncated) = truncate_output(&partial, MAX_OUTPUT);

@@ -7,8 +7,10 @@ type ThemeApi = ReturnType<typeof import("../hooks/useTheme").useTheme>;
 function api(overrides: Partial<ThemeApi> = {}): ThemeApi {
   return {
     theme: "light",
+    accent: "blue",
     resolved: "light",
     setTheme: vi.fn(),
+    setAccent: vi.fn(),
     fontSize: 15,
     codeFontSize: 11,
     terminalFontSize: 13,
@@ -70,5 +72,38 @@ describe("外观设置", () => {
     // 再点回来，避免测试之间把默认开启的状态改脏
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe(before);
+  });
+
+  /// A8：三档主题各带一枚 12px 预览方块，跟随系统用斜分。
+  it("主题选项内带预览方块，跟随系统为斜分", () => {
+    const t = api();
+    const { container } = render(<AppearanceSection theme={t} />);
+    for (const name of ["亮色", "暗色", "跟随系统"]) {
+      const btn = screen.getByRole("button", { name });
+      expect(btn.querySelector("span[aria-hidden]")).not.toBeNull();
+    }
+    const system = screen.getByRole("button", { name: "跟随系统" });
+    const swatch = system.querySelector("span[aria-hidden]") as HTMLElement;
+    // 斜分用 CSS 类里的 135deg 渐变实现（jsdom 不支持渐变，只断言类名）
+    expect(swatch.className).toContain("aura-theme-swatch-system");
+    // 亮/暗两档是竖分：方块内再套两个半边
+    const lightBtn = screen.getByRole("button", { name: "亮色" });
+    expect(lightBtn.querySelectorAll("span[aria-hidden] span").length).toBe(2);
+    expect(container).toBeTruthy();
+  });
+
+  /// C29：五档强调色，点一下写进主题设置
+  it("强调色五选一，选中态可辨", () => {
+    const t = api();
+    render(<AppearanceSection theme={t} />);
+    const group = screen.getByRole("group", { name: "强调色" });
+    expect(group.querySelectorAll("button")).toHaveLength(5);
+    // 默认蓝色已选中
+    expect(screen.getByRole("button", { name: "蓝" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "紫" }));
+    expect(t.setAccent).toHaveBeenCalledWith("purple");
   });
 });

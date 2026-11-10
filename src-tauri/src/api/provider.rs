@@ -63,7 +63,7 @@ impl ProviderKind {
 }
 
 /// 从 Provider 拉取到的模型描述。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoteModel {
     pub id: String,
     pub label: String,

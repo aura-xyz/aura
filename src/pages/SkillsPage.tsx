@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Check,
@@ -33,12 +33,18 @@ import {
   canUpdate,
   deleteBlockedReason,
   filterMarket,
+  filterSkills,
   groupSkills,
+  skillInitial,
   SOURCE_LABEL,
+  SOURCE_TINT,
+  tagChips,
   toolsLabel,
 } from "../lib/skill";
+import { notify } from "../lib/notices";
 import SkillDetailDialog from "../components/SkillDetailDialog";
 import Switch from "../components/Switch";
+import { useConfirm } from "../hooks/useConfirm";
 
 interface Props {
   onClose: () => void;
@@ -66,9 +72,6 @@ type MarketState =
       paged: boolean;
     }
   | { kind: "error"; message: string };
-
-/** 顶部提示。成功与失败用同一处展示，但要能区分颜色——装成功却飘一条红字很怪。 */
-type Notice = { kind: "ok" | "error"; text: string };
 
 function Tabs({
   tab,
@@ -142,74 +145,182 @@ function SkillCard({
 }) {
   return (
     <div
-      className={`rounded-card border border-line bg-surface p-4 transition-opacity ${
+      className={`flex h-full items-start gap-3 rounded-card border border-line bg-surface p-3 transition-opacity ${
         skill.enabled ? "" : "opacity-60"
       }`}
     >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{skill.name}</span>
-            <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-              {SOURCE_LABEL[skill.source]}
-            </span>
-            <span className="font-mono text-[11px] text-subtle">v{skill.version}</span>
-            {!skill.enabled && <span className="text-[11px] text-subtle">已禁用</span>}
-          </div>
-          <p className="mt-1.5 text-xs leading-relaxed text-subtle">{skill.description}</p>
-          <p className="mt-1.5 text-[11px] text-subtle">工具：{toolsLabel(skill)}</p>
-          <p className="mt-0.5 truncate text-[11px] text-subtle" title={skill.dir}>
-            {skill.dir}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 pt-0.5">
-          {confirming ? (
-            <>
-              <button
-                type="button"
-                onClick={onConfirmDelete}
-                disabled={busy}
-                className="text-xs text-danger transition-opacity hover:opacity-80 disabled:opacity-40"
-              >
-                确认删除
-              </button>
-              <button
-                type="button"
-                onClick={onCancelDelete}
-                className="text-xs text-subtle transition-colors hover:text-foreground"
-              >
-                取消
-              </button>
-            </>
-          ) : (
-            <>
-              {canDelete(skill.source) ? (
-                <button
-                  type="button"
-                  onClick={onAskDelete}
-                  disabled={busy}
-                  aria-label={`删除 ${skill.name}`}
-                  className="rounded-tag p-1 text-subtle transition-colors hover:text-danger disabled:opacity-40"
-                >
-                  <Trash2 size={13} />
-                </button>
-              ) : (
-                <span
-                  title={deleteBlockedReason(skill.source)}
-                  className="cursor-help text-[11px] text-subtle/70"
-                >
-                  不可删除
-                </span>
-              )}
-              <Switch
-                checked={skill.enabled}
-                disabled={busy}
-                label={`${skill.enabled ? "禁用" : "启用"} ${skill.name}`}
-                onChange={onToggle}
-              />
-            </>
+      {/* 首字块：来源色一眼可辨，替代一半「来源徽章」的职能 */}
+      <span
+        aria-hidden
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-tag text-sm font-semibold ${SOURCE_TINT[skill.source]}`}
+      >
+        {skillInitial(skill.name)}
+      </span>
+
+      <div className="min-w-0 flex-1" title={`工具：${toolsLabel(skill)}\n目录：${skill.dir}`}>
+        {/* 第一行：名称 + 版本 + 来源 */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{skill.name}</span>
+          <span className="font-mono text-[11px] text-subtle">v{skill.version}</span>
+          <span className="rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle">
+            {SOURCE_LABEL[skill.source]}
+          </span>
+          {!skill.enabled && (
+            <span className="text-[11px] text-subtle">已禁用</span>
           )}
         </div>
+        {/* 第二行：描述最多两行 */}
+        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-subtle">
+          {skill.description}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2 pt-0.5">
+        {confirming ? (
+          <>
+            <button
+              type="button"
+              onClick={onConfirmDelete}
+              disabled={busy}
+              className="text-xs text-danger transition-opacity hover:opacity-80 disabled:opacity-40"
+            >
+              确认删除
+            </button>
+            <button
+              type="button"
+              onClick={onCancelDelete}
+              className="text-xs text-subtle transition-colors hover:text-foreground"
+            >
+              取消
+            </button>
+          </>
+        ) : (
+          <>
+            {canDelete(skill.source) ? (
+              <button
+                type="button"
+                onClick={onAskDelete}
+                disabled={busy}
+                aria-label={`删除 ${skill.name}`}
+                className="rounded-tag p-1 text-subtle transition-colors hover:text-danger disabled:opacity-40"
+              >
+                <Trash2 size={13} />
+              </button>
+            ) : (
+              <span
+                title={deleteBlockedReason(skill.source)}
+                className="cursor-help text-[11px] text-subtle/70"
+              >
+                不可删除
+              </span>
+            )}
+            <Switch
+              checked={skill.enabled}
+              disabled={busy}
+              label={`${skill.enabled ? "禁用" : "启用"} ${skill.name}`}
+              onChange={onToggle}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/** 市场卡：与本地卡同一套首字块 + 三行层级，CTA 用品牌实底主按钮。 */
+function MarketCard({
+  item,
+  inspecting,
+  installing,
+  onOpen,
+}: {
+  item: MarketSkillView;
+  inspecting: string | null;
+  installing: boolean;
+  onOpen: () => void;
+}) {
+  const chips = tagChips(item.tags);
+  const busy = inspecting !== null || installing;
+  const label = item.name || item.id;
+  return (
+    <div className="flex h-full flex-col rounded-card border border-line bg-surface p-3">
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-tag text-sm font-semibold ${SOURCE_TINT.market}`}
+        >
+          {skillInitial(label)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-sm font-medium">{label}</span>
+            {item.version && (
+              <span className="font-mono text-[11px] text-subtle">v{item.version}</span>
+            )}
+            <span className="rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle">
+              {item.registry || "官方"}
+            </span>
+            {/* 上游不提供哈希时必须标出来——用户有权知道自己装的东西没被验证过 */}
+            {!item.integrity_verified && (
+              <span
+                className="cursor-help rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle"
+                title="该来源不提供包的完整性校验，安装前会做完整静态审查"
+              >
+                无完整性校验
+              </span>
+            )}
+          </div>
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-subtle">
+            {item.description}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-auto flex items-end justify-between gap-2 pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {chips.shown.map((tag) => (
+            <span
+              key={tag}
+              className="max-w-[8rem] truncate rounded-full border border-line px-1.5 text-[10px] leading-4 text-subtle"
+            >
+              {tag}
+            </span>
+          ))}
+          {chips.rest > 0 && (
+            <span className="text-[10px] text-subtle">+{chips.rest}</span>
+          )}
+          {item.author && (
+            <span className="truncate text-[10px] text-subtle">{item.author}</span>
+          )}
+        </div>
+
+        {canUpdate(item) ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 rounded-full bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:text-surface"
+          >
+            <Download size={11} />
+            {inspecting === item.id ? "检查中…" : `更新到 v${item.version}`}
+          </button>
+        ) : item.installed ? (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-subtle">
+            <Check size={12} className="text-success" />
+            已安装
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 rounded-full bg-brand px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:text-surface"
+          >
+            <Download size={11} />
+            {inspecting === item.id ? "检查中…" : "安装"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -230,7 +341,6 @@ export default function SkillsPage({ onClose }: Props) {
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [addingSource, setAddingSource] = useState(false);
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceBusy, setSourceBusy] = useState(false);
@@ -246,6 +356,7 @@ export default function SkillsPage({ onClose }: Props) {
   const [providerFilter, setProviderFilter] = useState("");
   /** 市场页码（仅分页源有效） */
   const [marketPage, setMarketPage] = useState(1);
+  const { confirm, dialog } = useConfirm();
 
   async function refresh() {
     try {
@@ -298,6 +409,20 @@ export default function SkillsPage({ onClose }: Props) {
     void loadMarket({ provider: id, page: 1 });
   }
 
+  /**
+   * 搜索框输入。
+   *
+   * 市场档只有选中单个源时才走**远端**搜索——SkillHub 有 8 万条，
+   * 不可能全拉回来再过滤；聚合模式与本地两档一律前端过滤。
+   */
+  function handleQuery(value: string) {
+    setQuery(value);
+    if (tab === "market" && providerFilter) {
+      setMarketPage(1);
+      void loadMarket({ provider: providerFilter, query: value, page: 1 });
+    }
+  }
+
   /** 源列表与清单分开拉：源是本地的，清单要联网，谁也不该拖累谁。 */
   async function loadSources() {
     try {
@@ -330,13 +455,12 @@ export default function SkillsPage({ onClose }: Props) {
   async function toggle(skill: SkillView) {
     if (busyName) return;
     setBusyName(skill.name);
-    setNotice(null);
     const next = !skill.enabled;
     try {
       await setSkillEnabled(skill.name, next);
       patchSkill(skill.name, { enabled: next });
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setBusyName(null);
     }
@@ -345,7 +469,6 @@ export default function SkillsPage({ onClose }: Props) {
   async function remove(skill: SkillView) {
     if (busyName) return;
     setBusyName(skill.name);
-    setNotice(null);
     try {
       await deleteSkill(skill.name);
       setConfirming(null);
@@ -361,9 +484,9 @@ export default function SkillsPage({ onClose }: Props) {
             }
           : s,
       );
-      setNotice({ kind: "ok", text: `已删除技能「${skill.name}」` });
+      notify("ok", `已删除技能「${skill.name}」`);
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setBusyName(null);
     }
@@ -373,12 +496,11 @@ export default function SkillsPage({ onClose }: Props) {
   async function openDetail(item: MarketSkillView) {
     if (inspecting || installing) return;
     setInspecting(item.id);
-    setNotice(null);
     setInstallError(null);
     try {
       setDetail(await inspectMarketSkill(item.id));
     } catch (e) {
-      setNotice({ kind: "error", text: String(e) });
+      notify("error", String(e));
     } finally {
       setInspecting(null);
     }
@@ -398,12 +520,12 @@ export default function SkillsPage({ onClose }: Props) {
       setDetail(null);
       await refresh();
       await loadMarket();
-      setNotice({
-        kind: "ok",
-        text: update
+      notify(
+        "ok",
+        update
           ? `已更新「${label}」到 v${summary.version}`
           : `已安装「${label}」（v${summary.version}）`,
-      });
+      );
     } catch (e) {
       // 弹窗不关：用户可能想直接重试，或先看清错误再决定
       setInstallError(String(e));
@@ -430,12 +552,24 @@ export default function SkillsPage({ onClose }: Props) {
     }
   }
 
-  async function dropSource(url: string) {
+  async function dropSource(source: SkillSourceView) {
     if (sourceBusy) return;
+    // 移除是不可逆的（要加回来得重新填地址），先问一句。
+    const ok = await confirm({
+      title: "移除技能源",
+      message: (
+        <span>
+          移除来源「{source.name}」？该源提供的技能不会随之卸载。
+        </span>
+      ),
+      confirmText: "移除",
+      danger: true,
+    });
+    if (!ok) return;
     setSourceBusy(true);
     setSourceError(null);
     try {
-      setSources(await removeSkillSource(url));
+      setSources(await removeSkillSource(source.url));
       void loadMarket();
     } catch (e) {
       setSourceError(String(e));
@@ -445,7 +579,18 @@ export default function SkillsPage({ onClose }: Props) {
   }
 
   const groups = state.kind === "ready" ? groupSkills(state.skills) : null;
+  // 搜索框三页签共用，本地两档在前端过滤；市场档的语义见 handleQuery。
+  const shownBuiltin = groups ? filterSkills(groups.builtin, query) : [];
+  const shownInstalled = groups ? filterSkills(groups.installed, query) : [];
   const marketItems = market.kind === "ready" ? market.items : null;
+  /** 市场「提供」的总数：分页源给 total，聚合模式只能给本页条数 */
+  const marketTotal =
+    market.kind === "ready" ? market.total || market.items.length : null;
+  // 判空与渲染共用同一份结果：先前两处各调一次，同一次渲染白跑两遍。
+  const filteredMarket = useMemo(
+    () => (marketItems ? filterMarket(marketItems, query) : []),
+    [marketItems, query],
+  );
   const marketErrors = market.kind === "ready" ? market.errors : [];
   /** 市场里既没有条目又有报错：整块失败，给重试入口 */
   const marketDown = marketItems !== null && marketItems.length === 0 && marketErrors.length > 0;
@@ -477,6 +622,25 @@ export default function SkillsPage({ onClose }: Props) {
           技能是给模型的工作指引，模型判断场景匹配时按需加载；禁用后模型看不到它。
         </p>
 
+        {/* 概览条：三个数字一眼看清手里的家底，数据都是现成的 */}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
+          {[
+            ["内置", groups ? groups.builtin.length : null],
+            ["已安装", groups ? groups.installed.length : null],
+            ["市场提供", marketTotal],
+          ].map(([label, value]) => (
+            <span
+              key={String(label)}
+              className="flex items-center gap-1 rounded-full bg-bubble px-2 py-0.5 text-subtle"
+            >
+              {label}
+              <span className="font-medium tabular-nums text-foreground">
+                {value ?? "—"}
+              </span>
+            </span>
+          ))}
+        </div>
+
         <Tabs
           tab={tab}
           counts={{
@@ -487,16 +651,26 @@ export default function SkillsPage({ onClose }: Props) {
           onChange={setTab}
         />
 
-        {notice && (
-          <p
-            className={`mt-3 flex items-start gap-2 rounded-card border border-line px-3 py-2 text-xs ${
-              notice.kind === "error" ? "text-danger" : "text-success"
-            }`}
-          >
-            <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-            <span className="min-w-0 break-words">{notice.text}</span>
-          </p>
-        )}
+        {/* 搜索框常驻：三个页签共用一处，切页签不丢输入 */}
+        <div className="relative mt-4">
+          <Search
+            size={13}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
+          />
+          <input
+            value={query}
+            onChange={(e) => handleQuery(e.target.value)}
+            placeholder={
+              tab === "market"
+                ? providerFilter
+                  ? "在该源内搜索"
+                  : "搜索名称、说明或标签"
+                : "搜索名称或说明"
+            }
+            aria-label="搜索技能"
+            className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
+          />
+        </div>
 
         {/* ---- 本地列表（内置 / 已安装） ---- */}
         {tab !== "market" && (
@@ -526,8 +700,14 @@ export default function SkillsPage({ onClose }: Props) {
               (tab === "builtin" ? (
                 groups.builtin.length === 0 ? (
                   <EmptyState>没有内置技能。</EmptyState>
+                ) : shownBuiltin.length === 0 ? (
+                  <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  groups.builtin.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    {shownBuiltin.map((s) => (
+                      <SkillCard key={s.name} {...cardProps(s)} />
+                    ))}
+                  </div>
                 )
               ) : groups.installed.length === 0 ? (
                 <EmptyState>
@@ -541,8 +721,14 @@ export default function SkillsPage({ onClose }: Props) {
                     <span className="font-mono">skills/local/</span>，或从「市场」安装。
                   </span>
                 </EmptyState>
+              ) : shownInstalled.length === 0 ? (
+                <EmptyState>没有匹配的技能。</EmptyState>
               ) : (
-                groups.installed.map((s) => <SkillCard key={s.name} {...cardProps(s)} />)
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {shownInstalled.map((s) => (
+                    <SkillCard key={s.name} {...cardProps(s)} />
+                  ))}
+                </div>
               ))}
           </div>
         )}
@@ -565,7 +751,7 @@ export default function SkillsPage({ onClose }: Props) {
                         type="button"
                         aria-label={`移除来源 ${s.name}`}
                         disabled={sourceBusy}
-                        onClick={() => void dropSource(s.url)}
+                        onClick={() => void dropSource(s)}
                         className="text-subtle transition-colors hover:text-danger disabled:opacity-40"
                       >
                         <X size={11} />
@@ -702,110 +888,20 @@ export default function SkillsPage({ onClose }: Props) {
 
             {marketItems !== null && marketItems.length > 0 && (
               <>
-                <div className="relative">
-                  <Search
-                    size={13}
-                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
-                  />
-                  <input
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      // 选中单个源时走**远端**搜索（SkillHub 支持 q 参数）；
-                      // 聚合模式下各源搜索语义不同，用本地过滤。
-                      if (providerFilter) {
-                        setMarketPage(1);
-                        void loadMarket({
-                          provider: providerFilter,
-                          query: e.target.value,
-                          page: 1,
-                        });
-                      }
-                    }}
-                    placeholder={
-                      providerFilter ? "在该源内搜索" : "搜索名称、说明或标签"
-                    }
-                    aria-label="搜索市场技能"
-                    className="w-full rounded-card border border-line bg-surface py-2 pl-8 pr-3 text-sm outline-none transition-colors focus:border-brand"
-                  />
-                </div>
-                {filterMarket(marketItems, query).length === 0 ? (
+                {filteredMarket.length === 0 ? (
                   <EmptyState>没有匹配的技能。</EmptyState>
                 ) : (
-                  filterMarket(marketItems, query).map((item) => (
-                    <div key={item.id} className="rounded-card border border-line bg-surface p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium">{item.name || item.id}</span>
-                            <span className="font-mono text-[11px] text-subtle">{item.id}</span>
-                            {item.version && (
-                              <span className="font-mono text-[11px] text-subtle">
-                                v{item.version}
-                              </span>
-                            )}
-                            <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle">
-                              {item.registry || "官方"}
-                            </span>
-                            {/* 上游不提供哈希时必须标出来——用户有权知道自己
-                                装的���西没被验证过 */}
-                            {!item.integrity_verified && (
-                              <span
-                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
-                                title="该来源不提供包的完整性校验，安装前会做完整静态审查"
-                              >
-                                无完整性校验
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1.5 text-xs leading-relaxed text-subtle">
-                            {item.description}
-                          </p>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            {item.tags.map((t) => (
-                              <span
-                                key={t}
-                                className="rounded-full border border-line px-2 py-0.5 text-[11px] text-subtle"
-                              >
-                                {t}
-                              </span>
-                            ))}
-                            {item.author && (
-                              <span className="text-[11px] text-subtle">{item.author}</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="shrink-0 pt-0.5">
-                          {canUpdate(item) ? (
-                            <button
-                              type="button"
-                              onClick={() => void openDetail(item)}
-                              disabled={inspecting !== null || installing}
-                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                            >
-                              <Download size={12} />
-                              {inspecting === item.id ? "检查中…" : `更新到 v${item.version}`}
-                            </button>
-                          ) : item.installed ? (
-                            <span className="flex items-center gap-1 text-xs text-subtle">
-                              <Check size={12} className="text-brand" />
-                              已安装
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => void openDetail(item)}
-                              disabled={inspecting !== null || installing}
-                              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
-                            >
-                              <Download size={12} />
-                              {inspecting === item.id ? "检查中…" : "安装"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    {filteredMarket.map((item) => (
+                      <MarketCard
+                        key={item.id}
+                        item={item}
+                        inspecting={inspecting}
+                        installing={installing}
+                        onOpen={() => void openDetail(item)}
+                      />
+                    ))}
+                  </div>
                 )}
               </>
             )}
@@ -864,6 +960,8 @@ export default function SkillsPage({ onClose }: Props) {
           onConfirm={() => void confirmInstall()}
         />
       )}
+
+      {dialog}
     </div>
   );
 }

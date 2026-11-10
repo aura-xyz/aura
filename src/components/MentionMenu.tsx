@@ -1,5 +1,6 @@
 import { FileCode2, Folder, Sparkles } from "lucide-react";
 import type { MentionItem } from "../lib/mentions";
+import MenuPopup from "./MenuPopup";
 
 /**
  * `@` / `/` 的候选浮层，出现在**输入框上方**。
@@ -26,14 +27,11 @@ export default function MentionMenu({
   if (items.length === 0) return null;
 
   return (
-    <div
-      role="listbox"
-      aria-label={kind === "file" ? "文件引用" : "技能调用"}
-      /* 宽度必须与输入卡一致：输入卡是 mx-auto + max-w-4xl 居中限宽，
-         浮层若整块铺满，两者的左右边界就对不上，视觉上像是两个不同的层。 */
-      className="mx-auto mb-2 w-full max-w-4xl xl:max-w-5xl 2xl:max-w-6xl max-h-64 overflow-y-auto rounded-card border border-line bg-surface py-1 shadow-lg"
-    >
-      <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-subtle">
+    <MenuPopup
+      label={kind === "file" ? "文件引用" : "技能调用"}
+      maxHeight="max-h-64"
+      header={
+        <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-subtle">
         {kind === "file" ? (
           <FileCode2 size={12} className="shrink-0" />
         ) : (
@@ -44,7 +42,9 @@ export default function MentionMenu({
             ? "引用文件（回车插入路径）"
             : "调用技能（回车插入技能名）"}
         </span>
-      </div>
+        </div>
+      }
+    >
       {items.map((item, i) => (
         <button
           key={`${item.kind}:${item.insert}`}
@@ -68,6 +68,6 @@ export default function MentionMenu({
           )}
         </button>
       ))}
-    </div>
+    </MenuPopup>
   );
 }

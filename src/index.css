@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* xterm 的样式：终端画布的定位、滚动条与选区都在这里。
+   放在全局而不是组件里，避免终端面板被懒加载时样式后到、闪一下空白。 */
+@import "@xterm/xterm/css/xterm.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -82,6 +85,10 @@
    Pinguo Design System — static tokens
    --------------------------------------------------------------- */
 
+/* 图标三档标尺（v0.8.0）：导航 16 / 行内 14 / 装饰 12。
+   低于 12 在高分屏上会糊，高于 16 会把行高撑开；新图标先对号入座，
+   不要为单个组件的观感临时加减 1px。 */
+
 @theme {
   --font-sans: "DM Sans", "Source Han Sans SC", ui-sans-serif, system-ui,
     -apple-system, "Segoe UI", sans-serif;
@@ -113,6 +120,8 @@
 
   --surface: #ffffff;
   --surface-sunken: #f5f5f7;
+  /* 代码块工具条带：比 surface-sunken 深一档 */
+  --code-bar: #ececf0;
   --foreground: #3a3a3c;
   --subtle: #6e6e73;
   --line: #e5e5ea;
@@ -129,6 +138,9 @@
   /* 品牌色。亮色与 --link 同值，但语义不同：link 管可点击，
      brand 管品牌锚点（发送按钮、进行中指示、选中态）。 */
   --brand: #0066cc;
+  /* 市场来源的标识色（技能卡首字块）。只在 10% tint 下使用，
+     不参与文字与边框对比度门禁。 */
+  --skill-market: #7c5cff;
   /* 用户消息气泡底：品牌蓝 20% tint。
      AI 侧仍用 --bubble 灰底，对话归属一眼可辨。
      注：方案文档建议 8%，实测 8% 与灰底对比度仅 1.03:1，肉眼
@@ -181,6 +193,7 @@
 
   --surface: #0a0a0a;
   --surface-sunken: #1c1c1e;
+  --code-bar: #232325;
   --foreground: #f5f5f7;
   --subtle: #98989d;
   --line: #454547;
@@ -193,6 +206,7 @@
      暗色下的成功提示只能借用灰阶。 */
   --success: #30d158;
   --warning: #ff9f0a;
+  --skill-market: #a78bfa;
   /* 与 --link 暗色值同源：品牌蓝在暗色下必须提亮才能达到 AA。 */
   --brand: #4da3ff;
   /* 暗色底（#1c1c1e）混入 15% 品牌蓝 */
@@ -236,6 +250,7 @@
   --color-brand: var(--brand);
   --color-bubble-user: var(--bubble-user);
   --color-chrome: var(--chrome-bg);
+  --color-skill-market: var(--skill-market);
 }
 
 /* ---------------------------------------------------------------
@@ -247,6 +262,10 @@
   body,
   #root {
     height: 100%;
+    /* 自绘标题栏要贴窗口右边缘。body 一旦产生哪怕 4px 的滚动条占位，
+       整列内容（含右上角控制按钮）都会被往左推，看起来「没贴边」。
+       App 根容器自带 overflow-hidden，内部各区仍有自己的滚动容器。 */
+    overflow: hidden;
   }
 
   body {
@@ -335,6 +354,27 @@
     width: 0;
     height: 0;
   }
+}
+
+/* ---------------------------------------------------------------
+   Linux 无边框窗口圆角（v0.8.0 兼容性修复）
+   ---------------------------------------------------------------
+   Windows / macOS 的窗口圆角由系统窗口管理器负责（DWM / NSWindow）；
+   Linux 下无边框窗口只是一块矩形 surface，没有原生圆角，于是成了直角。
+   这里配合 Rust 侧 `#[cfg(target_os="linux")] transparent(true)`：窗口透明后，
+   把根容器裁成圆角并填回 surface 色，四角透出的区域即显示桌面。
+   仅 Linux 生效——Windows 保持不透明，避免透明窗口丢掉原生阴影与圆角。 */
+html[data-platform="linux"],
+html[data-platform="linux"] body {
+  background: transparent;
+}
+
+html[data-platform="linux"] #root {
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  /* 透明窗口没有系统投影，用 1px 内描边把窗口边缘勾出来，避免在浅色桌面上糊成一片 */
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 /* ---------------------------------------------------------------
@@ -480,69 +520,72 @@
     padding: 0.1em 0.35em;
   }
 
-  /* 代码块容器：负责把语言标签绝对定位到右上角，
-     padding-top 留出标签的净空，避免压住首行代码 */
+  /* 代码块：32px 工具条带 + 代码区，整体一个圆角容器。
+     此前语言标签与复制按钮都绝对定位浮在代码上，长代码横向滚动时会盖住内容；
+     改成条带后它们有了自己的行，代码区也不必再靠 padding-top 让位。 */
   .md .md-code {
-    position: relative;
     margin-top: 0.25rem;
     margin-bottom: 0.25rem;
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  .md .md-code-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    height: 32px;
+    padding: 0 0.4rem 0 0.75rem;
+    /* 比代码区（surface-sunken）再深一档，条带才有「工具区」的层次 */
+    background-color: var(--code-bar);
+    border-bottom: 1px solid var(--line);
   }
 
   .md .md-code-lang {
-    position: absolute;
-    top: 0.45rem;
-    left: 0.7rem;
-    z-index: 1;
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--subtle);
-    pointer-events: none;
     user-select: none;
   }
 
-  /* 复制按钮：右上角，悬停整块才渐现。
-     与语言标签同在顶部，靠 padding-top 让位，不压首行代码。 */
+  .md .md-code-tools {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  /* 复制按钮常驻在条带里：不再悬停才出现，也就不必给代码区让位 */
   .md .md-code-copy {
-    position: absolute;
-    top: 0.35rem;
-    right: 0.5rem;
-    z-index: 1;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-    background-color: var(--surface);
+    background-color: transparent;
+    border-color: transparent;
+    padding: 0.15rem 0.4rem;
+    font-size: 10px;
   }
 
-  .md .md-code:hover .md-code-copy,
-  .md .md-code-copy:focus-visible {
-    opacity: 1;
-  }
-
-  /* 折叠入口：右上角靠左一点，给复制按钮让位。
-     折叠时是唯一的操作入口，所以常驻显示（不像复制按钮那样悬停才现）。 */
   .md .md-code-fold {
-    position: absolute;
-    top: 0.3rem;
-    right: 6.5rem;
-    z-index: 1;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
     padding: 0.15rem 0.4rem;
     border-radius: 0.375rem;
-    border: 1px solid var(--line);
-    background-color: var(--surface);
+    border: 1px solid transparent;
+    background-color: transparent;
     color: var(--subtle);
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1;
-    transition: color 0.15s ease, border-color 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease,
+      background-color 0.15s ease;
   }
 
   .md .md-code-fold:hover {
-    border-color: var(--brand);
+    border-color: var(--line);
+    background-color: var(--surface);
     color: var(--brand);
   }
 
@@ -561,9 +604,10 @@
     margin: 0;
   }
 
-  /* 有语言标签时，首行代码下压一点让位 */
-  .md .md-code:has(.md-code-lang) pre {
-    padding-top: 1.6rem;
+  /* 条带已经承担了边框与圆角，代码区退回纯背景 */
+  .md .md-code pre {
+    border: none;
+    border-radius: 0;
   }
 
   .md pre code {
@@ -742,6 +786,209 @@
 @media (prefers-reduced-motion: reduce) {
   .aura-sidebar {
     transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   强调色五档（v0.8.0）
+   --------------------------------------------------------------- */
+/* 由 document.documentElement 的 data-accent 切换，只覆盖四个语义色令牌；
+   值必须与 lib/theme.ts 的 ACCENTS 表一致（contrast.test 逐档校验 AA）。
+   blue 是默认档，即上面的 :root / .dark 原值，这里不再重复声明。 */
+[data-accent="purple"] {
+  --brand: #6b3fd4;
+  --brand-strong: #5a33b8;
+  --link: #6b3fd4;
+  --bubble-user: #e2dbf7;
+}
+
+.dark[data-accent="purple"] {
+  --brand: #b39cff;
+  --link: #b39cff;
+  --bubble-user: #2a2338;
+}
+
+[data-accent="green"] {
+  --brand: #1f7a45;
+  --brand-strong: #196139;
+  --link: #1f7a45;
+  --bubble-user: #d6ebdf;
+}
+
+.dark[data-accent="green"] {
+  --brand: #4ade80;
+  --link: #4ade80;
+  --bubble-user: #1f2a24;
+}
+
+[data-accent="orange"] {
+  --brand: #b25000;
+  --brand-strong: #964300;
+  --link: #b25000;
+  --bubble-user: #fae0c9;
+}
+
+.dark[data-accent="orange"] {
+  --brand: #ffb066;
+  --link: #ffb066;
+  --bubble-user: #33261a;
+}
+
+[data-accent="pink"] {
+  --brand: #b8005e;
+  --brand-strong: #9c004f;
+  --link: #b8005e;
+  --bubble-user: #fbd9e8;
+}
+
+.dark[data-accent="pink"] {
+  --brand: #ff8fc0;
+  --link: #ff8fc0;
+  --bubble-user: #331f28;
+}
+
+/* ---------------------------------------------------------------
+   设置页主题预览方块
+   --------------------------------------------------------------- */
+/* 跟随系统的斜分预览：一半亮一半暗，45° 切分。写进 CSS 而不是内联
+   style，是因为 jsdom 的 CSSStyleDeclaration 不支持渐变，单测读不到。 */
+.aura-theme-swatch-system {
+  background: linear-gradient(135deg, #ffffff 0 50%, #1c1c1e 50% 100%);
+}
+
+/* ---------------------------------------------------------------
+   开始界面氛围
+   --------------------------------------------------------------- */
+/* 输入框后方的品牌色径向光晕：亮色 5%、暗色 8%，纯 CSS 无图片资源。
+   用 color-mix 而非写死 rgba，跟随 --brand 的明暗换色。 */
+.aura-start-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    60vh 45vh at 50% 38%,
+    color-mix(in srgb, var(--brand) 5%, transparent),
+    transparent 70%
+  );
+}
+
+.dark .aura-start-glow {
+  background: radial-gradient(
+    60vh 45vh at 50% 38%,
+    color-mix(in srgb, var(--brand) 8%, transparent),
+    transparent 70%
+  );
+}
+
+/* logo 首次入场：scale 0.96 → 1 + 淡入，只播一次（组件侧用模块标记控制） */
+@keyframes aura-logo-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.aura-logo-in {
+  animation: aura-logo-in 2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-start-glow {
+    display: none;
+  }
+  .aura-logo-in {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   输入辅助浮层入场
+   --------------------------------------------------------------- */
+/* 100ms 淡入 + 4px 上移：比右栏的 200ms 更快，输入辅助层要敏捷。 */
+@keyframes aura-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aura-pop-in {
+  animation: aura-pop-in 100ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-pop-in {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   长会话止损：离屏消息跳过布局与绘制
+   --------------------------------------------------------------- */
+/* content-visibility: auto 让浏览器跳过视口外消息的 layout/paint；
+   contain-intrinsic-size 给一个占位高度，滚动条才不会在渲染时来回跳变，
+   `auto` 表示尺寸由浏览器记住上次实测值。120px 约等于一条用户气泡。
+   只挂历史消息：正在流式写入的最后一条挂上会每次追加都重排。 */
+.aura-msg-virtual {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+/* ---------------------------------------------------------------
+   全局轻提示
+   --------------------------------------------------------------- */
+/* 150ms 从下往上浮入；只在出现时播一次，消失靠直接卸载（一句提示不值得为退场加状态机）。 */
+@keyframes aura-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aura-notice {
+  animation: aura-notice-in 150ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-notice {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   内置浏览器加载进度
+   --------------------------------------------------------------- */
+/* 不确定态的来回扫动：iframe 拿不到真实进度，只能表示「还在等」。
+   轨道高 2px，由组件用 h-0.5 + overflow-hidden 提供。 */
+@keyframes aura-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.aura-progress-bar {
+  animation: aura-progress 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-progress-bar {
+    animation: none;
+    transform: none;
   }
 }
 

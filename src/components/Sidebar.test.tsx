@@ -35,18 +35,23 @@ const DEFAULT_NAV_BLOCKS = [
  * Sidebar 依赖 store，这里 mock 掉 useStore 而不是渲染真实 Provider。
  * 真实 Provider 会拉起 Tauri 的 invoke/listen，在单测里没有意义。
  */
-async function mount(props: Partial<Record<string, unknown>> = {}) {
+async function mount(
+  props: Partial<Record<string, unknown>> = {},
+  storeOverrides: Partial<Record<string, unknown>> = {},
+) {
   const store = {
     workspaces: WORKSPACES,
     workspace: "E:/dev/aura",
     sessions: SESSIONS,
     activeId: "s1",
     switchWorkspace: vi.fn(),
+    newSession: vi.fn(),
     openSession: vi.fn(),
     deleteSession: vi.fn(),
     renamingId: null,
     cancelRename: vi.fn(),
     renameSession: vi.fn(),
+    ...storeOverrides,
   };
   vi.doMock("../store", () => ({ useStore: () => store }));
   const navBlocks = (props.navBlocks as typeof DEFAULT_NAV_BLOCKS) ?? DEFAULT_NAV_BLOCKS;
@@ -76,7 +81,10 @@ describe("Sidebar", () => {
   it("导航项按新建对话 / Skills / MCP / 轨迹 的顺序渲染", async () => {
     await mount();
     const nav = screen.getByRole("navigation");
-    const labels = Array.from(nav.querySelectorAll("span")).map((s) => s.textContent);
+    // 每个导航项里还有一条 2px 竖线占位 span（无文字），按文字过滤掉
+    const labels = Array.from(nav.querySelectorAll("span"))
+      .map((s) => s.textContent)
+      .filter((t) => t);
     expect(labels).toEqual(["新建对话", "Skills", "MCP", "轨迹"]);
   });
 
@@ -201,6 +209,34 @@ describe("Sidebar", () => {
     expect(names).not.toContain("railIn");
   });
 
+  /// 实测反馈：删除是唯一不可撤销的动作，误触一下整个对话就没了。
+  /// 点删除按钮只能弹确认，真正落库必须再点一次「删除」。
+  describe("删除会话二次确认", () => {
+    it("点删除按钮不立即删除，先弹确认框并点名会话", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      expect(store.deleteSession).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "删除对话？" })).toBeInTheDocument();
+      expect(screen.getByRole("dialog").textContent).toContain("修 bug");
+    });
+
+    it("取消后不删除且关闭确认框", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      await userEvent.click(screen.getByRole("button", { name: "取消" }));
+      expect(store.deleteSession).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("确认后才删除对应会话", async () => {
+      const { store } = await mount();
+      await userEvent.click(screen.getAllByRole("button", { name: /删除对话/ })[0]);
+      await userEvent.click(screen.getByRole("button", { name: "删除" }));
+      expect(store.deleteSession).toHaveBeenCalledWith("s1");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
   /// 右键菜单靠这两个属性挂载（App.tsx 的 closest 选择器），
   /// 合并 DOM 时漏掉任何一个，右键会静默失效
   it("保留右键菜单锚点属性", async () => {
@@ -317,5 +353,52 @@ describe("Sidebar", () => {
     const bar = current?.querySelector("span");
     expect(bar?.className).toContain("bg-brand");
     expect(bar?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  /// C14：导航项与会话项共用一套选中语言（浅底 + 2px 品牌竖线），
+  /// 竖线常驻占位只换颜色，否则激活瞬间图标会横移。
+  it("导航项激活时用浅底加品牌竖线", async () => {
+    const blocks = DEFAULT_NAV_BLOCKS.map((b) => ({ ...b, panel: b.id }));
+    await mount({ activePanel: "mcp", navBlocks: blocks });
+    const mcp = screen.getByRole("button", { name: "MCP" });
+    expect(mcp).toHaveAttribute("aria-current", "page");
+    expect(mcp.className).toContain("bg-bubble-user");
+    expect(mcp.querySelector("span.bg-brand")).not.toBeNull();
+
+    const skills = screen.getByRole("button", { name: "Skills" });
+    expect(skills).not.toHaveAttribute("aria-current");
+    expect(skills.querySelector("span.bg-brand")).toBeNull();
+    // 未激活也留一条透明竖线，保证横向不位移
+    expect(skills.querySelector("span.bg-transparent")).not.toBeNull();
+  });
+
+  /// C14：空工作区不能只留一句「暂无对话」——空态要给出口。
+  it("当前工作区没有对话时提供新建对话入口", async () => {
+    const { store } = await mount({}, { sessions: [] });
+    // 两个工作区都是空的，各给一处空态
+    expect(await screen.findAllByText("暂无对话")).toHaveLength(2);
+    // 导航区也有一个「新建对话」按钮，空态里的那个带加号图标与下划线文字
+    const emptyAction = screen
+      .getAllByRole("button", { name: /新建对话/ })
+      .find((b) => b.textContent?.trim() === "新建对话");
+    expect(emptyAction).toBeDefined();
+    await userEvent.click(emptyAction!);
+    expect(store.newSession).toHaveBeenCalled();
+  });
+
+  /// C15：折叠态只有 56px，圆点分不清三个工作区——改首字方块 + 会话数角标，
+  /// 当前工作区用品牌色描边而不是换底色。
+  it("折叠态工作区显示首字方块与会话数角标", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    await mount();
+    const current = screen.getByRole("button", { name: "E:/dev/aura" });
+    expect(current).toHaveTextContent("A");
+    // 该工作区有 s1/s2 两条真会话，s4 是草稿不计数
+    expect(current.textContent).toContain("2");
+    expect(current.querySelector("span")?.className).toContain("ring-brand");
+
+    const other = screen.getByRole("button", { name: "E:/dev/other" });
+    expect(other).toHaveTextContent("O");
+    expect(other.querySelector("span")?.className).not.toContain("ring-brand");
   });
 });

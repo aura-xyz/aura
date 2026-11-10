@@ -25,6 +25,7 @@ import {
   setWorkspace,
   stopMessage as stopMessageApi,
   truncateHistory as truncateHistoryApi,
+  type ImageRef,
   type ModelInfo,
 } from "./lib/api";
 import { type Mode } from "./lib/mode";
@@ -84,7 +85,16 @@ export interface AssistantVersion {
 }
 
 export type ChatMessage =
-  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "user";
+      content: string;
+      /**
+       * 图片附件（v0.8.0，C55）。后端多模态就绪前为降级展示：
+       * 仅携带 path 引用，消息流按 asset protocol 渲染。
+       */
+      images?: ImageRef[];
+    }
   | {
       id: string;
       role: "assistant";
@@ -119,11 +129,19 @@ export interface Session {
   id: string;
   title: string;
   workspace: string;
+  /** 最近更新时间（Unix 秒）。C51 起后端返回，旧库为 0 */
+  updated_at: number;
   messages: ChatMessage[];
   /** 任务清单。旧会话可能没有，按空处理 */
   todos: Todo[];
   /** 最近一轮真实 token 用量；上游不提供时为空 */
   lastUsage?: TurnUsage;
+  /**
+   * 会话累计用量（v0.8.0）：每个 usage 事件累加一次。
+   * `turns` 是事件数（= 完成的轮次），不是单次 LLM 请求数——
+   * 一轮里因工具往返可能发起多次请求，后端已合并上报。
+   */
+  usageTotals?: { input: number; output: number; total: number; turns: number };
   /** 会话内累计 LLM 耗时（毫秒），与工具耗时分开展示 */
   llmMs?: number;
 }
@@ -154,7 +172,7 @@ interface StoreValue extends State {
   startRename: (id: string) => void;
   cancelRename: () => void;
   renameSession: (id: string, title: string) => void;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, images?: ImageRef[]) => Promise<void>;
   /**
    * 回滚到第 userIndex 条用户消息并重新发送 `text`。
    * 「重新生成」与「编辑消息并重跑」共用。
@@ -253,6 +271,7 @@ function createSession(workspace = ""): Session {
     id: crypto.randomUUID(),
     title: "新对话",
     workspace,
+    updated_at: 0,
     messages: [],
     todos: [],
   };
@@ -612,6 +631,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   llmMs: p.llm_ms ?? 0,
                 },
                 llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
+                usageTotals: {
+                  input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
+                  output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
+                  total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
+                  turns: (sess.usageTotals?.turns ?? 0) + 1,
+                },
               }
             : sess,
         ),
@@ -714,6 +739,8 @@ setState((s) => {
             id: x.id,
     title: x.title,
        workspace: normWs(x.workspace),
+            // C51：后端返回 updated_at；旧库/旧版本会话没有该字段时回落 0
+            updated_at: typeof x.updated_at === "number" ? x.updated_at : 0,
             messages: x.messages,
       // 旧版本会话没有 todos 字段，按空清单处理
       todos: normalizeTodos(x.todos),
@@ -760,8 +787,10 @@ let sessions = restored;
     try {
       await setSelectedModelApi(id);
       setState((s) => ({ ...s, selectedModel: id }));
-    } catch {
-      /* 无效模型保持原选择 */
+    } catch (e) {
+      // 以前这里静默吞错：后端一旦保存失败（如 Linux 密钥环写不进去），
+      // 界面什么都不显示，用户只看到「切换不了」，无从判断原因。
+      notifyApi("error", `切换模型失败：${typeof e === "string" ? e : String(e)}`);
     }
   }, []);
 
@@ -857,7 +886,7 @@ let sessions = restored;
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, images?: ImageRef[]) => {
       if (state.busy) return;
       const sessionId = state.activeId;
       if (!sessionId) return;
@@ -868,6 +897,7 @@ let sessions = restored;
         id: crypto.randomUUID(),
         role: "user",
         content: text,
+        ...(images && images.length ? { images } : {}),
       };
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -904,7 +934,7 @@ let sessions = restored;
       }));
       persistNow(sessionId, title, current.workspace, messages);
       try {
-        await sendMessageApi(sessionId, text, stateRef.current.mode);
+        await sendMessageApi(sessionId, text, stateRef.current.mode, images);
       } catch (e) {
         if (!sawErrorRef.current) {
           appendBlocks(sessionId, assistantMsg.id, (b) => [

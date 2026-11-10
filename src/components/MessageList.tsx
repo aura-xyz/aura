@@ -2,6 +2,7 @@ import { memo, useCallback } from "react";
 import { Pencil } from "lucide-react";
 import { useStore, type Block, type ChatMessage } from "../store";
 import { plainTextOf } from "../lib/messageText";
+import { CONTENT_WIDTH } from "../lib/layout";
 import { originalQuestion, userIndexForAssistant } from "../lib/history";
 import { ActionRow, ErrorRow, NoticeRow } from "./ActionRow";
 import Markdown from "./Markdown";
@@ -35,7 +36,7 @@ const UserBubble = memo(function UserBubble({
     <div className="group flex flex-col items-end gap-1" data-turn={userIndex}>
       <div
         data-ctx-message={content}
-        className="max-w-[75%] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"
+        className="max-w-[min(75%,75ch)] whitespace-pre-wrap break-words rounded-card bg-bubble-user px-4 py-3 text-[15px] leading-relaxed"
       >
         {content}
       </div>
@@ -164,8 +165,16 @@ export default function MessageList() {
 
   const lastIndex = messages.length - 1;
 
+  /**
+   * 离屏消息跳过布局与绘制（v0.8.0 的止血措施）。
+   *
+   * 最后一条是正在流式写入的目标：给它上 content-visibility 会让每次
+   * 追加都触发一次重新布局，占位高度也会跟着跳，所以只对历史消息生效。
+   */
+  const virtualClass = (i: number) => (i === lastIndex ? "" : "aura-msg-virtual");
+
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-6 xl:max-w-5xl 2xl:max-w-6xl">
+    <div className={`mx-auto flex ${CONTENT_WIDTH} flex-col gap-6 px-6 py-6`}>
       {messages.map((m, i) => {
         // 序号：界面消息的 1-based 位置（分角色各自计数）。
         // 重新生成/编辑都要用它们定位到对应的用户消息。
@@ -174,7 +183,9 @@ export default function MessageList() {
 
         if (m.role === "user") {
           return (
-            <UserBubble key={i} content={m.content} userIndex={userIndex} />
+            <div key={i} className={virtualClass(i)}>
+              <UserBubble content={m.content} userIndex={userIndex} />
+            </div>
           );
         }
         // 该回答由第几条用户消息触发，以及那个问题的原文。
@@ -185,7 +196,7 @@ export default function MessageList() {
         // group 让 MessageActions 的 group-hover 生效：指针进入这条消息
         // 整块才显示操作条，而不是只在按钮那一行生效
         return (
-          <div key={i} className="group">
+          <div key={i} className={`group ${virtualClass(i)}`}>
             <AssistantMessage
               blocks={m.blocks}
               pending={busy && i === lastIndex}
