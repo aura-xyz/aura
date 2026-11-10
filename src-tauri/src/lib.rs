@@ -6,6 +6,7 @@ pub mod commands;
 pub mod db;
 pub mod history;
 pub mod market;
+pub mod mcp;
 pub mod paths;
 pub mod proc_group;
 pub mod power;
