@@ -129,3 +129,42 @@ describe("Markdown 代码块文本提取", () => {
     expect(copied).toBe('path = "/projects"');
   });
 });
+
+/**
+ * 稳定片段分段（v0.8.1 P02）。
+ *
+ * 分段是在原有渲染路径上插入的一层，必须保证「看得见的东西没变」：
+ * 片段组件不能包额外的 div（`.md > * + *` 的间距靠直接子元素），
+ * 代码块外壳与复制按钮也要照常出现。
+ */
+describe("Markdown 稳定片段渲染", () => {
+  const longA = "开头".repeat(400);
+  const longB = "中段".repeat(400);
+
+  it("短回答仍按整段解析", async () => {
+    const { container } = await renderMd("你好，Aura");
+    const ps = container.querySelectorAll(".md > p");
+    expect(ps).toHaveLength(1);
+    expect(ps[0].textContent).toBe("你好，Aura");
+  });
+
+  it("长回答切成两段后不引入额外包装元素", async () => {
+    const { container } = await renderMd(`${longA}\n\n${longB}`);
+    const md = container.querySelector(".md");
+    expect(md).not.toBeNull();
+    const children = Array.from(md!.children);
+    expect(children).toHaveLength(2);
+    expect(children.every((el) => el.tagName === "P")).toBe(true);
+    expect(children[0].textContent).toBe(longA);
+    expect(children[1].textContent).toBe(longB);
+  });
+
+  it("围栏代码块随片段渲染出外壳与复制按钮", async () => {
+    const { container } = await renderMd(
+      `${longA}\n\n\`\`\`ts\nconst a = 1;\n\`\`\`\n\n${longB}`,
+    );
+    expect(container.querySelectorAll(".md .md-code")).toHaveLength(1);
+    expect(container.querySelector(".md .md-code-lang")?.textContent).toBeTruthy();
+    expect(container.querySelector(".md .md-code-copy")).not.toBeNull();
+  });
+});

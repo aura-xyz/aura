@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -18,6 +18,7 @@ import nginx from "highlight.js/lib/languages/nginx";
 import protobuf from "highlight.js/lib/languages/protobuf";
 import http from "highlight.js/lib/languages/http";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { splitMarkdown } from "../lib/markdownSegments";
 import "katex/dist/katex.min.css";
 
 interface Props {
@@ -129,7 +130,33 @@ const COMPONENTS = {
   },
 };
 
+/**
+ * 单个片段（v0.8.1 P02）。
+ *
+ * 这是「冻结稳定片段」的落点：memo 浅比较命中时，整段解析（remark 词法 →
+ * rehype 高亮 / KaTeX → 组件树）全部跳过。流式推进只会改最后一个片段的文本，
+ * 前面的片段因此不再重复解析。
+ *
+ * 组件本身不渲染包装元素：ReactMarkdown 输出的块级节点直接成为 `.md` 的子节点，
+ * 所以 `.md > * + *` 之类的间距样式与「整段一次解析」时完全一致。
+ */
+const MarkdownSegment = memo(function MarkdownSegment({ content }: Props) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 const Markdown = memo(function Markdown({ content }: Props) {
+  // 只在 content 变化时重新切分；切出来的片段文本保持引用稳定，
+  // 是 MarkdownSegment 的 memo 能命中的前提。
+  const parts = useMemo(() => splitMarkdown(content), [content]);
+
   /**
    * 模型输出里的链接一律用系统浏览器打开，绝不让 WebView 跟随导航。
    *
@@ -149,13 +176,9 @@ const Markdown = memo(function Markdown({ content }: Props) {
 
   return (
     <div className="md" onClick={handleClick}>
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-        components={COMPONENTS}
-      >
-        {content}
-      </ReactMarkdown>
+      {parts.map((part, i) => (
+        <MarkdownSegment key={i} content={part} />
+      ))}
     </div>
   );
 });
