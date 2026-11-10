@@ -46,6 +46,7 @@ import {
   type Todo,
   type TodoStatus,
 } from "./lib/todo";
+import { planChunk } from "./lib/streamChunks";
 
 // 统一工作区键：反斜杠转 /，并剥离 Windows 扩展路径的 //?/ 前缀，
 // 保证与 Rust 侧 canonicalize 后的键一致
@@ -683,29 +684,60 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [insertTailBlock, flushBuffer]);
 
+  /**
+   * 打字机由 requestAnimationFrame 驱动（v0.8.1 P01）。
+   *
+   * 旧版固定 30ms 的 setInterval 与真实渲染耗时脱钩：Markdown 解析一旦
+   * 超过 30ms，定时器回调仍按点触发，backlog 越堆越大，表现为「越写越卡」。
+   * 帧驱动保证一帧最多消费一次、且消费发生在浏览器绘制之前；再用相邻两帧
+   * 的间隔作为主线程压力代理，掉帧时单帧多吞一些字符尽快追平积压。
+   */
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    let lastFrame = 0;
+    let stopped = false;
+
+    const consume = (frameMs: number) => {
       const buf = bufferRef.current;
       const stream = streamRef.current;
       if (!buf || !stream) return;
       const chars = Array.from(buf);
-      const backlog = chars.length;
-      // 自适应消费：正常流逐字推进（打字机节奏），
-      // 网络突发积压时按时间预算加速，约 0.5s 内追平，避免卡顿滞后
-      let n: number;
-      if (backlog <= 60) {
-        n = backlog > 40 ? 2 : 1;
-      } else if (backlog <= 300) {
-        n = Math.ceil(backlog / 30);
-      } else {
-        n = Math.ceil(backlog / 15) + 4;
-      }
-      n = Math.min(Math.max(n, 1), backlog);
-      const take = chars.slice(0, n).join("");
+      const n = planChunk(chars.length, frameMs);
+      if (n <= 0) return;
       bufferRef.current = chars.slice(n).join("");
-      writeToStream(stream, take);
-    }, 30);
-    return () => window.clearInterval(timer);
+      writeToStream(stream, chars.slice(0, n).join(""));
+    };
+
+    // jsdom / 极老 WebView 可能没有 rAF：退化成定时器，但节奏仍走 planChunk，
+    // 保持与帧驱动一致的自适应背压，而不是回到写死 30ms 的老路。
+    if (typeof window.requestAnimationFrame !== "function") {
+      const timer = window.setInterval(() => consume(30), 30);
+      return () => window.clearInterval(timer);
+    }
+
+    let raf = 0;
+    const onFrame = (ts: number) => {
+      if (stopped) return;
+      // 首帧没有上一帧可参照，按 60fps 的 16ms 处理；窗口从后台恢复时
+      // 间隔可能是几秒，钳到 100ms，避免一次把整段正文吞掉。
+      const frameMs = lastFrame ? Math.min(ts - lastFrame, 100) : 16;
+      lastFrame = ts;
+      consume(frameMs);
+      raf = window.requestAnimationFrame(onFrame);
+    };
+    raf = window.requestAnimationFrame(onFrame);
+
+    // 窗口最小化 / WebView 进后台时 rAF 会被节流甚至暂停。只在 rAF 确实
+    // 停摆（>200ms 没跑）时用低频定时器兜底，避免与帧驱动重复消费。
+    const fallback = window.setInterval(() => {
+      if (performance.now() - lastFrame < 200) return;
+      consume(60);
+    }, 120);
+
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(raf);
+      window.clearInterval(fallback);
+    };
   }, [writeToStream]);
 
   const drainBuffer = useCallback(async () => {
