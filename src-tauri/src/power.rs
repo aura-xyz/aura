@@ -57,7 +57,7 @@ mod keep_awake_win {
 #[cfg(target_os = "linux")]
 mod keep_awake_linux {
     use std::process::{Child, Command, Stdio};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
 
     /// 持有 inhibit 子进程。进程活着就说明锁还攥在手里。
     static HOLDER: Mutex<Option<Child>> = Mutex::new(None);
