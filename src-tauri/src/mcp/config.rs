@@ -210,6 +210,34 @@ pub fn set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// 添加/更新服务器前的**静态审查**：复用安全规则表扫描命令与参数。
+///
+/// 返回：
+/// - `Err(msg)`：命中 HardBlock（不可逆破坏等），拒绝接入；
+/// - `Ok(Some(msg))`：命中提示级规则，调用方记录并提示用户；
+/// - `Ok(None)`：干净。
+pub fn audit_server(command: &str, args: &[String]) -> Result<Option<String>, String> {
+    let line = std::iter::once(command.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+    match crate::security::rules::check_command(line) {
+        Some(hit) if hit.action == crate::security::rules::Action::HardBlock => Err(format!(
+            "该命令命中安全规则「{}」：{}",
+            hit.id, hit.reason
+        )),
+        Some(hit) => Ok(Some(format!(
+            "该命令命中提示规则「{}」：{}",
+            hit.id, hit.reason
+        ))),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +314,19 @@ mod tests {
         let conn = mem();
         assert!(insert(&conn, " ", "npx", vec![], BTreeMap::new(), vec![], true).is_err());
         assert!(insert(&conn, "x", "  ", vec![], BTreeMap::new(), vec![], true).is_err());
+    }
+
+    #[test]
+    fn audit_rejects_hard_block_commands() {
+        // mkfs 属不可逆破坏，必须拒绝接入。
+        let err = audit_server("mkfs.ext4", &["/dev/sda1".into()]).unwrap_err();
+        assert!(err.contains("安全规则"), "{err}");
+    }
+
+    #[test]
+    fn audit_allows_normal_mcp_command() {
+        // 常规 npx 服务器不应被硬拒。
+        let r = audit_server("npx", &["-y".into(), "server-filesystem".into()]);
+        assert!(r.is_ok(), "普通命令不应被拒绝：{r:?}");
     }
 }

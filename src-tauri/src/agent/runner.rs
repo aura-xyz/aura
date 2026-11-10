@@ -303,81 +303,120 @@ async fn approval_gate(
 ) -> Option<String> {
     use crate::agent::approval::{decide, Gate, APPROVAL_TIMEOUT, EV_APPROVAL};
 
-    if name != "run_script" {
+    // 需要审批的两类工具：内置 `run_script`，以及 rc.3 起的 MCP 工具。
+    // MCP 工具一律 Exec 且 annotation 不可信，走「最高审批档」：策略放行
+    // 也仍需确认，用户可在本会话内按服务器「记住」。
+    let mcp = crate::tools::registry::mcp_entry(name);
+    let command = if mcp.is_some() {
+        format!("{name} {}", summarize_args(args))
+    } else if name == "run_script" {
+        args.get("command").and_then(|v| v.as_str())?.trim().to_string()
+    } else {
         return None;
-    }
-    let command = args.get("command").and_then(|v| v.as_str())?.trim().to_string();
+    };
     if command.is_empty() {
         return None;
     }
     let mgr = ctx.approvals?;
 
-    match decide(ctx.approval_policy, &command) {
-        Gate::Allow => None,
-        Gate::Reject { reason } => Some(format!(
-            "命令被安全策略拦截（{reason}）：{command}\n\
-             如确需执行，请调整命令写法以避开该模式。"
-        )),
-        Gate::Ask {
-            key,
-            rule_id,
+    // 规则硬拒对两类工具都生效（MCP 参数里出现危险特征同样拦）。
+    let decision = decide(ctx.approval_policy, &command);
+    if let Gate::Reject { reason } = &decision {
+        crate::security::log_simple(
+            crate::security::Kind::BlockedCommand,
+            ctx.session_id,
+            &command,
             reason,
-        } => {
-            // 本会话已经为这条规则点过「别再问」——直接放行
-            if mgr.is_remembered(ctx.session_id, &key) {
-                return None;
-            }
-            let id = crate::agent::approval::next_request_id();
-            let rx = mgr.register(&id, ctx.session_id);
-            let _ = ctx.app.emit(
-                EV_APPROVAL,
-                json!({
-                    "id": id,
-                    "session_id": ctx.session_id,
-                    "tool": name,
-                    "command": command,
-                    "preview": first_line(&command),
-                    "rule_id": rule_id,
-                    "reason": reason,
-                    "timeout_ms": APPROVAL_TIMEOUT.as_millis() as u64,
-                }),
-            );
-            match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
-                Ok(Ok(decision)) if decision.approved => {
-                    crate::security::log_simple(
-                        crate::security::Kind::ApprovalAllowed,
-                        ctx.session_id,
-                        &command,
-                        &reason,
-                        &rule_id,
-                    );
-                    if decision.remember {
-                        mgr.remember(ctx.session_id, &key);
-                    }
-                    None
-                }
-                Ok(Ok(_)) => {
-                    crate::security::log_simple(
-                        crate::security::Kind::ApprovalDenied,
-                        ctx.session_id,
-                        &command,
-                        &reason,
-                        &rule_id,
-                    );
-                    Some(format!("用户拒绝了该命令，未执行：{command}"))
-                }
-                // 发送端被丢弃：stop_message 兜底决议或会话被清
-                Ok(Err(_)) => Some(format!("审批被取消，命令未执行：{command}")),
-                Err(_) => {
-                    // 超时后必须清理登记，否则 pending 表只增不减
-                    mgr.forget(&id);
-                    Some(format!(
-                        "等待用户确认超时（{} 秒），命令未执行：{command}",
-                        APPROVAL_TIMEOUT.as_secs()
-                    ))
-                }
-            }
+            "",
+        );
+        return Some(format!(
+            "操作被安全策略拦截（{reason}）：{command}\n\
+             如确需执行，请调整参数以避开该模式。"
+        ));
+    }
+
+    // 是否需要询问：MCP 工具最高档（记住即免问）；run_script 按策略。
+    let ask = if let Some(entry) = &mcp {
+        let key = format!("mcp_server_{}", entry.server_name);
+        if mgr.is_remembered(ctx.session_id, &key) {
+            None
+        } else {
+            Some((
+                key,
+                "mcp_tool_call".to_string(),
+                "MCP 工具调用需确认".to_string(),
+            ))
         }
+    } else {
+        match decision {
+            Gate::Ask { key, rule_id, reason } => Some((key, rule_id, reason)),
+            _ => None,
+        }
+    };
+    let Some((key, rule_id, reason)) = ask else {
+        return None;
+    };
+
+    let id = crate::agent::approval::next_request_id();
+    let rx = mgr.register(&id, ctx.session_id);
+    let _ = ctx.app.emit(
+        EV_APPROVAL,
+        json!({
+            "id": id,
+            "session_id": ctx.session_id,
+            "tool": name,
+            "command": &command,
+            "preview": first_line(&command),
+            "rule_id": &rule_id,
+            "reason": &reason,
+            "timeout_ms": APPROVAL_TIMEOUT.as_millis() as u64,
+            "mcp": mcp.is_some(),
+        }),
+    );
+    match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+        Ok(Ok(decision)) if decision.approved => {
+            let kind = if mcp.is_some() {
+                crate::security::Kind::McpCall
+            } else {
+                crate::security::Kind::ApprovalAllowed
+            };
+            crate::security::log_simple(kind, ctx.session_id, &command, &reason, &rule_id);
+            if decision.remember {
+                mgr.remember(ctx.session_id, &key);
+            }
+            None
+        }
+        Ok(Ok(_)) => {
+            let kind = if mcp.is_some() {
+                crate::security::Kind::McpCall
+            } else {
+                crate::security::Kind::ApprovalDenied
+            };
+            crate::security::log_simple(kind, ctx.session_id, &command, "用户拒绝", &rule_id);
+            Some(format!("用户拒绝了该操作，未执行：{command}"))
+        }
+        // 发送端被丢弃：stop_message 兜底决议或会话被清
+        Ok(Err(_)) => Some(format!("审批被取消，操作未执行：{command}")),
+        Err(_) => {
+            // 超时后必须清理登记，否则 pending 表只增不减
+            mgr.forget(&id);
+            Some(format!(
+                "等待用户确认超时（{} 秒），操作未执行：{command}",
+                APPROVAL_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// 把工具参数压成一行摘要（审批卡与安全事件用）。
+fn summarize_args(args: &Value) -> String {
+    let text = serde_json::to_string(args).unwrap_or_default();
+    if text.chars().count() > 200 {
+        let mut s: String = text.chars().take(200).collect();
+        s.push('…');
+        s
+    } else {
+        text
     }
 }
 
@@ -765,6 +804,11 @@ pub async fn run_turn(ctx: &mut TurnContext<'_>, user_message: &str) -> Result<(
         // v0.6.0：每轮重扫技能库。目录只有寥寥几个小文件，相对一次 LLM
         // 往返（~2s）开销可忽略；换来的是会话中途新增的技能当轮即可见，
         // 且 L1 索引始终与磁盘一致。
+        // rc.3：按当前会话工作区重建 MCP 动态工具（工作区限定在这里生效），
+        // 随后的 prompt 才会把可见的 MCP 工具注入进去。
+        let ws_for_mcp = ctx.workspace.to_string_lossy().to_string();
+        crate::tools::registry::sync_mcp_tools(Some(ws_for_mcp.as_str())).await;
+
         let skills = skill::without_disabled(
             skill::scan_with_globals(ctx.workspace),
             ctx.disabled_skills,

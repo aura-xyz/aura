@@ -84,6 +84,8 @@ pub fn decode_line(line: &str) -> Result<Option<Value>, String> {
 pub struct Connection {
     pub server_id: i64,
     pub server_name: String,
+    /// 允许可见的工作区（空 = 全部）。工具可见性按当前工作区前缀过滤。
+    pub workspaces: Vec<String>,
     child: AsyncMutex<Option<Child>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     next_id: AtomicU64,
@@ -97,10 +99,17 @@ pub struct Connection {
 }
 
 impl Connection {
-    fn new(server_id: i64, server_name: String, child: Child, stdin: ChildStdin) -> Self {
+    fn new(
+        server_id: i64,
+        server_name: String,
+        workspaces: Vec<String>,
+        child: Child,
+        stdin: ChildStdin,
+    ) -> Self {
         Connection {
             server_id,
             server_name,
+            workspaces,
             child: AsyncMutex::new(Some(child)),
             stdin: AsyncMutex::new(Some(stdin)),
             next_id: AtomicU64::new(1),
@@ -292,7 +301,7 @@ impl Connection {
     async fn on_tools_changed(&self) {
         // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
         match self.refresh_tools().await {
-            Ok(_) => crate::tools::registry::sync_mcp_tools().await,
+            Ok(_) => crate::tools::registry::sync_mcp_tools(None).await,
             Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
         }
     }
@@ -382,6 +391,7 @@ pub async fn connect(
     command: String,
     args: Vec<String>,
     env: BTreeMap<String, String>,
+    workspaces: Vec<String>,
     cwd: Option<PathBuf>,
 ) -> Result<Arc<Connection>, String> {
     let mut cmd = Command::new(&command);
@@ -407,7 +417,13 @@ pub async fn connect(
     let stdout = child.stdout.take().ok_or("无法获取服务器 stdout")?;
     let stderr = child.stderr.take().ok_or("无法获取服务器 stderr")?;
 
-    let conn = Arc::new(Connection::new(server_id, server_name, child, stdin));
+    let conn = Arc::new(Connection::new(
+        server_id,
+        server_name,
+        workspaces,
+        child,
+        stdin,
+    ));
     // 先起读任务，握手响应才有处可投递。
     tokio::spawn(stdout_loop(conn.clone(), stdout));
     tokio::spawn(stderr_loop(conn.clone(), stderr));

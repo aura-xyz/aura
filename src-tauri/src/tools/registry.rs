@@ -297,12 +297,35 @@ fn pick_external_name(
     external
 }
 
+/// 当前工作区是否落在服务器的可见集内（空集 = 全部可见）。
+fn visible_in(workspaces: &[String], current: Option<&str>) -> bool {
+    if workspaces.is_empty() {
+        return true;
+    }
+    let Some(cur) = current else {
+        // 没有具体工作区上下文时不过滤（设置页 / 全局查询）。
+        return true;
+    };
+    let cur = cur.replace('\\', "/");
+    workspaces.iter().any(|w| {
+        let w = w.replace('\\', "/");
+        let w = w.trim_end_matches('/');
+        !w.is_empty() && (cur == w || cur.starts_with(&format!("{w}/")))
+    })
+}
+
 /// 从连接管理器重建动态工具表。连接/断开/工具集变化后调用。
-pub async fn sync_mcp_tools() {
+///
+/// `current_workspace`：当前会话工作区。给了就按服务器的 `workspaces`
+/// 做前缀过滤（空集 = 全部可见）；`None` 表示全局视角不过滤。
+pub async fn sync_mcp_tools(current_workspace: Option<&str>) {
     let snapshot = crate::mcp::manager().snapshot().await;
     // 先汇总，再一次性替换，避免同步过程中出现半张表。
     let mut next: HashMap<String, McpDynamic> = HashMap::new();
     for (server_id, conn) in snapshot {
+        if !visible_in(&conn.workspaces, current_workspace) {
+            continue;
+        }
         let server_name = conn.server_name.clone();
         for def in conn.tools().await {
             let is_taken = |name: &str| {
