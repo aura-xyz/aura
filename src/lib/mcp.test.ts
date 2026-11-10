@@ -5,8 +5,10 @@ import {
   commandSummary,
   envToText,
   parseEnv,
+  resourceLabel,
   toLines,
   type McpCapabilities,
+  type McpResourceView,
 } from "./mcp";
 
 function caps(over: Partial<McpCapabilities> = {}): McpCapabilities {
@@ -61,6 +63,24 @@ describe("MCP_STATUS_META", () => {
       expect(meta.label.length).toBeGreaterThan(0);
       expect(meta.dot.startsWith("bg-")).toBe(true);
     }
+  });
+});
+
+describe("resourceLabel（M2-04）", () => {
+  const base: McpResourceView = {
+    uri: "file:///workspace/src/a.txt",
+    name: "",
+    description: "",
+    mime_type: null,
+    template: false,
+  };
+
+  it("服务器给了 name 就优先用", () => {
+    expect(resourceLabel({ ...base, name: "项目说明" })).toBe("项目说明");
+  });
+
+  it("没有 name 时回退到 URI 尾段", () => {
+    expect(resourceLabel(base)).toBe("a.txt");
   });
 });
 

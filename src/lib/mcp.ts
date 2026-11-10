@@ -64,6 +64,33 @@ export function capabilityDomains(c: McpCapabilities | null | undefined): {
   ];
 }
 
+/** resources 域的一条资源 / URI 模板（v0.8.1 M2-04）。 */
+export interface McpResourceView {
+  uri: string;
+  name: string;
+  description: string;
+  mime_type: string | null;
+  /** URI 模板需要参数展开，二期不提供读取 */
+  template: boolean;
+}
+
+/** resources/read 的结果。blob 只统计字节，不解码进 text。 */
+export interface McpResourceReadView {
+  uri: string;
+  text: string;
+  mime_type: string | null;
+  truncated: boolean;
+  total_bytes: number;
+  blob_bytes: number;
+}
+
+/** 资源条目的显示名：服务器常不给 name，退回 URI 尾段。 */
+export function resourceLabel(r: McpResourceView): string {
+  if (r.name.trim()) return r.name;
+  const parts = r.uri.split("/").filter(Boolean);
+  return parts[parts.length - 1] || r.uri;
+}
+
 /** 添加前试连结果。 */
 export interface McpTestResult {
   ok: boolean;
@@ -169,4 +196,18 @@ export function testConnect(
   input: Pick<McpServerInput, "name" | "command" | "args" | "env">,
 ): Promise<McpTestResult> {
   return invoke("mcp_test_connect", { ...input });
+}
+
+// ── resources 域（v0.8.1 M2-04）────────────────────────────
+
+/** 每次调用都会让后端重扫一次，等价于「刷新」。 */
+export function listResources(id: number): Promise<McpResourceView[]> {
+  return invoke("mcp_list_resources", { id });
+}
+
+export function readResource(
+  id: number,
+  uri: string,
+): Promise<McpResourceReadView> {
+  return invoke("mcp_read_resource", { id, uri });
 }

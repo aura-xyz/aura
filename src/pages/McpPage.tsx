@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import Switch from "../components/Switch";
+import McpResourcePanel from "../components/McpResourcePanel";
 import {
   MCP_STATUS_META,
   addServer,
@@ -416,6 +417,11 @@ function DetailDrawer({
               </ul>
             )}
           </section>
+
+          <McpResourcePanel
+            serverId={id}
+            supported={detail?.capabilities.resources ?? false}
+          />
 
           {detail && detail.stderr.length > 0 && (
             <section className="mt-5">

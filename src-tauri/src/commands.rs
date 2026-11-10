@@ -2872,6 +2872,41 @@ pub async fn mcp_rescan_tools(
     Ok(mcp_view(&cfg).await)
 }
 
+/// 资源清单（v0.8.1 M2-04）。每次调用都重扫一遍，前端「刷新」即再次调用。
+/// 服务器未声明 resources 能力时仍允许手动重扫（老实现常漏报能力）。
+#[tauri::command]
+pub async fn mcp_list_resources(
+    id: i64,
+) -> Result<Vec<crate::mcp::resources::McpResource>, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    conn.refresh_resources()
+        .await
+        .map_err(|e| format!("读取资源清单失败：{e}"))?;
+    Ok(conn.resources().await)
+}
+
+/// 读取一条资源（v0.8.1 M2-04）。
+///
+/// 顺带订阅更新：用户看了这条资源，后续 `notifications/resources/updated`
+/// 才有意义；服务器未声明订阅能力时 `subscribe_resource` 会直接返回错误，
+/// 这里静默忽略，绝不影响读取本身。
+#[tauri::command]
+pub async fn mcp_read_resource(
+    id: i64,
+    uri: String,
+) -> Result<crate::mcp::resources::ResourceReadResult, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    let result = conn.read_resource(&uri).await?;
+    let _ = conn.subscribe_resource(&uri).await;
+    Ok(result)
+}
+
 /// 添加前试连：不落库，只验证握手并返回工具数。
 #[tauri::command]
 pub async fn mcp_test_connect(
