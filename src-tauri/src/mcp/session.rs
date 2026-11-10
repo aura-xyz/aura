@@ -93,9 +93,12 @@ impl RpcSession {
         transport.write_line(line).await
     }
 
-    /// 分发入站消息。返回 `Some(method)` 表示这是一条通知，交给上层路由；
-    /// 响应与无法识别的消息返回 None。
-    pub fn dispatch(&self, v: Value) -> Option<String> {
+    /// 分发入站消息。返回 `Some((method, params))` 表示这是一条通知，
+    /// 交给上层路由；响应与无法识别的消息返回 None。
+    ///
+    /// params 必须一起带回去：`notifications/resources/updated` 要靠
+    /// `params.uri` 判断是哪条资源变了，只给 method 名不够用。
+    pub fn dispatch(&self, v: Value) -> Option<(String, Value)> {
         if let Some(id) = v.get("id").and_then(|x| x.as_u64()) {
             let tx = self.pending.lock().ok().and_then(|mut m| m.remove(&id));
             if let Some(tx) = tx {
@@ -111,9 +114,9 @@ impl RpcSession {
             }
             return None;
         }
-        v.get("method")
-            .and_then(|m| m.as_str())
-            .map(str::to_string)
+        let method = v.get("method").and_then(|m| m.as_str())?;
+        let params = v.get("params").cloned().unwrap_or(Value::Null);
+        Some((method.to_string(), params))
     }
 
     /// 连接关闭时让所有等待中的请求立刻失败，而不是各自熬到超时。
@@ -164,8 +167,14 @@ mod tests {
         // 没有 pending 的响应不应被当成通知
         assert_eq!(session.dispatch(json!({"id": 99, "result": {}})), None);
         assert_eq!(
-            session.dispatch(json!({"method": "notifications/tools/list_changed"})),
-            Some("notifications/tools/list_changed".to_string())
+            session.dispatch(json!({
+                "method": "notifications/resources/updated",
+                "params": { "uri": "file:///a.txt" }
+            })),
+            Some((
+                "notifications/resources/updated".to_string(),
+                json!({ "uri": "file:///a.txt" })
+            ))
         );
         assert_eq!(session.dispatch(json!({"foo": 1})), None);
     }

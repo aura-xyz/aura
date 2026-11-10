@@ -18,6 +18,10 @@ use tokio::process::{ChildStderr, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
+use super::resources::{
+    parse_resource_contents, parse_resource_page, truncate_utf8, validate_resource_uri,
+    McpResource, ResourceReadResult, MAX_RESOURCE_BYTES, MAX_RESOURCES,
+};
 use super::session::RpcSession;
 use super::transport::{StdioTransport, Transport};
 
@@ -78,6 +82,10 @@ pub struct Connection {
     capabilities: RwLock<ServerCapabilities>,
     /// 最近一次 `tools/list` 的发现结果（C60）。
     tools: RwLock<Vec<McpToolDef>>,
+    /// 最近一次 resources/list + templates/list 的缓存（M2-03）。
+    resources: RwLock<Vec<McpResource>>,
+    /// 已订阅更新的资源 URI。
+    subscribed: RwLock<Vec<String>>,
     /// `tools/call` 串行化（第一部分不做并发，避免服务器实现差异）。
     call_lock: AsyncMutex<()>,
 }
@@ -99,6 +107,8 @@ impl Connection {
             stderr_tail: StdMutex::new(VecDeque::new()),
             capabilities: RwLock::new(ServerCapabilities::default()),
             tools: RwLock::new(Vec::new()),
+            resources: RwLock::new(Vec::new()),
+            subscribed: RwLock::new(Vec::new()),
             call_lock: AsyncMutex::new(()),
         }
     }
@@ -126,6 +136,87 @@ impl Connection {
     /// 握手协商出的能力快照（M2-02）。
     pub async fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.read().await.clone()
+    }
+
+    /// 资源清单缓存（M2-03）。连接断开后由 `shutdown` 清空。
+    pub async fn resources(&self) -> Vec<McpResource> {
+        self.resources.read().await.clone()
+    }
+
+    /// 重扫 resources/list（带 cursor 翻页）与 resources/templates/list。
+    ///
+    /// 服务器未声明 resources 能力时仍允许手动重扫——不少老实现能回
+    /// 结果却忘了在 capabilities 里写，从严拒绝会把可用功能挡在外面。
+    pub async fn refresh_resources(&self) -> Result<Vec<McpResource>, String> {
+        let mut all: Vec<McpResource> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let params = match &cursor {
+                Some(c) => json!({ "cursor": c }),
+                None => json!({}),
+            };
+            let res = self
+                .request("resources/list", params, LIST_TIMEOUT)
+                .await?;
+            all.extend(parse_resource_page(&res));
+            match res.get("nextCursor").and_then(|c| c.as_str()) {
+                Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
+                _ => break,
+            }
+        }
+        // 模板没有分页；失败不影响具体资源清单。
+        if let Ok(res) = self
+            .request("resources/templates/list", json!({}), LIST_TIMEOUT)
+            .await
+        {
+            all.extend(parse_resource_page(&res));
+        }
+        all.truncate(MAX_RESOURCES);
+        *self.resources.write().await = all.clone();
+        crate::mcp::emit(
+            "mcp:resources",
+            json!({ "serverId": self.server_id, "count": all.len() }),
+        );
+        Ok(all)
+    }
+
+    /// 读取一条资源。URI 只做形状校验，不映射到本地文件系统；
+    /// blob 只统计大小、不解码进文本；超长文本按 UTF-8 边界截断。
+    pub async fn read_resource(&self, uri: &str) -> Result<ResourceReadResult, String> {
+        validate_resource_uri(uri)?;
+        let res = self
+            .request("resources/read", json!({ "uri": uri }), LIST_TIMEOUT)
+            .await?;
+        let (raw_text, mime_type, blob_bytes) = parse_resource_contents(&res);
+        let total_bytes = raw_text.len() + blob_bytes;
+        let (text, truncated) = truncate_utf8(&raw_text, MAX_RESOURCE_BYTES);
+        Ok(ResourceReadResult {
+            uri: uri.to_string(),
+            text,
+            mime_type,
+            truncated,
+            total_bytes,
+            blob_bytes,
+        })
+    }
+
+    /// 订阅资源更新。只有服务器声明 `resources.subscribe` 时才发请求。
+    pub async fn subscribe_resource(&self, uri: &str) -> Result<(), String> {
+        validate_resource_uri(uri)?;
+        if !self.capabilities().await.resources_subscribe {
+            return Err("服务器未声明支持资源订阅更新".into());
+        }
+        self.request(
+            "resources/subscribe",
+            json!({ "uri": uri }),
+            LIST_TIMEOUT,
+        )
+        .await?;
+        let mut list = self.subscribed.write().await;
+        if !list.iter().any(|u| u == uri) {
+            list.push(uri.to_string());
+        }
+        Ok(())
     }
 
     /// stderr 尾部（最近若干行），供连接排错展示。
@@ -216,15 +307,33 @@ impl Connection {
         self.request("tools/call", params, CALL_TIMEOUT).await
     }
 
-    /// 通知路由：会话层只负责把 method 名交回来，具体动作在这里决定。
+    /// 通知路由：会话层只负责把 method 与 params 交回来，具体动作在这里决定。
     /// 未知通知按一期口径忽略，不报错、不打断流。
-    async fn on_notification(&self, method: &str) {
-        if method == "notifications/tools/list_changed" {
-            // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
-            match self.refresh_tools().await {
-                Ok(_) => crate::tools::registry::sync_mcp_tools(None).await,
-                Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
+    async fn on_notification(&self, method: &str, params: &Value) {
+        match method {
+            "notifications/tools/list_changed" => {
+                // 重扫失败不弹错误，只留痕（状态徽标由上层按工具数展示）。
+                match self.refresh_tools().await {
+                    Ok(_) => crate::tools::registry::sync_mcp_tools(None).await,
+                    Err(e) => self.push_stderr(format!("刷新工具列表失败：{e}")),
+                }
             }
+            "notifications/resources/list_changed" => {
+                if let Err(e) = self.refresh_resources().await {
+                    self.push_stderr(format!("刷新资源列表失败：{e}"));
+                }
+            }
+            "notifications/resources/updated" => {
+                let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+                let subscribed = self.subscribed.read().await.iter().any(|u| u == uri);
+                if subscribed && !uri.is_empty() {
+                    crate::mcp::emit(
+                        "mcp:resource",
+                        json!({ "serverId": self.server_id, "uri": uri }),
+                    );
+                }
+            }
+            _ => {}
         }
     }
 
@@ -232,6 +341,8 @@ impl Connection {
     pub async fn shutdown(&self) {
         self.transport.shutdown().await;
         self.session.fail_pending("连接已关闭");
+        *self.resources.write().await = Vec::new();
+        *self.subscribed.write().await = Vec::new();
         self.set_status(ConnStatus::Disabled).await;
     }
 
@@ -270,8 +381,8 @@ async fn stdout_loop(conn: Arc<Connection>, stdout: ChildStdout) {
             Ok(0) => break, // EOF：子进程退出或关闭了 stdout
             Ok(_) => match decode_line(&line) {
                 Ok(Some(v)) => {
-                    if let Some(method) = conn.session.dispatch(v) {
-                        conn.on_notification(&method).await;
+                    if let Some((method, params)) = conn.session.dispatch(v) {
+                        conn.on_notification(&method, &params).await;
                     }
                 }
                 Ok(None) => {}
@@ -355,6 +466,13 @@ pub async fn connect(
             // 首次工具发现：失败不阻断连接（工具数为 0，状态仍 Running）。
             if let Err(e) = conn.refresh_tools().await {
                 conn.push_stderr(format!("首次拉取工具列表失败：{e}"));
+            }
+            // 只有服务器声明了 resources 才自动拉清单；未声明时用户仍可在
+            // 设置页手动重扫（老实现常漏报能力却照样能回结果）。
+            if conn.capabilities().await.resources {
+                if let Err(e) = conn.refresh_resources().await {
+                    conn.push_stderr(format!("首次拉取资源列表失败：{e}"));
+                }
             }
             Ok(conn)
         }
