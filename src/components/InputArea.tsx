@@ -48,6 +48,16 @@ import {
   MENTION_LISTBOX_ID,
   listboxOptionId,
 } from "./MenuPopup";
+import { errorText } from "../lib/apiError";
+import {
+  getPrompt,
+  loadAllPrompts,
+  mcpPromptCommandId,
+  mcpPromptCommandItems,
+  promptPlainText,
+  type McpPromptItemView,
+} from "../lib/mcp";
+import McpPromptArgsDialog from "./McpPromptArgsDialog";
 import MarkdownEditor, {
   insertAtCaret,
   replaceTrigger,
@@ -236,6 +246,9 @@ export default function InputArea({
   const [skills, setSkills] = useState<SkillView[]>([]);
   const [goal, setGoal] = useState("");
   const goalRef = useRef("");
+  // v0.8.1 M2-06：MCP 提示词作为 / 面板的一组候选项；参数表单单独成浮层
+  const [mcpPrompts, setMcpPrompts] = useState<McpPromptItemView[]>([]);
+  const [promptDialog, setPromptDialog] = useState<McpPromptItemView | null>(null);
 
   // 切会话：装入该会话的草稿，同时把富文本编辑器内容一起换掉。
   useEffect(() => {
@@ -329,11 +342,28 @@ export default function InputArea({
     };
   }, [cmd?.view]);
 
+  // 提示词清单只在挂载时拉一次：单台服务器不可用不该拖慢打字，
+  // 失败也静默——/ 面板只是少一组候选项，不影响既有命令。
+  useEffect(() => {
+    let alive = true;
+    void loadAllPrompts()
+      .then((items) => {
+        if (alive) setMcpPrompts(items);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const activeItems = useMemo<CommandItem[]>(() => {
     if (!cmd) return [];
     switch (cmd.view) {
       case "root":
-        return rootCommandItems(cmd.query);
+        return [
+          ...rootCommandItems(cmd.query),
+          ...mcpPromptCommandItems(mcpPrompts, cmd.query),
+        ];
       case "skill": {
         const items = skillCommandItems(skills, cmd.query);
         // 与全局面板同一套「最近使用」排序，位置不算搜索时由它决定
@@ -350,7 +380,7 @@ export default function InputArea({
       case "goal":
         return [];
     }
-  }, [cmd, skills, models, selectedModel, mode]);
+  }, [cmd, skills, models, selectedModel, mode, mcpPrompts]);
 
   function closeMentions() {
     setTrigger(null);
@@ -551,9 +581,42 @@ export default function InputArea({
     finishCommand("");
   }
 
+  /** 展开 MCP 提示词并追加到当前输入，由用户看过再自行发送。 */
+  async function insertPrompt(
+    p: McpPromptItemView,
+    args: Record<string, string>,
+  ) {
+    try {
+      const messages = await getPrompt(p.server_id, p.name, args);
+      const text = promptPlainText(messages);
+      if (!text.trim()) {
+        notify("error", "服务器返回了空的提示词内容");
+        return;
+      }
+      const cur = valueRef.current.trim();
+      applyText(cur ? `${cur}\n\n${text}` : text);
+    } catch (e) {
+      notify("error", errorText(e));
+    } finally {
+      setPromptDialog(null);
+    }
+  }
+
   function pickCommand(item: CommandItem) {
     const c = cmd;
     if (!c) return;
+    // MCP 提示词不是内置 slash 命令，必须在 id → CommandId 转换之前拦下。
+    if (item.id.startsWith("mcp-prompt:")) {
+      const p = mcpPrompts.find((x) => mcpPromptCommandId(x) === item.id);
+      // 由 `/` 触发时把触发词替掉，否则展开的文本前面会挂着一个孤零零的 /
+      if (c.source === "slash") replaceRange(c.start, c.end, "", true);
+      else closeCommand();
+      if (p) {
+        if (p.arguments.length > 0) setPromptDialog(p);
+        else void insertPrompt(p, {});
+      }
+      return;
+    }
     if (c.view === "root") {
       const id = item.id as CommandId;
       if (c.source === "plus") {
@@ -792,6 +855,14 @@ export default function InputArea({
               ? "还没有可用模型，请先在设置页添加"
               : undefined
           }
+        />
+      )}
+      {/* MCP 提示词参数表单：独立浮层，避免被输入框的键盘导航抢按键 */}
+      {promptDialog && (
+        <McpPromptArgsDialog
+          prompt={promptDialog}
+          onSubmit={(args) => void insertPrompt(promptDialog, args)}
+          onCancel={() => setPromptDialog(null)}
         />
       )}
       {/* 图片附件 chip：粘贴 / 拖放图片后出现在输入框上方 */}

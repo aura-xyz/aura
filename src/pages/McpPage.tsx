@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import Switch from "../components/Switch";
 import McpResourcePanel from "../components/McpResourcePanel";
+import McpPromptPanel from "../components/McpPromptPanel";
 import {
   MCP_STATUS_META,
   addServer,
@@ -421,6 +422,10 @@ function DetailDrawer({
           <McpResourcePanel
             serverId={id}
             supported={detail?.capabilities.resources ?? false}
+          />
+          <McpPromptPanel
+            serverId={id}
+            supported={detail?.capabilities.prompts ?? false}
           />
 
           {detail && detail.stderr.length > 0 && (

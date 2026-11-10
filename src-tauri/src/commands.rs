@@ -2907,6 +2907,36 @@ pub async fn mcp_read_resource(
     Ok(result)
 }
 
+/// 提示词清单（v0.8.1 M2-06）。每次调用重扫一次，前端刷新即再次调用。
+#[tauri::command]
+pub async fn mcp_list_prompts(
+    id: i64,
+) -> Result<Vec<crate::mcp::prompts::McpPrompt>, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    conn.refresh_prompts()
+        .await
+        .map_err(|e| format!("读取提示词清单失败：{e}"))?;
+    Ok(conn.prompts().await)
+}
+
+/// 展开一条提示词模板，只返回消息文本（v0.8.1 M2-06）。
+/// 后端不执行、不写 history、不交给模型——由用户看过再决定是否发送。
+#[tauri::command]
+pub async fn mcp_get_prompt(
+    id: i64,
+    name: String,
+    arguments: serde_json::Value,
+) -> Result<Vec<crate::mcp::prompts::McpPromptMessage>, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    conn.get_prompt(&name, arguments).await
+}
+
 /// 添加前试连：不落库，只验证握手并返回工具数。
 #[tauri::command]
 pub async fn mcp_test_connect(

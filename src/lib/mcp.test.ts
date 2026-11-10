@@ -7,7 +7,11 @@ import {
   parseEnv,
   resourceLabel,
   toLines,
+  mcpPromptCommandId,
+  mcpPromptCommandItems,
+  promptPlainText,
   type McpCapabilities,
+  type McpPromptItemView,
   type McpResourceView,
 } from "./mcp";
 
@@ -81,6 +85,41 @@ describe("resourceLabel（M2-04）", () => {
 
   it("没有 name 时回退到 URI 尾段", () => {
     expect(resourceLabel(base)).toBe("a.txt");
+  });
+});
+
+describe("MCP 提示词契约（M2-06）", () => {
+  const p: McpPromptItemView = {
+    server_id: 3,
+    server_name: "fs",
+    name: "review",
+    description: "代码评审",
+    arguments: [{ name: "path", description: "路径", required: true }],
+  };
+
+  it("单条消息不带角色前缀，多条带角色", () => {
+    expect(promptPlainText([{ role: "user", text: "正文" }])).toBe("正文");
+    expect(
+      promptPlainText([
+        { role: "system", text: "规则" },
+        { role: "user", text: "问题" },
+      ]),
+    ).toBe("[system] 规则\n\n[user] 问题");
+  });
+
+  it("命令 id 带服务器 id，避免跨服重名", () => {
+    expect(mcpPromptCommandId(p)).toBe("mcp-prompt:3:review");
+    expect(mcpPromptCommandId({ ...p, server_id: 9 })).toBe(
+      "mcp-prompt:9:review",
+    );
+  });
+
+  it("候选项按名称 / 服务器 / 说明过滤", () => {
+    expect(mcpPromptCommandItems([p], "")[0].label).toBe("mcp:fs/review");
+    expect(mcpPromptCommandItems([p], "FIRST")).toHaveLength(0);
+    expect(mcpPromptCommandItems([p], "fs")).toHaveLength(1);
+    expect(mcpPromptCommandItems([p], "评审")).toHaveLength(1);
+    expect(mcpPromptCommandItems([p], "review")[0].group).toBe("skill");
   });
 });
 

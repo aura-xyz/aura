@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,19 @@ const { openMock, saveMock } = vi.hoisted(() => ({
   saveMock: vi.fn(async () => null as string | null),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock, save: saveMock }));
+
+const { loadPromptsMock, getPromptMock } = vi.hoisted(() => ({
+  loadPromptsMock: vi.fn(async () => [] as unknown[]),
+  getPromptMock: vi.fn(async () => [{ role: "user", text: "展开后的提示词" }]),
+}));
+vi.mock("../lib/mcp", async () => {
+  const actual = await vi.importActual<typeof import("../lib/mcp")>("../lib/mcp");
+  return {
+    ...actual,
+    loadAllPrompts: loadPromptsMock,
+    getPrompt: getPromptMock,
+  };
+});
 
 import InputArea from "./InputArea";
 import type { ModelInfo } from "../lib/api";
@@ -40,6 +53,10 @@ function mount(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   openMock.mockClear();
   localStorage.clear();
+  loadPromptsMock.mockReset().mockResolvedValue([]);
+  getPromptMock.mockReset().mockResolvedValue([
+    { role: "user", text: "展开后的提示词" },
+  ]);
 });
 
 describe("InputArea", () => {
@@ -433,5 +450,42 @@ describe("InputArea 的 @ / 触发", () => {
     expect(notCancelled).toBe(true);
     expect(box).toHaveValue("@<src/store.tsx> ");
     expect(props.onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("InputArea 的 MCP 提示词（M2-06）", () => {
+  const noArgs = {
+    server_id: 3,
+    server_name: "fs",
+    name: "review",
+    description: "代码评审",
+    arguments: [],
+  };
+
+  it("/ 面板列出提示词，选中后把展开内容插入输入框", async () => {
+    loadPromptsMock.mockResolvedValueOnce([noArgs]);
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/");
+
+    await userEvent.click(await screen.findByText("mcp:fs/review"));
+    await waitFor(() => expect(box).toHaveValue("展开后的提示词"));
+    expect(getPromptMock).toHaveBeenCalledWith(3, "review", {});
+  });
+
+  it("带必填参数的提示词先弹参数表单，不直接展开", async () => {
+    loadPromptsMock.mockResolvedValueOnce([
+      {
+        ...noArgs,
+        arguments: [{ name: "path", description: "路径", required: true }],
+      },
+    ]);
+    mount({ sessionId: "s1" });
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "/");
+    await userEvent.click(await screen.findByText("mcp:fs/review"));
+
+    expect(screen.getByTestId("mcp-prompt-dialog")).toBeInTheDocument();
+    expect(getPromptMock).not.toHaveBeenCalled();
   });
 });

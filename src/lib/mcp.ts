@@ -5,6 +5,8 @@
  * 命令参数名与后端函数形参同名（均为单词，无驼峰歧义）。
  */
 import { invoke } from "@tauri-apps/api/core";
+import { Sparkles } from "lucide-react";
+import type { CommandItem } from "./commandItems";
 
 export type McpStatus = "running" | "connecting" | "down" | "disabled";
 
@@ -89,6 +91,101 @@ export function resourceLabel(r: McpResourceView): string {
   if (r.name.trim()) return r.name;
   const parts = r.uri.split("/").filter(Boolean);
   return parts[parts.length - 1] || r.uri;
+}
+
+/** prompts 域的模板参数（v0.8.1 M2-06）。 */
+export interface McpPromptArgView {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+/** 单台服务器的一条提示词。 */
+export interface McpPromptView {
+  name: string;
+  description: string;
+  arguments: McpPromptArgView[];
+}
+
+/** 跨服务器聚合后的候选项，用于命令面板与设置页。 */
+export interface McpPromptItemView extends McpPromptView {
+  server_id: number;
+  server_name: string;
+}
+
+/** prompts/get 的一条消息（不可信文本）。 */
+export interface McpPromptMessageView {
+  role: string;
+  text: string;
+}
+
+/** 填入输入框的纯文本，与后端 prompt_plain_text 同口径。 */
+export function promptPlainText(messages: McpPromptMessageView[]): string {
+  if (messages.length === 1) return messages[0].text;
+  return messages.map((m) => `[${m.role}] ${m.text}`).join("\n\n");
+}
+
+/** 命令面板里 MCP 提示词的稳定 id，带服务器 id 避免跨服重名。 */
+export function mcpPromptCommandId(p: McpPromptItemView): string {
+  return `mcp-prompt:${p.server_id}:${p.name}`;
+}
+
+/** 把聚合后的提示词转成 `/` 命令面板候选项。 */
+export function mcpPromptCommandItems(
+  items: McpPromptItemView[],
+  query: string,
+): CommandItem[] {
+  const q = query.trim().toLowerCase();
+  return items
+    .filter((p) => {
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.server_name.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q)
+      );
+    })
+    .map((p) => ({
+      id: mcpPromptCommandId(p),
+      label: `mcp:${p.server_name}/${p.name}`,
+      detail:
+        p.description ||
+        (p.arguments.length
+          ? `参数：${p.arguments.map((a) => a.name).join(", ")}`
+          : "MCP 提示词"),
+      icon: Sparkles,
+      group: "skill" as const,
+    }));
+}
+
+/** 拉取所有已启用服务器的提示词；单台失败不影响其余。 */
+export async function loadAllPrompts(): Promise<McpPromptItemView[]> {
+  let servers: McpServerView[];
+  try {
+    const list = await listServers();
+    if (!Array.isArray(list)) return [];
+    servers = list;
+  } catch {
+    return [];
+  }
+  const out: McpPromptItemView[] = [];
+  await Promise.all(
+    servers
+      .filter((s) => s.enabled)
+      .map(async (s) => {
+        try {
+          const prompts = await listPrompts(s.id);
+          for (const p of prompts) {
+            out.push({ ...p, server_id: s.id, server_name: s.name });
+          }
+        } catch {
+          /* 单台服务器不可用不影响其他候选项 */
+        }
+      }),
+  );
+  return out.sort((a, b) =>
+    `${a.server_name}/${a.name}`.localeCompare(`${b.server_name}/${b.name}`),
+  );
 }
 
 /** 添加前试连结果。 */
@@ -210,4 +307,18 @@ export function readResource(
   uri: string,
 ): Promise<McpResourceReadView> {
   return invoke("mcp_read_resource", { id, uri });
+}
+
+// ── prompts 域（v0.8.1 M2-06）──────────────────────────────
+
+export function listPrompts(id: number): Promise<McpPromptView[]> {
+  return invoke("mcp_list_prompts", { id });
+}
+
+export function getPrompt(
+  id: number,
+  name: string,
+  args: Record<string, string>,
+): Promise<McpPromptMessageView[]> {
+  return invoke("mcp_get_prompt", { id, name, arguments: args });
 }
