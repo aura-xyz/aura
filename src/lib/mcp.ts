@@ -29,6 +29,8 @@ export interface McpToolItem {
   external_name: string;
   description: string;
   schema: string | null;
+  /** 服务器自报注解的紧凑 JSON，仅展示、不参与放行判定（M2-07）。 */
+  annotations: string | null;
 }
 
 /** 握手协商出的服务器能力（v0.8.1 M2-02）。 */

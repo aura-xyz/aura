@@ -411,6 +411,14 @@ function DetailDrawer({
                           原名 {t.name}
                         </span>
                       )}
+                      {t.annotations && (
+                        <span
+                          className="shrink-0 rounded-full border border-line px-1.5 py-0.5 text-[9px] text-subtle"
+                          title={`${t.annotations}（服务器自报，不作为放行依据）`}
+                        >
+                          注解
+                        </span>
+                      )}
                     </div>
                     <p className="mt-0.5 truncate text-[10px] text-subtle">{t.description}</p>
                   </li>

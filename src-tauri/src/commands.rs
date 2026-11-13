@@ -2604,6 +2604,8 @@ pub struct McpToolItem {
     pub external_name: String,
     pub description: String,
     pub schema: Option<String>,
+    /// 服务器自报注解的紧凑 JSON（M2-07）。仅展示，不参与放行判定。
+    pub annotations: Option<String>,
 }
 
 /// 单服务器状态详情（含 stderr 尾部、工具数与工具清单）。
@@ -2827,6 +2829,10 @@ pub async fn mcp_server_status(
                         } else {
                             Some(t.input_schema.to_string())
                         },
+                        annotations: t
+                            .annotations
+                            .as_ref()
+                            .and_then(|a| serde_json::to_string(a).ok()),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -2956,7 +2962,18 @@ pub async fn mcp_test_connect(
         );
     }
     let cwd = mcp_cwd(&state);
-    match crate::mcp::client::connect(-1, name, command, args, env, Vec::new(), cwd).await {
+    match crate::mcp::client::connect(
+        -1,
+        name,
+        command,
+        args,
+        env,
+        Vec::new(),
+        cwd,
+        crate::mcp::client::DEFAULT_TOOL_LIMIT,
+    )
+    .await
+    {
         Ok(conn) => {
             let result = McpTestResult {
                 ok: true,

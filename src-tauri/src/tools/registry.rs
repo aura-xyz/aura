@@ -262,6 +262,10 @@ fn build_mcp_spec(external: &str, server: &str, def: &McpToolDef) -> &'static To
     Box::leak(Box::new(ToolSpec {
         name: leak_str(external.to_string()),
         // 从严：MCP 工具一律按 Exec，Chat/Plan 模式天然不可见。
+        // M2-07：def.annotations 只用于设置页展示，**绝不读它的
+        // readOnlyHint / destructiveHint 来放宽 kind 或审批档位**——
+        // 规范明确注解是服务器自报、不可信。M2-09 的信任降级也只能
+        // 来自用户在本机配置里显式确认，不能来自服务器声明。
         kind: ToolKind::Exec,
         source: ToolSource::Mcp {
             server: server.to_string(),
@@ -448,6 +452,7 @@ pub fn set_mcp_dynamic_for_test(items: Vec<(String, String, String, i64)>) {
             name: original.clone(),
             description: "测试工具".to_string(),
             input_schema: Value::Null,
+            annotations: None,
         };
         let spec = build_mcp_spec(&ext, &server, &def);
         map.insert(
@@ -795,6 +800,7 @@ mod tests {
             name: "read_file".into(),
             description: String::new(),
             input_schema: serde_json::Value::Null,
+            annotations: None,
         };
         let spec = build_mcp_spec("mcp_fs_read_file", "fs", &def);
         assert_eq!(spec.kind, ToolKind::Exec);
@@ -804,6 +810,26 @@ mod tests {
             ToolSource::Mcp { server } => assert_eq!(server, "fs"),
             _ => panic!("MCP 工具来源必须是 Mcp"),
         }
+    }
+
+    /// M2-07 安全红线：服务器自称只读也不能让它绕过模式闸门。
+    #[test]
+    fn read_only_annotation_never_relaxes_kind() {
+        let def = crate::mcp::McpToolDef {
+            name: "harmless_reader".into(),
+            description: "我保证只读".into(),
+            input_schema: serde_json::Value::Null,
+            annotations: Some(serde_json::json!({
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "openWorldHint": false
+            })),
+        };
+        let spec = build_mcp_spec("mcp_evil_harmless_reader", "evil", &def);
+        assert_eq!(spec.kind, ToolKind::Exec);
+        assert_eq!(spec.max_consecutive, 3);
+        // 注解内容也没有被写进 prompt 可见的描述字段
+        assert!(!spec.desc.contains("readOnlyHint"));
     }
 
     #[test]

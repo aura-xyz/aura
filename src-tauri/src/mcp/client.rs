@@ -36,8 +36,9 @@ const MAX_STDERR_LINES: usize = 50;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
-/// 单服务器工具数上限：防失控服务器撑爆 prompt。
-const MAX_TOOLS: usize = 50;
+/// 单服务器工具数默认上限：防失控服务器撑爆 prompt。
+/// M2-08 起可由 `mcp_servers.tool_limit` 配置列覆盖。
+pub const DEFAULT_TOOL_LIMIT: usize = 50;
 
 /// 服务器声明的单个工具（原始名与 schema 原样保留）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -45,6 +46,9 @@ pub struct McpToolDef {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    /// 服务器自报的注解（如 `readOnlyHint`）。
+    /// **仅用于设置页展示，绝不作为模式/审批放行依据**（规范明确注解不可信）。
+    pub annotations: Option<Value>,
 }
 
 /// 连接状态。`Down` 携带原因（退出码 / 握手失败文案），供 UI 展示。
@@ -83,6 +87,8 @@ pub struct Connection {
     capabilities: RwLock<ServerCapabilities>,
     /// 最近一次 `tools/list` 的发现结果（C60）。
     tools: RwLock<Vec<McpToolDef>>,
+    /// 本服务器允许挂载的工具数上限（M2-07，默认 50）。
+    tool_limit: usize,
     /// 最近一次 resources/list + templates/list 的缓存（M2-03）。
     resources: RwLock<Vec<McpResource>>,
     /// 最近一次 prompts/list 的缓存（M2-05）。
@@ -98,12 +104,14 @@ impl Connection {
         server_id: i64,
         server_name: String,
         workspaces: Vec<String>,
+        tool_limit: usize,
         transport: Arc<dyn Transport>,
     ) -> Self {
         Connection {
             server_id,
             server_name,
             workspaces,
+            tool_limit: tool_limit.clamp(1, 500),
             transport,
             session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
@@ -334,10 +342,17 @@ impl Connection {
                         .unwrap_or("（服务器未提供描述）")
                         .to_string();
                     let input_schema = t.get("inputSchema").cloned().unwrap_or(Value::Null);
+                    // 注解只收对象形式，原样保存供设置页展示；解析层不做任何
+                    // 语义判断，避免「readOnlyHint」悄悄流进放行链路。
+                    let annotations = t
+                        .get("annotations")
+                        .cloned()
+                        .filter(|a| a.is_object());
                     all.push(McpToolDef {
                         name: name.to_string(),
                         description,
                         input_schema,
+                        annotations,
                     });
                 }
             }
@@ -346,7 +361,7 @@ impl Connection {
                 _ => break,
             }
         }
-        all.truncate(MAX_TOOLS);
+        all.truncate(self.tool_limit);
         *self.tools.write().await = all.clone();
         crate::mcp::emit(
             "mcp:tools",
@@ -487,6 +502,7 @@ pub async fn connect(
     env: BTreeMap<String, String>,
     workspaces: Vec<String>,
     cwd: Option<PathBuf>,
+    tool_limit: usize,
 ) -> Result<Arc<Connection>, String> {
     let mut cmd = Command::new(&command);
     cmd.args(&args)
@@ -516,6 +532,7 @@ pub async fn connect(
         server_id,
         server_name,
         workspaces,
+        tool_limit,
         transport,
     ));
     // 先起读任务，握手响应才有处可投递。

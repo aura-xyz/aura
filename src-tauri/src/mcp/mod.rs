@@ -102,6 +102,8 @@ pub async fn connect_server(
         cfg.env.clone(),
         cfg.workspaces.clone(),
         cwd,
+        // M2-08 会把配置列接进来；在此之前沿用默认上限。
+        client::DEFAULT_TOOL_LIMIT,
     )
     .await?;
     manager().insert(cfg.id, conn.clone()).await;
@@ -144,6 +146,26 @@ pub async fn call_tool(
     map_tool_result(&result)
 }
 
+/// 结构化输出附加到文本时允许的最大字节数。
+const STRUCTURED_CAP: usize = 8 * 1024;
+/// 单张图片落盘上限，防失控服务器写满临时目录。
+const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+
+/// `structuredContent` 是 2025-06-18 起工具可返回的结构化结果。
+/// 以紧凑 JSON 附在文本尾部，模型不用猜字段名；超长按 UTF-8 边界截断。
+fn structured_tail(result: &serde_json::Value) -> Option<String> {
+    let sc = result.get("structuredContent")?;
+    if sc.is_null() {
+        return None;
+    }
+    let json = serde_json::to_string(sc).ok()?;
+    let (cut, truncated) = crate::mcp::resources::truncate_utf8(&json, STRUCTURED_CAP);
+    Some(format!(
+        "\n[结构化输出] {cut}{}",
+        if truncated { "…（已截断）" } else { "" }
+    ))
+}
+
 /// `result` → 回填给模型的文本。`isError` 转 Err，其余按 content 拼接。
 fn map_tool_result(result: &serde_json::Value) -> Result<String, String> {
     let is_error = result
@@ -158,12 +180,43 @@ fn map_tool_result(result: &serde_json::Value) -> Result<String, String> {
             text
         })
     } else {
-        Ok(if text.trim().is_empty() {
+        let tail = structured_tail(result).unwrap_or_default();
+        let full = format!("{text}{tail}");
+        Ok(if full.trim().is_empty() {
             "（工具无文本输出）".to_string()
         } else {
-            text
+            full
         })
     }
+}
+
+/// 把 image 内容项的 base64 落到系统临时目录，返回绝对路径。
+///
+/// **MIME 白名单 + 大小上限**：`mimeType` 是服务器给的，不能直接拿来拼扩展名，
+/// 否则能夹出路径分隔符；解码失败或超限就返回 None，让调用方退回占位文本。
+fn save_tool_image(mime: &str, data: &str) -> Option<String> {
+    use base64::Engine as _;
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => return None,
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+        return None;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    let name = format!("aura-mcp-{}-{stamp}.{ext}", std::process::id());
+    let path = std::env::temp_dir().join(name);
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().to_string())
 }
 
 /// 把 `content` 数组拼成文本。第一部分不做多模态渲染：
@@ -190,12 +243,16 @@ fn extract_tool_content(result: &serde_json::Value) -> String {
                     .get("mimeType")
                     .and_then(|m| m.as_str())
                     .unwrap_or("image");
-                let bytes = item
-                    .get("data")
-                    .and_then(|d| d.as_str())
-                    .map(|d| d.len())
-                    .unwrap_or(0);
-                parts.push(format!("[图片 {mime}，约 {bytes} 字节 base64]"));
+                let data = item.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                // 二期把图片落盘并给出可打开的路径，同时避免把整段 base64
+                // 塞进回填给模型的文本（几千字符纯噪声）。
+                match save_tool_image(mime, data) {
+                    Some(path) => parts.push(format!("[图片 {mime} 已保存至 {path}]")),
+                    None => parts.push(format!(
+                        "[图片 {mime}，约 {} 字节 base64，未落盘]",
+                        data.len()
+                    )),
+                }
             }
             "audio" => parts.push("[音频内容]".to_string()),
             "resource" | "resource_link" => {
@@ -249,8 +306,9 @@ mod tests {
 
     #[test]
     fn non_text_content_uses_placeholder() {
+        // 非法 base64：走「未落盘」占位分支，单测不写临时文件
         let r = json!({ "content": [
-            { "type": "image", "mimeType": "image/png", "data": "AAAA" },
+            { "type": "image", "mimeType": "image/png", "data": "!!!" },
             { "type": "resource_link", "uri": "file:///x" }
         ]});
         let text = map_tool_result(&r).unwrap();
@@ -262,5 +320,46 @@ mod tests {
     fn empty_content_gets_readable_placeholder() {
         let r = json!({ "content": [] });
         assert_eq!(map_tool_result(&r).unwrap(), "（工具无文本输出）");
+    }
+
+    #[test]
+    fn structured_content_is_appended_as_compact_json() {
+        let r = json!({
+            "content": [{ "type": "text", "text": "查到了" }],
+            "structuredContent": { "count": 2, "items": ["a", "b"] }
+        });
+        let out = map_tool_result(&r).unwrap();
+        assert!(out.starts_with("查到了"), "{out}");
+        assert!(out.contains("[结构化输出]"), "{out}");
+        assert!(out.contains("\"count\":2"), "{out}");
+    }
+
+    #[test]
+    fn oversized_structured_content_is_truncated() {
+        let r = json!({
+            "content": [],
+            "structuredContent": { "blob": "x".repeat(20_000) }
+        });
+        let out = map_tool_result(&r).unwrap();
+        assert!(out.contains("已截断"), "{out}");
+        assert!(out.len() < 9_000, "结果不应超过上限：{}", out.len());
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn image_with_valid_base64_is_saved_and_path_returned() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+        let path = save_tool_image("image/png", png).expect("应能落盘");
+        assert!(path.ends_with(".png"), "{path}");
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_mime_and_size_are_guarded() {
+        assert!(save_tool_image("text/html", "AAAA").is_none());
+        assert!(save_tool_image("image/../evil", "AAAA").is_none());
+        assert!(save_tool_image("image/png", "not base64 !!").is_none());
     }
 }
