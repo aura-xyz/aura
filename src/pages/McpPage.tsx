@@ -21,6 +21,8 @@ import {
   addServer,
   capabilityDomains,
   commandSummary,
+  defaultPolicy,
+  policyLabel,
   getServerStatus,
   listServers,
   parseEnv,
@@ -31,6 +33,7 @@ import {
   toLines,
   updateServer,
   type McpServerInput,
+  type McpServerPolicy,
   type McpServerView,
   type McpStatusView,
   type McpTestResult,
@@ -179,6 +182,15 @@ export default function McpPage({ onClose }: Props) {
                     </span>
                     <span className={`shrink-0 text-[10px] ${meta.text}`}>
                       {meta.label}
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] ${
+                        s.policy.trust_level === "trusted"
+                          ? "border-warning/40 text-warning"
+                          : "border-line text-subtle"
+                      }`}
+                    >
+                      {policyLabel(s.policy)}
                     </span>
                   </span>
                   <span className="mt-0.5 block truncate font-mono text-[11px] text-subtle">
@@ -524,6 +536,11 @@ function ServerForm({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<McpTestResult | null>(null);
   const [busy, setBusy] = useState(false);
+  // v0.8.1 M2-08：信任分级与连接策略
+  const [policy, setPolicy] = useState<McpServerPolicy>(
+    initial?.policy ?? defaultPolicy(),
+  );
+  const [confirmTrust, setConfirmTrust] = useState(false);
 
   const build = (): McpServerInput => ({
     name: name.trim(),
@@ -531,6 +548,7 @@ function ServerForm({
     args: toLines(argsText),
     env: parseEnv(envText),
     workspaces: toLines(workspacesText),
+    policy,
   });
 
   const valid = name.trim().length > 0 && command.trim().length > 0;
@@ -553,14 +571,26 @@ function ServerForm({
     }
   }
 
-  async function save() {
-    if (!valid) return;
+  async function doSubmit() {
     setBusy(true);
     try {
       await onSubmit(build());
     } finally {
       setBusy(false);
     }
+  }
+
+  async function save() {
+    if (!valid) return;
+    // 放宽信任是本机唯一能让 MCP 工具脱离最高审批档的动作，必须二次确认。
+    if (
+      policy.trust_level === "trusted" &&
+      initial?.policy.trust_level !== "trusted"
+    ) {
+      setConfirmTrust(true);
+      return;
+    }
+    await doSubmit();
   }
 
   return (
@@ -643,6 +673,70 @@ function ServerForm({
               />
             </label>
 
+            <div className="rounded-tag border border-line p-2.5">
+              <span className="text-[11px] font-medium text-foreground">
+                信任与连接策略
+              </span>
+              <p className="mt-1 text-[10px] leading-relaxed text-subtle">
+                严格（默认）：工具按执行类处理、每次调用需确认。已信任：可在对话/计划模式使用且不再逐次审批，
+                但安全规则硬拒与工作区限定仍然生效。
+              </p>
+              <label className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-subtle">信任等级</span>
+                <select
+                  value={policy.trust_level}
+                  onChange={(e) =>
+                    setPolicy((p) => ({ ...p, trust_level: e.target.value }))
+                  }
+                  aria-label="信任等级"
+                  className="rounded-tag border border-line bg-surface px-2 py-1 text-[11px] text-foreground outline-none focus:border-brand"
+                >
+                  <option value="strict">严格（默认）</option>
+                  <option value="trusted">已信任</option>
+                </select>
+              </label>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-subtle">断线后自动重连</span>
+                <Switch
+                  checked={policy.auto_reconnect}
+                  label="断线后自动重连"
+                  onChange={() =>
+                    setPolicy((p) => ({ ...p, auto_reconnect: !p.auto_reconnect }))
+                  }
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-subtle">允许并发调用</span>
+                <Switch
+                  checked={policy.concurrent}
+                  label="允许并发调用"
+                  onChange={() =>
+                    setPolicy((p) => ({ ...p, concurrent: !p.concurrent }))
+                  }
+                />
+              </div>
+              <label className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-subtle">工具数上限（1–500）</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={policy.tool_limit}
+                  onChange={(e) =>
+                    setPolicy((p) => ({
+                      ...p,
+                      tool_limit: Math.min(
+                        500,
+                        Math.max(1, Number(e.target.value) || 1),
+                      ),
+                    }))
+                  }
+                  aria-label="工具数上限"
+                  className="w-20 rounded-tag border border-line bg-surface px-2 py-1 text-[11px] text-foreground outline-none focus:border-brand"
+                />
+              </label>
+            </div>
+
             <div>
               <span className="text-[11px] text-subtle">JSON 预览</span>
               <pre className="scrollbar-thin mt-1 max-h-32 overflow-auto rounded-tag border border-line bg-surface-sunken px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
@@ -695,6 +789,49 @@ function ServerForm({
             </button>
           </div>
         </div>
+
+        {confirmTrust && (
+          <div
+            data-testid="mcp-trust-confirm"
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-6"
+            onClick={() => setConfirmTrust(false)}
+          >
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-label="确认放宽信任等级"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-card border border-line bg-surface p-5 shadow-xl"
+            >
+              <h3 className="text-sm font-semibold text-foreground">
+                放宽为「已信任」？
+              </h3>
+              <p className="mt-2 text-[11px] leading-relaxed text-subtle">
+                此后这台服务器的工具可在对话/计划模式使用，且不再逐次弹出审批。
+                安全规则硬拒与工作区限定仍然生效。此变更会记入安全事件，并需要重连后生效。
+              </p>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmTrust(false)}
+                  className="rounded-full border border-line px-3 py-1.5 text-xs text-subtle hover:text-foreground"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmTrust(false);
+                    void doSubmit();
+                  }}
+                  className="rounded-full bg-danger px-3 py-1.5 text-xs text-white hover:opacity-90"
+                >
+                  仍然放宽
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

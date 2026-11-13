@@ -18,6 +18,7 @@ use tokio::process::{ChildStderr, ChildStdout, Command};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
+use super::config::ServerPolicy;
 use super::prompts::{parse_prompt_messages, parse_prompt_page, McpPrompt, McpPromptMessage, MAX_PROMPTS};
 use super::resources::{
     parse_resource_contents, parse_resource_page, truncate_utf8, validate_resource_uri,
@@ -36,10 +37,6 @@ const MAX_STDERR_LINES: usize = 50;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
-/// 单服务器工具数默认上限：防失控服务器撑爆 prompt。
-/// M2-08 起可由 `mcp_servers.tool_limit` 配置列覆盖。
-pub const DEFAULT_TOOL_LIMIT: usize = 50;
-
 /// 服务器声明的单个工具（原始名与 schema 原样保留）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct McpToolDef {
@@ -79,6 +76,8 @@ pub struct Connection {
     pub server_name: String,
     /// 允许可见的工作区（空 = 全部）。工具可见性按当前工作区前缀过滤。
     pub workspaces: Vec<String>,
+    /// 信任分级与连接策略（M2-08）。注册表同步与审批闸门从这里读。
+    pub policy: ServerPolicy,
     transport: Arc<dyn Transport>,
     session: RpcSession,
     status: RwLock<ConnStatus>,
@@ -87,8 +86,7 @@ pub struct Connection {
     capabilities: RwLock<ServerCapabilities>,
     /// 最近一次 `tools/list` 的发现结果（C60）。
     tools: RwLock<Vec<McpToolDef>>,
-    /// 本服务器允许挂载的工具数上限（M2-07，默认 50）。
-    tool_limit: usize,
+    // 工具上限从 policy.tool_limit 读取（M2-08），不再单独存一份。
     /// 最近一次 resources/list + templates/list 的缓存（M2-03）。
     resources: RwLock<Vec<McpResource>>,
     /// 最近一次 prompts/list 的缓存（M2-05）。
@@ -104,14 +102,14 @@ impl Connection {
         server_id: i64,
         server_name: String,
         workspaces: Vec<String>,
-        tool_limit: usize,
+        policy: ServerPolicy,
         transport: Arc<dyn Transport>,
     ) -> Self {
         Connection {
             server_id,
             server_name,
             workspaces,
-            tool_limit: tool_limit.clamp(1, 500),
+            policy: policy.normalized(),
             transport,
             session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
@@ -361,7 +359,7 @@ impl Connection {
                 _ => break,
             }
         }
-        all.truncate(self.tool_limit);
+        all.truncate(self.policy.tool_limit);
         *self.tools.write().await = all.clone();
         crate::mcp::emit(
             "mcp:tools",
@@ -502,7 +500,7 @@ pub async fn connect(
     env: BTreeMap<String, String>,
     workspaces: Vec<String>,
     cwd: Option<PathBuf>,
-    tool_limit: usize,
+    policy: ServerPolicy,
 ) -> Result<Arc<Connection>, String> {
     let mut cmd = Command::new(&command);
     cmd.args(&args)
@@ -532,7 +530,7 @@ pub async fn connect(
         server_id,
         server_name,
         workspaces,
-        tool_limit,
+        policy,
         transport,
     ));
     // 先起读任务，握手响应才有处可投递。

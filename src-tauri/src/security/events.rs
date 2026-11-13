@@ -39,6 +39,8 @@ pub enum Kind {
     RiskyInstall,
     /// MCP 工具调用（rc.3 预留）
     McpCall,
+    /// MCP 服务器信任等级被放宽 / 收回（v0.8.1 M2-08）
+    McpTrustChange,
 }
 
 impl Kind {
@@ -51,6 +53,7 @@ impl Kind {
             Kind::ApprovalAllowed => "approval_allowed",
             Kind::RiskyInstall => "risky_install",
             Kind::McpCall => "mcp_call",
+            Kind::McpTrustChange => "mcp_trust_change",
         }
     }
 
@@ -63,6 +66,7 @@ impl Kind {
             Kind::ApprovalAllowed => "审批放行",
             Kind::RiskyInstall => "高风险安装",
             Kind::McpCall => "MCP 调用",
+            Kind::McpTrustChange => "MCP 信任变更",
         }
     }
 }
@@ -144,6 +148,7 @@ fn kind_label(kind: &str) -> String {
         "approval_allowed" => "审批放行".into(),
         "risky_install" => "高风险安装".into(),
         "mcp_call" => "MCP 调用".into(),
+        "mcp_trust_change" => "MCP 信任变更".into(),
         other => other.to_string(),
     }
 }
@@ -209,6 +214,8 @@ mod tests {
         assert_eq!(Kind::ApprovalAllowed.as_str(), "approval_allowed");
         assert_eq!(Kind::RiskyInstall.as_str(), "risky_install");
         assert_eq!(Kind::McpCall.as_str(), "mcp_call");
+        assert_eq!(Kind::McpTrustChange.as_str(), "mcp_trust_change");
+        assert_eq!(Kind::McpTrustChange.label(), "MCP 信任变更");
     }
 
     /// 命令原文里带逗号与引号是常态，导出必须仍是正确的 CSV。

@@ -10,6 +10,29 @@ import type { CommandItem } from "./commandItems";
 
 export type McpStatus = "running" | "connecting" | "down" | "disabled";
 
+/** 信任分级与连接策略（v0.8.1 M2-08）。 */
+export interface McpServerPolicy {
+  /** "strict"（默认）或 "trusted" */
+  trust_level: string;
+  auto_reconnect: boolean;
+  tool_limit: number;
+  concurrent: boolean;
+}
+
+/** 默认策略刻意保持一期行为：严格审批 / 不自动重连 / 串行 / 50 上限。 */
+export function defaultPolicy(): McpServerPolicy {
+  return {
+    trust_level: "strict",
+    auto_reconnect: false,
+    tool_limit: 50,
+    concurrent: false,
+  };
+}
+
+export function policyLabel(p: McpServerPolicy | undefined): string {
+  return p?.trust_level === "trusted" ? "已信任" : "严格";
+}
+
 /** 单台服务器卡片视图。 */
 export interface McpServerView {
   id: number;
@@ -21,6 +44,7 @@ export interface McpServerView {
   status_reason: string | null;
   tool_count: number;
   workspaces: string[];
+  policy: McpServerPolicy;
 }
 
 /** 单个工具（详情展示：原始名与对外改写名对照）。 */
@@ -205,6 +229,7 @@ export interface McpServerInput {
   args: string[];
   env: Record<string, string>;
   workspaces: string[];
+  policy: McpServerPolicy;
 }
 
 /** 状态 → 展示元信息。 */
@@ -281,6 +306,14 @@ export function setServerEnabled(
   enabled: boolean,
 ): Promise<McpServerView> {
   return invoke("mcp_set_server_enabled", { id, enabled });
+}
+
+/** 单独调整信任分级 / 连接策略（会触发重连，后端写安全事件）。 */
+export function setServerPolicy(
+  id: number,
+  policy: McpServerPolicy,
+): Promise<McpServerView> {
+  return invoke("mcp_set_server_policy", { id, policy });
 }
 
 export function getServerStatus(id: number): Promise<McpStatusView> {

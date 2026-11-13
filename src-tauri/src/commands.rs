@@ -2593,6 +2593,8 @@ pub struct McpServerView {
     pub status_reason: Option<String>,
     pub tool_count: usize,
     pub workspaces: Vec<String>,
+    /// 信任分级与连接策略（M2-08）
+    pub policy: crate::mcp::config::ServerPolicy,
 }
 
 /// 单个工具（详情展示用）。
@@ -2662,6 +2664,7 @@ async fn mcp_view(cfg: &crate::mcp::McpServerConfig) -> McpServerView {
         status_reason,
         tool_count,
         workspaces: cfg.workspaces.clone(),
+        policy: cfg.policy.clone(),
     }
 }
 
@@ -2694,6 +2697,7 @@ pub async fn mcp_add_server(
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
+    policy: crate::mcp::config::ServerPolicy,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2706,7 +2710,7 @@ pub async fn mcp_add_server(
     }
     let cfg = {
         let db = state.db.lock().map_err(lock_err)?;
-        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true)?
+        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true, policy)?
     };
     let cwd = mcp_cwd(&state);
     if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
@@ -2728,6 +2732,7 @@ pub async fn mcp_update_server(
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
+    policy: crate::mcp::config::ServerPolicy,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2749,7 +2754,7 @@ pub async fn mcp_update_server(
         } else {
             env
         };
-        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces)?
+        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces, policy)?
     };
     crate::mcp::disconnect_server(id).await;
     if cfg.enabled {
@@ -2792,6 +2797,47 @@ pub async fn mcp_set_server_enabled(
         }
     } else {
         crate::mcp::disconnect_server(id).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
+/// 单独调整信任分级 / 连接策略（M2-08）。
+///
+/// 放宽到 `trusted` 会写一条 `mcp_trust_change` 安全事件：这是本机唯一
+/// 能让 MCP 工具脱离最高审批档的入口，必须留痕。策略变化需要重连才生效。
+#[tauri::command]
+pub async fn mcp_set_server_policy(
+    state: State<'_, AppState>,
+    id: i64,
+    policy: crate::mcp::config::ServerPolicy,
+) -> Result<McpServerView, String> {
+    let (cfg, was_trusted) = {
+        let db = state.db.lock().map_err(lock_err)?;
+        let old = crate::mcp::config::get(&db, id)?
+            .ok_or_else(|| "服务器不存在".to_string())?;
+        crate::mcp::config::set_policy(&db, id, policy)?;
+        let cfg = crate::mcp::config::get(&db, id)?
+            .ok_or_else(|| "服务器不存在".to_string())?;
+        (cfg, old.policy.is_trusted())
+    };
+    let now_trusted = cfg.policy.is_trusted();
+    if now_trusted != was_trusted {
+        crate::security::log_simple(
+            crate::security::Kind::McpTrustChange,
+            "",
+            &cfg.name,
+            if now_trusted {
+                "信任等级放宽为 trusted"
+            } else {
+                "信任等级恢复 strict"
+            },
+            "mcp_trust_change",
+        );
+    }
+    crate::mcp::disconnect_server(id).await;
+    if cfg.enabled {
+        let cwd = mcp_cwd(&state);
+        let _ = crate::mcp::connect_server(&cfg, cwd).await;
     }
     Ok(mcp_view(&cfg).await)
 }
@@ -2970,7 +3016,7 @@ pub async fn mcp_test_connect(
         env,
         Vec::new(),
         cwd,
-        crate::mcp::client::DEFAULT_TOOL_LIMIT,
+        crate::mcp::config::ServerPolicy::default(),
     )
     .await
     {

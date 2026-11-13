@@ -116,6 +116,12 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
              env_encrypted   TEXT NOT NULL DEFAULT '',
              enabled         INTEGER NOT NULL DEFAULT 1,
              workspaces_json TEXT,
+             -- v0.8.1 M2-08：信任分级与连接策略。默认值刻意保持一期行为
+             -- （strict / 不自动重连 / 串行 / 50 工具上限）。
+             trust_level     TEXT NOT NULL DEFAULT 'strict',
+             auto_reconnect  INTEGER NOT NULL DEFAULT 0,
+             tool_limit      INTEGER NOT NULL DEFAULT 50,
+             concurrent      INTEGER NOT NULL DEFAULT 0,
              created_at      INTEGER NOT NULL DEFAULT 0,
              updated_at      INTEGER NOT NULL DEFAULT 0
          );",
@@ -146,6 +152,23 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute(
             "ALTER TABLE sessions ADD COLUMN todos_json TEXT NOT NULL DEFAULT '[]'",
             [],
+        )?;
+    }
+
+    // v0.8.1 M2-08：老库的 mcp_servers 需要补四列。以 tool_limit 为哨兵，
+    // 四列总是一起添加；SQLite 的 ADD COLUMN 不支持 IF NOT EXISTS，所以
+    // 必须先查 pragma，否则重复启动会直接失败。
+    let has_policy = conn
+        .prepare("SELECT 1 FROM pragma_table_info('mcp_servers') WHERE name = 'tool_limit'")?
+        .query([])?
+        .next()?
+        .is_some();
+    if !has_policy {
+        conn.execute_batch(
+            "ALTER TABLE mcp_servers ADD COLUMN trust_level TEXT NOT NULL DEFAULT 'strict';
+             ALTER TABLE mcp_servers ADD COLUMN auto_reconnect INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE mcp_servers ADD COLUMN tool_limit INTEGER NOT NULL DEFAULT 50;
+             ALTER TABLE mcp_servers ADD COLUMN concurrent INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
     Ok(())

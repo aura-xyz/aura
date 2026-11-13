@@ -3,6 +3,8 @@ import {
   MCP_STATUS_META,
   capabilityDomains,
   commandSummary,
+  defaultPolicy,
+  policyLabel,
   envToText,
   parseEnv,
   resourceLabel,
@@ -67,6 +69,26 @@ describe("MCP_STATUS_META", () => {
       expect(meta.label.length).toBeGreaterThan(0);
       expect(meta.dot.startsWith("bg-")).toBe(true);
     }
+  });
+});
+
+describe("MCP 策略默认值（M2-08）", () => {
+  it("默认严格、不自动重连、串行、50 上限", () => {
+    expect(defaultPolicy()).toEqual({
+      trust_level: "strict",
+      auto_reconnect: false,
+      tool_limit: 50,
+      concurrent: false,
+    });
+  });
+
+  it("只有显式 trusted 才显示已信任", () => {
+    expect(policyLabel(defaultPolicy())).toBe("严格");
+    expect(policyLabel({ ...defaultPolicy(), trust_level: "trusted" })).toBe(
+      "已信任",
+    );
+    expect(policyLabel({ ...defaultPolicy(), trust_level: "admin" })).toBe("严格");
+    expect(policyLabel(undefined)).toBe("严格");
   });
 });
 

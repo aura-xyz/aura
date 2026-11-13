@@ -40,6 +40,7 @@ use commands::{
     mcp_list_servers, mcp_add_server, mcp_update_server, mcp_remove_server,
     mcp_set_server_enabled, mcp_server_status, mcp_rescan_tools, mcp_test_connect,
     mcp_list_resources, mcp_read_resource, mcp_list_prompts, mcp_get_prompt,
+    mcp_set_server_policy,
     get_skill_mirror, set_skill_mirror,
     AppState,
 };
@@ -555,6 +556,7 @@ pub fn run() {
             mcp_read_resource,
             mcp_list_prompts,
             mcp_get_prompt,
+            mcp_set_server_policy,
             get_skill_mirror,
             set_skill_mirror,
             list_shells,

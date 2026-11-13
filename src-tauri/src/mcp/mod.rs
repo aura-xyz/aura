@@ -102,8 +102,7 @@ pub async fn connect_server(
         cfg.env.clone(),
         cfg.workspaces.clone(),
         cwd,
-        // M2-08 会把配置列接进来；在此之前沿用默认上限。
-        client::DEFAULT_TOOL_LIMIT,
+        cfg.policy.clone(),
     )
     .await?;
     manager().insert(cfg.id, conn.clone()).await;
