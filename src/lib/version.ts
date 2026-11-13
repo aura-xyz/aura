@@ -1,5 +1,5 @@
 /**
- * 构建期注入的版本号（v0.8.0）。
+ * 构建期注入的版本号（v0.8.1）。
  *
  * 由 `vite.config.ts` 的 `define` 从 `package.json` 读入，与打包产物同源，
  * 因此升版只需改 `package.json`（及 `tauri.conf.json` 等既有位置），
