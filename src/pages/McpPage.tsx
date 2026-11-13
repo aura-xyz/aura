@@ -290,6 +290,31 @@ function DetailDrawer({
   const [detail, setDetail] = useState<McpStatusView | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // M2-10：后端按指数退避重连时给一条可见反馈，别让用户只看到「连不上」
+  const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+
+  useEffect(() => {
+    let unRetry: (() => void) | undefined;
+    let unDone: (() => void) | undefined;
+    let disposed = false;
+    void listen<{ serverId: number; attempt: number }>("mcp:reconnect", (e) => {
+      if (e.payload.serverId === id) setReconnectAttempt(e.payload.attempt);
+    }).then((f) => {
+      if (disposed) f();
+      else unRetry = f;
+    });
+    void listen<{ serverId: number }>("mcp:reconnected", (e) => {
+      if (e.payload.serverId === id) setReconnectAttempt(null);
+    }).then((f) => {
+      if (disposed) f();
+      else unDone = f;
+    });
+    return () => {
+      disposed = true;
+      unRetry?.();
+      unDone?.();
+    };
+  }, [id]);
 
   const load = useCallback(async () => {
     try {
@@ -392,6 +417,14 @@ function DetailDrawer({
           {detail?.reason && (
             <p className="mt-3 rounded-tag border border-danger/30 bg-danger/5 px-2 py-1.5 text-[11px] text-danger">
               {detail.reason}
+            </p>
+          )}
+          {reconnectAttempt !== null && (
+            <p
+              role="status"
+              className="mt-3 rounded-tag border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning"
+            >
+              连接中断，正在自动重连（第 {reconnectAttempt} / 5 次）…
             </p>
           )}
 

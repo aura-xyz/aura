@@ -12,6 +12,7 @@ pub mod capabilities;
 pub mod client;
 pub mod config;
 pub mod prompts;
+pub mod reconnect;
 pub mod resources;
 pub mod session;
 pub mod transport;

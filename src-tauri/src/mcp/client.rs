@@ -9,17 +9,19 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout, Command};
-use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, Semaphore};
 
 use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
 use super::config::ServerPolicy;
 use super::prompts::{parse_prompt_messages, parse_prompt_page, McpPrompt, McpPromptMessage, MAX_PROMPTS};
+use super::reconnect::{reconnect_delay, MAX_CONCURRENT_CALLS, MAX_RECONNECT_ATTEMPTS};
 use super::resources::{
     parse_resource_contents, parse_resource_page, truncate_utf8, validate_resource_uri,
     McpResource, ResourceReadResult, MAX_RESOURCE_BYTES, MAX_RESOURCES,
@@ -70,6 +72,21 @@ impl ConnStatus {
     }
 }
 
+/// 自动重连所需的启动参数快照（M2-10）。
+///
+/// 只保存在 `auto_reconnect=1` 的连接上。存快照而不是回头查 DB：连接层
+/// 不该知道配置表，且用户可能在断线期间改过配置——重连必须用拉起这台
+/// 进程时的同一套参数，否则会出现「换了个命令却沿用旧连接」的错觉。
+#[derive(Clone)]
+struct ReconnectSpec {
+    command: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    workspaces: Vec<String>,
+    cwd: Option<PathBuf>,
+    policy: ServerPolicy,
+}
+
 /// 一条活连接。
 pub struct Connection {
     pub server_id: i64,
@@ -93,8 +110,14 @@ pub struct Connection {
     prompts: RwLock<Vec<McpPrompt>>,
     /// 已订阅更新的资源 URI。
     subscribed: RwLock<Vec<String>>,
-    /// `tools/call` 串行化（第一部分不做并发，避免服务器实现差异）。
+    /// `tools/call` 串行化（一期默认行为，避免服务器实现差异）。
     call_lock: AsyncMutex<()>,
+    /// `concurrent=1` 时改走信号量，允许最多 3 个并发调用。
+    semaphore: Option<Semaphore>,
+    /// 用户主动关闭/删除后不再重连。
+    stopped: AtomicBool,
+    /// 自动重连参数；None 表示保持一期「不自动重启」。
+    reconnect: Option<ReconnectSpec>,
 }
 
 impl Connection {
@@ -103,14 +126,24 @@ impl Connection {
         server_name: String,
         workspaces: Vec<String>,
         policy: ServerPolicy,
+        reconnect: Option<ReconnectSpec>,
         transport: Arc<dyn Transport>,
     ) -> Self {
+        let policy = policy.normalized();
+        let concurrent = policy.concurrent;
         Connection {
             server_id,
             server_name,
             workspaces,
-            policy: policy.normalized(),
+            policy,
             transport,
+            semaphore: if concurrent {
+                Some(Semaphore::new(MAX_CONCURRENT_CALLS))
+            } else {
+                None
+            },
+            stopped: AtomicBool::new(false),
+            reconnect,
             session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
             stderr_tail: StdMutex::new(VecDeque::new()),
@@ -368,12 +401,21 @@ impl Connection {
         Ok(all)
     }
 
-    /// 调用一个工具。同一服务器的调用串行执行（`call_lock`），避免服务器
-    /// 实现差异带来的交错问题。返回原始 `result`，内容映射交由上层。
+    /// 调用一个工具。默认串行（一期行为）；`concurrent=1` 时用信号量
+    /// 放开到最多 3 个并发，但仍共用同一条 NDJSON 写入通道（请求 id 关联
+    /// 保证响应不会串错）。返回原始 `result`，内容映射交由上层。
     pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, String> {
-        let _guard = self.call_lock.lock().await;
         let params = json!({ "name": name, "arguments": args });
-        self.request("tools/call", params, CALL_TIMEOUT).await
+        if let Some(sem) = &self.semaphore {
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|_| "连接已关闭".to_string())?;
+            self.request("tools/call", params, CALL_TIMEOUT).await
+        } else {
+            let _guard = self.call_lock.lock().await;
+            self.request("tools/call", params, CALL_TIMEOUT).await
+        }
     }
 
     /// 通知路由：会话层只负责把 method 与 params 交回来，具体动作在这里决定。
@@ -411,8 +453,15 @@ impl Connection {
         }
     }
 
+    /// 断线后是否允许自动重连：配置开启、且不是用户主动关闭的。
+    fn can_reconnect(&self) -> bool {
+        self.reconnect.is_some() && !self.stopped.load(Ordering::SeqCst)
+    }
+
     /// 关闭连接：关 stdin 让服务器自行退出，再兜底 kill + 回收。
+    /// `stopped` 先置位，确保已在退避等待中的重连任务醒来后直接退出。
     pub async fn shutdown(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
         self.transport.shutdown().await;
         self.session.fail_pending("连接已关闭");
         *self.resources.write().await = Vec::new();
@@ -469,8 +518,68 @@ async fn stdout_loop(conn: Arc<Connection>, stdout: ChildStdout) {
             }
         }
     }
-    conn.mark_down("连接已关闭".to_string()).await;
+    if conn.can_reconnect() {
+        tokio::spawn(attempt_reconnect(conn.clone()));
+    } else {
+        conn.mark_down("连接已关闭".to_string()).await;
+    }
     conn.reap().await;
+}
+
+/// 指数退避自动重连（M2-10）。只在 `auto_reconnect=1` 且用户没有主动
+/// 关闭时进入；每次尝试前都检查 `stopped`，避免在用户已经停用服务器后
+/// 又把进程拉起来。成功后替换 manager 里的连接并重扫工具/资源/提示词。
+async fn attempt_reconnect(conn: Arc<Connection>) {
+    let Some(spec) = conn.reconnect.clone() else {
+        return;
+    };
+    conn.set_status(ConnStatus::Connecting).await;
+    for attempt in 0..MAX_RECONNECT_ATTEMPTS {
+        let delay = reconnect_delay(attempt);
+        crate::mcp::emit(
+            "mcp:reconnect",
+            json!({
+                "serverId": conn.server_id,
+                "attempt": attempt + 1,
+                "delayMs": delay.as_millis(),
+            }),
+        );
+        tokio::time::sleep(delay).await;
+        if conn.stopped.load(Ordering::SeqCst) {
+            return;
+        }
+        let result = connect(
+            conn.server_id,
+            conn.server_name.clone(),
+            spec.command.clone(),
+            spec.args.clone(),
+            spec.env.clone(),
+            spec.workspaces.clone(),
+            spec.cwd.clone(),
+            spec.policy.clone(),
+        )
+        .await;
+        match result {
+            Ok(next) => {
+                crate::mcp::manager().insert(conn.server_id, next).await;
+                // connect() 内部已重扫工具与能力域；这里同步模型可见表。
+                crate::tools::registry::sync_mcp_tools(None).await;
+                crate::mcp::emit(
+                    "mcp:reconnected",
+                    json!({ "serverId": conn.server_id, "attempt": attempt + 1 }),
+                );
+                return;
+            }
+            Err(e) => conn.push_stderr(format!(
+                "第 {} 次自动重连失败：{e}",
+                attempt + 1
+            )),
+        }
+    }
+    conn.mark_down(format!(
+        "自动重连失败（已尝试 {MAX_RECONNECT_ATTEMPTS} 次），请手动重连"
+    ))
+    .await;
 }
 
 async fn stderr_loop(conn: Arc<Connection>, stderr: ChildStderr) {
@@ -492,7 +601,12 @@ async fn stderr_loop(conn: Arc<Connection>, stderr: ChildStderr) {
 }
 
 /// 拉起一台服务器并完成初始化握手。
-pub async fn connect(
+///
+/// 返回**装箱**的 Future 而不是 `async fn`：stdout_loop → attempt_reconnect
+/// → connect → spawn(stdout_loop) 构成一条 opaque future 的 Send 判定环，
+/// 编译器会报 E0391。把 connect 的返回类型固定成 trait object 就切断了环，
+/// 调用方仍然是 `.await`，语义不变。
+pub fn connect(
     server_id: i64,
     server_name: String,
     command: String,
@@ -501,7 +615,10 @@ pub async fn connect(
     workspaces: Vec<String>,
     cwd: Option<PathBuf>,
     policy: ServerPolicy,
-) -> Result<Arc<Connection>, String> {
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Arc<Connection>, String>> + Send>,
+> {
+    Box::pin(async move {
     let mut cmd = Command::new(&command);
     cmd.args(&args)
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -509,7 +626,7 @@ pub async fn connect(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    if let Some(dir) = cwd {
+    if let Some(dir) = &cwd {
         cmd.current_dir(dir);
     }
     // Windows 下避免为控制台子进程弹窗。
@@ -525,12 +642,26 @@ pub async fn connect(
     let stdout = child.stdout.take().ok_or("无法获取服务器 stdout")?;
     let stderr = child.stderr.take().ok_or("无法获取服务器 stderr")?;
 
+    let reconnect = if policy.auto_reconnect {
+        Some(ReconnectSpec {
+            command: command.clone(),
+            args: args.clone(),
+            env: env.clone(),
+            workspaces: workspaces.clone(),
+            cwd: cwd.clone(),
+            policy: policy.clone(),
+        })
+    } else {
+        None
+    };
+
     let transport: Arc<dyn Transport> = Arc::new(StdioTransport::new(child, stdin));
     let conn = Arc::new(Connection::new(
         server_id,
         server_name,
         workspaces,
         policy,
+        reconnect,
         transport,
     ));
     // 先起读任务，握手响应才有处可投递。
@@ -564,6 +695,7 @@ pub async fn connect(
             Err(e)
         }
     }
+    })
 }
 
 #[cfg(test)]
