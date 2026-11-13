@@ -212,6 +212,9 @@ pub struct McpEntry {
     pub server_id: i64,
     pub server_name: String,
     pub original_name: String,
+    /// 用户在配置里显式放宽过信任（M2-09）。仅影响审批档位，
+    /// 绝不绕过规则表硬拒与工作区限定。
+    pub trusted: bool,
 }
 
 fn mcp_table() -> &'static Mutex<HashMap<String, McpDynamic>> {
@@ -245,7 +248,12 @@ fn label_mcp_tool(_args: &Value) -> String {
     "MCP 调用".to_string()
 }
 
-fn build_mcp_spec(external: &str, server: &str, def: &McpToolDef) -> &'static ToolSpec {
+fn build_mcp_spec(
+    external: &str,
+    server: &str,
+    def: &McpToolDef,
+    trusted: bool,
+) -> &'static ToolSpec {
     let desc = if def.description.trim().is_empty() {
         "（服务器未提供描述）".to_string()
     } else {
@@ -261,12 +269,11 @@ fn build_mcp_spec(external: &str, server: &str, def: &McpToolDef) -> &'static To
     };
     Box::leak(Box::new(ToolSpec {
         name: leak_str(external.to_string()),
-        // 从严：MCP 工具一律按 Exec，Chat/Plan 模式天然不可见。
-        // M2-07：def.annotations 只用于设置页展示，**绝不读它的
-        // readOnlyHint / destructiveHint 来放宽 kind 或审批档位**——
-        // 规范明确注解是服务器自报、不可信。M2-09 的信任降级也只能
-        // 来自用户在本机配置里显式确认，不能来自服务器声明。
-        kind: ToolKind::Exec,
+        // 默认从严：按 Exec，Chat/Plan 模式天然不可见。
+        // M2-09：只有用户在本机配置里显式放宽（trust_level=trusted）才降为
+        // Read。M2-07 已钉住 def.annotations 里的 readOnlyHint 一律不看——
+        // 服务器自报的注解不可信，信任只能来自用户的显式确认。
+        kind: if trusted { ToolKind::Read } else { ToolKind::Exec },
         source: ToolSource::Mcp {
             server: server.to_string(),
         },
@@ -336,7 +343,12 @@ pub async fn sync_mcp_tools(current_workspace: Option<&str>) {
                 TOOLS.iter().any(|t| t.name == name) || next.contains_key(name)
             };
             let external = pick_external_name(&def.name, &server_name, &is_taken);
-            let spec = build_mcp_spec(&external, &server_name, &def);
+            let spec = build_mcp_spec(
+                &external,
+                &server_name,
+                &def,
+                conn.policy.is_trusted(),
+            );
             next.insert(
                 external,
                 McpDynamic {
@@ -409,6 +421,9 @@ pub fn mcp_entry(name: &str) -> Option<McpEntry> {
             server_id: e.server_id,
             server_name: e.server_name.clone(),
             original_name: e.original_name.clone(),
+            // kind 是从用户配置推导出来的，读它就等价于读信任等级，
+            // 不必在动态表里再存一份布尔值造成两处不一致。
+            trusted: e.spec.kind == ToolKind::Read,
         })
     })
 }
@@ -445,16 +460,16 @@ pub fn mcp_snapshot() -> Vec<(String, String, String)> {
 
 /// 测试专用：直接注入动态表（不依赖真实连接）。
 #[cfg(test)]
-pub fn set_mcp_dynamic_for_test(items: Vec<(String, String, String, i64)>) {
+pub fn set_mcp_dynamic_for_test(items: Vec<(String, String, String, i64, bool)>) {
     let mut map = HashMap::new();
-    for (ext, server, original, sid) in items {
+    for (ext, server, original, sid, trusted) in items {
         let def = McpToolDef {
             name: original.clone(),
             description: "测试工具".to_string(),
             input_schema: Value::Null,
             annotations: None,
         };
-        let spec = build_mcp_spec(&ext, &server, &def);
+        let spec = build_mcp_spec(&ext, &server, &def, trusted);
         map.insert(
             ext,
             McpDynamic {
@@ -802,7 +817,7 @@ mod tests {
             input_schema: serde_json::Value::Null,
             annotations: None,
         };
-        let spec = build_mcp_spec("mcp_fs_read_file", "fs", &def);
+        let spec = build_mcp_spec("mcp_fs_read_file", "fs", &def, false);
         assert_eq!(spec.kind, ToolKind::Exec);
         assert_eq!(spec.max_consecutive, 3);
         assert!(spec.desc.contains("未提供描述"));
@@ -825,11 +840,39 @@ mod tests {
                 "openWorldHint": false
             })),
         };
-        let spec = build_mcp_spec("mcp_evil_harmless_reader", "evil", &def);
+        let spec = build_mcp_spec("mcp_evil_harmless_reader", "evil", &def, false);
         assert_eq!(spec.kind, ToolKind::Exec);
         assert_eq!(spec.max_consecutive, 3);
         // 注解内容也没有被写进 prompt 可见的描述字段
         assert!(!spec.desc.contains("readOnlyHint"));
+    }
+
+    /// M2-09：只有用户显式放宽才降为 Read，mcp_entry 也要能读出这个状态。
+    #[test]
+    fn explicit_trust_downgrades_kind_and_is_visible_in_entry() {
+        let def = crate::mcp::McpToolDef {
+            name: "reader".into(),
+            description: "只读".into(),
+            input_schema: serde_json::Value::Null,
+            annotations: None,
+        };
+        let spec = build_mcp_spec("mcp_fs_reader", "fs", &def, true);
+        assert_eq!(spec.kind, ToolKind::Read);
+
+        set_mcp_dynamic_for_test(vec![(
+            "mcp_fs_reader".to_string(),
+            "fs".to_string(),
+            "reader".to_string(),
+            9,
+            true,
+        )]);
+        let entry = mcp_entry("mcp_fs_reader").expect("动态条目应可查");
+        assert!(entry.trusted);
+        assert_eq!(find("mcp_fs_reader").unwrap().kind, ToolKind::Read);
+        // Read 类在 Chat/Plan 的 kinds 里，prompt 分组应能列出它
+        let prompt = prompt_section(&[ToolKind::Read]);
+        assert!(prompt.contains("mcp_fs_reader"), "{prompt}");
+        clear_mcp_dynamic_for_test();
     }
 
     #[test]
@@ -839,6 +882,7 @@ mod tests {
             "demo".to_string(),
             "echo".to_string(),
             7,
+            false,
         )]);
         assert!(find("echo").is_some());
         assert!(is_known("echo"));

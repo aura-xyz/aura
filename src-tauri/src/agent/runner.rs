@@ -371,6 +371,14 @@ fn first_line(text: &str) -> String {
 ///
 /// 只有 `run_script` 需要审批：其他工具的作用范围已经被 `ensure_allowed`
 /// 锁在授权目录里，而命令能做的事没有边界。
+/// MCP 工具是否需要逐次确认（v0.8.1 M2-09）。
+///
+/// 抽成纯函数是为了把「信任放宽」与「本会话已记住」两条免问路径钉在单测里；
+/// 规则表硬拒不在这里，调用方在它之前执行，因此免问永远不会绕过硬拒。
+fn should_ask_mcp(trusted: bool, remembered: bool) -> bool {
+    !trusted && !remembered
+}
+
 async fn approval_gate(
     ctx: &TurnContext<'_>,
     name: &str,
@@ -379,8 +387,9 @@ async fn approval_gate(
     use crate::agent::approval::{decide, Gate, APPROVAL_TIMEOUT, EV_APPROVAL};
 
     // 需要审批的两类工具：内置 `run_script`，以及 rc.3 起的 MCP 工具。
-    // MCP 工具一律 Exec 且 annotation 不可信，走「最高审批档」：策略放行
-    // 也仍需确认，用户可在本会话内按服务器「记住」。
+    // MCP 工具默认走最高审批档（策略放行也仍需确认），用户可在本会话内
+    // 按服务器「记住」；M2-09 起若用户在配置里显式放宽信任，则不再逐次
+    // 询问，但上面的规则表硬拒与工作区限定依然完整执行。
     let mcp = crate::tools::registry::mcp_entry(name);
     let command = if mcp.is_some() {
         format!("{name} {}", summarize_args(args))
@@ -410,17 +419,19 @@ async fn approval_gate(
         ));
     }
 
-    // 是否需要询问：MCP 工具最高档（记住即免问）；run_script 按策略。
+    // 是否需要询问：MCP 工具最高档（记住或显式信任即免问）；run_script 按策略。
+    // 注意「免问」不等于放行：规则表硬拒已在上面执行，工作区限定由
+    // tool_permitted / 注册表同步负责，这里只影响弹不弹确认框。
     let ask = if let Some(entry) = &mcp {
         let key = format!("mcp_server_{}", entry.server_name);
-        if mgr.is_remembered(ctx.session_id, &key) {
-            None
-        } else {
+        if should_ask_mcp(entry.trusted, mgr.is_remembered(ctx.session_id, &key)) {
             Some((
                 key,
                 "mcp_tool_call".to_string(),
                 "MCP 工具调用需确认".to_string(),
             ))
+        } else {
+            None
         }
     } else {
         match decision {
@@ -2030,5 +2041,23 @@ mod event_batch_tests {
         // 256 个中文字符是 768 字节；按字符计数才符合「输出长度」的语义
         assert!(b.push(&"中".repeat(BATCH_MAX_CHARS)));
         assert_eq!(b.take().unwrap().chars().count(), BATCH_MAX_CHARS);
+    }
+}
+
+/// M2-09：信任放宽只影响「弹不弹确认框」，不触碰规则表硬拒。
+#[cfg(test)]
+mod mcp_trust_tests {
+    use super::*;
+
+    #[test]
+    fn strict_server_always_asks_until_remembered() {
+        assert!(should_ask_mcp(false, false));
+        assert!(!should_ask_mcp(false, true));
+    }
+
+    #[test]
+    fn trusted_server_never_asks() {
+        assert!(!should_ask_mcp(true, false));
+        assert!(!should_ask_mcp(true, true));
     }
 }
