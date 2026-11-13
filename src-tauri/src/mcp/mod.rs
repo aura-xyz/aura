@@ -372,3 +372,87 @@ mod tests {
         assert!(save_tool_image("image/png", "not base64 !!").is_none());
     }
 }
+
+/// M2-12 二期验收回归：把各模块单独测过的纯逻辑串成真实链路，
+/// 防止「单测都过、组合起来丢字段」这类问题。
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+    use crate::mcp::capabilities::{client_capabilities, parse_capabilities};
+    use crate::mcp::reconnect::{reconnect_delay, should_retry};
+    use crate::mcp::resources::{
+        parse_resource_contents, truncate_utf8, validate_resource_uri,
+    };
+    use crate::mcp::session::{decode_line, RpcSession};
+    use serde_json::json;
+
+    #[test]
+    fn frame_decoding_keeps_notification_params_for_routing() {
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///a.txt"}}"#;
+        let v = decode_line(line).unwrap().unwrap();
+        let (method, params) = RpcSession::new().dispatch(v).expect("应识别为通知");
+        assert_eq!(method, "notifications/resources/updated");
+        assert_eq!(params["uri"], "file:///a.txt");
+        assert!(validate_resource_uri(params["uri"].as_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn handshake_result_roundtrips_into_domain_flags() {
+        let caps = client_capabilities();
+        assert!(caps.get("sampling").is_none());
+        let result = json!({
+            "protocolVersion": "2025-11-25",
+            "serverInfo": { "name": "fs", "version": "1.0" },
+            "capabilities": {
+                "tools": { "listChanged": true },
+                "resources": { "subscribe": true },
+                "prompts": {}
+            }
+        });
+        let parsed = parse_capabilities(&result);
+        assert_eq!(parsed.domains(), vec!["tools", "resources", "prompts"]);
+        assert!(parsed.resources_subscribe);
+        assert_eq!(parsed.server_name, "fs");
+    }
+
+    #[test]
+    fn binary_resource_never_leaks_into_model_text() {
+        let read = json!({ "contents": [
+            { "mimeType": "text/plain", "text": "摘要" },
+            { "mimeType": "image/png", "blob": "QUJD" }
+        ]});
+        let (text, mime, blob) = parse_resource_contents(&read);
+        assert_eq!(text, "摘要");
+        assert_eq!(mime.as_deref(), Some("text/plain"));
+        assert_eq!(blob, 4);
+        let (cut, truncated) = truncate_utf8("中".repeat(2000).as_str(), 128);
+        assert!(truncated);
+        assert!(cut.chars().all(|c| c == '中'));
+    }
+
+    #[test]
+    fn reconnect_budget_is_bounded_in_both_axes() {
+        let delays: Vec<u64> = (0..8)
+            .map(|i| reconnect_delay(i).as_secs())
+            .collect();
+        assert!(delays.iter().all(|d| *d <= 30));
+        assert!(!should_retry(5));
+        assert!(should_retry(4));
+    }
+
+    #[test]
+    fn tool_result_combines_text_structured_and_image_placeholder() {
+        let r = json!({
+            "content": [
+                { "type": "text", "text": "查到了" },
+                { "type": "image", "mimeType": "image/png", "data": "!!!" }
+            ],
+            "structuredContent": { "count": 1 }
+        });
+        let out = map_tool_result(&r).unwrap();
+        assert!(out.contains("查到了"), "{out}");
+        assert!(out.contains("[图片 image/png"), "{out}");
+        assert!(out.contains("[结构化输出]"), "{out}");
+        assert!(out.contains("\"count\":1"), "{out}");
+    }
+}

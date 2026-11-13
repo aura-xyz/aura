@@ -2060,4 +2060,16 @@ mod mcp_trust_tests {
         assert!(!should_ask_mcp(true, false));
         assert!(!should_ask_mcp(true, true));
     }
+
+    /// 组合回归：信任放宽只关掉确认框，规则表硬拒是独立的前置判定。
+    #[test]
+    fn trust_never_bypasses_rule_hard_blocks() {
+        use crate::agent::approval::{decide, Gate, Policy};
+        assert!(!should_ask_mcp(true, false));
+        let g = decide(
+            Policy::Dangerous,
+            "mcp_echo {\"command\":\"mkfs.ext4 /dev/sda\"}",
+        );
+        assert!(matches!(g, Gate::Reject { .. }), "{g:?}");
+    }
 }
