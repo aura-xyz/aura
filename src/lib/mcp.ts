@@ -340,8 +340,9 @@ export function listResources(id: number): Promise<McpResourceView[]> {
 export function readResource(
   id: number,
   uri: string,
+  sessionId?: string,
 ): Promise<McpResourceReadView> {
-  return invoke("mcp_read_resource", { id, uri });
+  return invoke("mcp_read_resource", { id, uri, sessionId });
 }
 
 // ── prompts 域（v0.8.1 M2-06）──────────────────────────────
@@ -354,6 +355,7 @@ export function getPrompt(
   id: number,
   name: string,
   args: Record<string, string>,
+  sessionId?: string,
 ): Promise<McpPromptMessageView[]> {
-  return invoke("mcp_get_prompt", { id, name, arguments: args });
+  return invoke("mcp_get_prompt", { id, name, arguments: args, sessionId });
 }

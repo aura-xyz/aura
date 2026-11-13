@@ -587,7 +587,7 @@ export default function InputArea({
     args: Record<string, string>,
   ) {
     try {
-      const messages = await getPrompt(p.server_id, p.name, args);
+      const messages = await getPrompt(p.server_id, p.name, args, sessionId);
       const text = promptPlainText(messages);
       if (!text.trim()) {
         notify("error", "服务器返回了空的提示词内容");

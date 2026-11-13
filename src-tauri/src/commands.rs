@@ -2672,6 +2672,54 @@ fn mcp_cwd(state: &State<'_, AppState>) -> Option<std::path::PathBuf> {
     state.workspace.lock().ok().map(|p| p.clone())
 }
 
+/// MCP 资源/提示词读取的统一打点（M2-11）。
+///
+/// 安全事件**总是**写（哪怕没有会话上下文），timeline 只在给了会话 id 时写：
+/// 设置页里的预览不属于任何对话轮次，硬塞进时间线会污染用户回放。
+/// 两者都失败静默——记不下一条观测不该让读取本身失败。
+fn record_mcp_activity(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    kind: crate::security::Kind,
+    title: &str,
+    detail: Option<String>,
+) {
+    crate::security::log_simple(
+        kind,
+        session_id.unwrap_or(""),
+        title,
+        "MCP 数据读取",
+        "mcp_data",
+    );
+    let Some(sid) = session_id.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Ok(db) = state.db.lock() else {
+        return;
+    };
+    let seq: i64 = db
+        .query_row(
+            "SELECT COALESCE(MAX(seq) + 1, 0) FROM timeline WHERE session_id = ?1",
+            rusqlite::params![sid],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let mut entry = crate::timeline::TimelineEntry::new(
+        sid,
+        seq,
+        ts_ms,
+        0,
+        crate::timeline::EntryKind::Tool,
+        title,
+    );
+    entry.detail = detail;
+    let _ = db::add_timeline_entry(&db, &entry);
+}
+
 /// 列出全部服务器（含实时状态与工具数）。
 #[tauri::command]
 pub async fn mcp_list_servers(
@@ -2947,15 +2995,30 @@ pub async fn mcp_list_resources(
 /// 这里静默忽略，绝不影响读取本身。
 #[tauri::command]
 pub async fn mcp_read_resource(
+    state: State<'_, AppState>,
     id: i64,
     uri: String,
+    session_id: Option<String>,
 ) -> Result<crate::mcp::resources::ResourceReadResult, String> {
+    let started = std::time::Instant::now();
     let conn = crate::mcp::manager()
         .get(id)
         .await
         .ok_or_else(|| "MCP 服务器未连接".to_string())?;
     let result = conn.read_resource(&uri).await?;
     let _ = conn.subscribe_resource(&uri).await;
+    record_mcp_activity(
+        &state,
+        session_id.as_deref(),
+        crate::security::Kind::McpResource,
+        &format!("MCP 资源 {uri}"),
+        Some(format!(
+            "{} 字节，截断={}，耗时 {}ms",
+            result.total_bytes,
+            result.truncated,
+            started.elapsed().as_millis()
+        )),
+    );
     Ok(result)
 }
 
@@ -2978,15 +3041,32 @@ pub async fn mcp_list_prompts(
 /// 后端不执行、不写 history、不交给模型——由用户看过再决定是否发送。
 #[tauri::command]
 pub async fn mcp_get_prompt(
+    state: State<'_, AppState>,
     id: i64,
     name: String,
     arguments: serde_json::Value,
+    session_id: Option<String>,
 ) -> Result<Vec<crate::mcp::prompts::McpPromptMessage>, String> {
+    let started = std::time::Instant::now();
     let conn = crate::mcp::manager()
         .get(id)
         .await
         .ok_or_else(|| "MCP 服务器未连接".to_string())?;
-    conn.get_prompt(&name, arguments).await
+    let messages = conn.get_prompt(&name, arguments).await?;
+    let chars: usize = messages.iter().map(|m| m.text.chars().count()).sum();
+    record_mcp_activity(
+        &state,
+        session_id.as_deref(),
+        crate::security::Kind::McpPrompt,
+        &format!("MCP 提示词 {name}"),
+        Some(format!(
+            "{} 条消息、{} 字符，耗时 {}ms",
+            messages.len(),
+            chars,
+            started.elapsed().as_millis()
+        )),
+    );
+    Ok(messages)
 }
 
 /// 添加前试连：不落库，只验证握手并返回工具数。

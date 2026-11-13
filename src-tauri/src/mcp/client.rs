@@ -432,6 +432,10 @@ impl Connection {
             "notifications/resources/list_changed" => {
                 if let Err(e) = self.refresh_resources().await {
                     self.push_stderr(format!("刷新资源列表失败：{e}"));
+                    crate::mcp::diag(&format!(
+                        "资源清单重扫失败 server={}: {e}",
+                        self.server_name
+                    ));
                 }
             }
             "notifications/resources/updated" => {
@@ -447,6 +451,10 @@ impl Connection {
             "notifications/prompts/list_changed" => {
                 if let Err(e) = self.refresh_prompts().await {
                     self.push_stderr(format!("刷新提示词列表失败：{e}"));
+                    crate::mcp::diag(&format!(
+                        "提示词清单重扫失败 server={}: {e}",
+                        self.server_name
+                    ));
                 }
             }
             _ => {}
@@ -490,7 +498,14 @@ impl Connection {
         });
         // 协商以服务器返回值为准；不校验版本，兼容只支持旧版的服务器。
         let result = self.request("initialize", params, HANDSHAKE_TIMEOUT).await?;
-        *self.capabilities.write().await = parse_capabilities(&result);
+        let caps = parse_capabilities(&result);
+        crate::mcp::diag(&format!(
+            "握手完成 server={} protocol={} domains={:?}",
+            self.server_name,
+            caps.protocol_version,
+            caps.domains()
+        ));
+        *self.capabilities.write().await = caps;
         self.notify("notifications/initialized", json!({})).await?;
         Ok(())
     }
@@ -544,8 +559,18 @@ async fn attempt_reconnect(conn: Arc<Connection>) {
                 "delayMs": delay.as_millis(),
             }),
         );
+        crate::mcp::diag(&format!(
+            "重连尝试 server={} 第 {} 次，等待 {}s",
+            conn.server_name,
+            attempt + 1,
+            delay.as_secs()
+        ));
         tokio::time::sleep(delay).await;
         if conn.stopped.load(Ordering::SeqCst) {
+            crate::mcp::diag(&format!(
+                "重连取消 server={}（用户已关闭）",
+                conn.server_name
+            ));
             return;
         }
         let result = connect(
@@ -561,6 +586,11 @@ async fn attempt_reconnect(conn: Arc<Connection>) {
         .await;
         match result {
             Ok(next) => {
+                crate::mcp::diag(&format!(
+                    "重连成功 server={} 第 {} 次",
+                    conn.server_name,
+                    attempt + 1
+                ));
                 crate::mcp::manager().insert(conn.server_id, next).await;
                 // connect() 内部已重扫工具与能力域；这里同步模型可见表。
                 crate::tools::registry::sync_mcp_tools(None).await;
@@ -576,6 +606,10 @@ async fn attempt_reconnect(conn: Arc<Connection>) {
             )),
         }
     }
+    crate::mcp::diag(&format!(
+        "重连放弃 server={}（已尝试 {MAX_RECONNECT_ATTEMPTS} 次）",
+        conn.server_name
+    ));
     conn.mark_down(format!(
         "自动重连失败（已尝试 {MAX_RECONNECT_ATTEMPTS} 次），请手动重连"
     ))

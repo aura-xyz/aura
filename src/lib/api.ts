@@ -915,7 +915,7 @@ export interface SecurityEvent {
   id: number;
   ts_ms: number;
   session_id: string;
-  /** blocked_command / path_denied / mode_denied / approval_denied / approval_allowed / risky_install / mcp_call */
+  /** blocked_command / path_denied / mode_denied / approval_denied / approval_allowed / risky_install / mcp_call / mcp_trust_change / mcp_resource / mcp_prompt */
   kind: string;
   subject: string;
   reason: string;

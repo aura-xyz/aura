@@ -39,6 +39,9 @@ const KIND_META: Record<string, { label: string; tone: string }> = {
   approval_allowed: { label: "审批放行", tone: "text-success" },
   risky_install: { label: "高风险安装", tone: "text-warning" },
   mcp_call: { label: "MCP 调用", tone: "text-subtle" },
+  mcp_trust_change: { label: "MCP 信任变更", tone: "text-warning" },
+  mcp_resource: { label: "MCP 资源读取", tone: "text-subtle" },
+  mcp_prompt: { label: "MCP 提示词展开", tone: "text-subtle" },
 };
 
 const POLICIES: Array<{ id: ApprovalPolicyId; label: string; hint: string }> = [

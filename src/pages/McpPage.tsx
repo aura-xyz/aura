@@ -16,6 +16,7 @@ import {
 import Switch from "../components/Switch";
 import McpResourcePanel from "../components/McpResourcePanel";
 import McpPromptPanel from "../components/McpPromptPanel";
+import { useStore } from "../store";
 import {
   MCP_STATUS_META,
   addServer,
@@ -44,6 +45,8 @@ interface Props {
 }
 
 export default function McpPage({ onClose }: Props) {
+  // M2-11：把当前会话 id 带进资源/提示词读取，让它们能进该会话的时间线
+  const activeId = useStore().activeId;
   const [servers, setServers] = useState<McpServerView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -238,6 +241,7 @@ export default function McpPage({ onClose }: Props) {
       {detailId !== null && (
         <DetailDrawer
           id={detailId}
+          sessionId={activeId}
           server={servers.find((s) => s.id === detailId)}
           onClose={() => setDetailId(null)}
           onChanged={() => void refresh()}
@@ -278,11 +282,13 @@ export default function McpPage({ onClose }: Props) {
 /** 详情抽屉：状态、stderr 尾部、工具清单（原始名 ↔ 对外名）、重扫/重连。 */
 function DetailDrawer({
   id,
+  sessionId,
   server,
   onClose,
   onChanged,
 }: {
   id: number;
+  sessionId: string;
   server?: McpServerView;
   onClose: () => void;
   onChanged: () => void;
@@ -474,10 +480,12 @@ function DetailDrawer({
 
           <McpResourcePanel
             serverId={id}
+            sessionId={sessionId}
             supported={detail?.capabilities.resources ?? false}
           />
           <McpPromptPanel
             serverId={id}
+            sessionId={sessionId}
             supported={detail?.capabilities.prompts ?? false}
           />
 

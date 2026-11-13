@@ -275,6 +275,15 @@ fn extract_tool_content(result: &serde_json::Value) -> String {
     parts.join("\n")
 }
 
+/// 连接级诊断日志（M2-11）。
+///
+/// stderr 尾部仍是「服务器为什么连不上」的排错主通道；这里补的是 Aura
+/// 自己发起的动作（重连尝试、能力协商结果、清单重扫失败），方便事后复盘。
+/// 失败静默，与更新日志同策略。
+pub fn diag(info: &str) {
+    crate::update_log::log_event("mcp", info);
+}
+
 /// 关闭全部连接（应用退出时调用）。
 pub async fn shutdown_all() {
     let conns = manager().snapshot().await;

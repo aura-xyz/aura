@@ -470,7 +470,7 @@ describe("InputArea 的 MCP 提示词（M2-06）", () => {
 
     await userEvent.click(await screen.findByText("mcp:fs/review"));
     await waitFor(() => expect(box).toHaveValue("展开后的提示词"));
-    expect(getPromptMock).toHaveBeenCalledWith(3, "review", {});
+    expect(getPromptMock).toHaveBeenCalledWith(3, "review", {}, "s1");
   });
 
   it("带必填参数的提示词先弹参数表单，不直接展开", async () => {

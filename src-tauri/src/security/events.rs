@@ -41,6 +41,10 @@ pub enum Kind {
     McpCall,
     /// MCP 服务器信任等级被放宽 / 收回（v0.8.1 M2-08）
     McpTrustChange,
+    /// MCP 资源被读取（v0.8.1 M2-11）
+    McpResource,
+    /// MCP 提示词被展开（v0.8.1 M2-11）
+    McpPrompt,
 }
 
 impl Kind {
@@ -54,6 +58,8 @@ impl Kind {
             Kind::RiskyInstall => "risky_install",
             Kind::McpCall => "mcp_call",
             Kind::McpTrustChange => "mcp_trust_change",
+            Kind::McpResource => "mcp_resource",
+            Kind::McpPrompt => "mcp_prompt",
         }
     }
 
@@ -67,6 +73,8 @@ impl Kind {
             Kind::RiskyInstall => "高风险安装",
             Kind::McpCall => "MCP 调用",
             Kind::McpTrustChange => "MCP 信任变更",
+            Kind::McpResource => "MCP 资源读取",
+            Kind::McpPrompt => "MCP 提示词展开",
         }
     }
 }
@@ -149,6 +157,8 @@ fn kind_label(kind: &str) -> String {
         "risky_install" => "高风险安装".into(),
         "mcp_call" => "MCP 调用".into(),
         "mcp_trust_change" => "MCP 信任变更".into(),
+        "mcp_resource" => "MCP 资源读取".into(),
+        "mcp_prompt" => "MCP 提示词展开".into(),
         other => other.to_string(),
     }
 }
@@ -216,6 +226,8 @@ mod tests {
         assert_eq!(Kind::McpCall.as_str(), "mcp_call");
         assert_eq!(Kind::McpTrustChange.as_str(), "mcp_trust_change");
         assert_eq!(Kind::McpTrustChange.label(), "MCP 信任变更");
+        assert_eq!(Kind::McpResource.as_str(), "mcp_resource");
+        assert_eq!(Kind::McpPrompt.as_str(), "mcp_prompt");
     }
 
     /// 命令原文里带逗号与引号是常态，导出必须仍是正确的 CSV。

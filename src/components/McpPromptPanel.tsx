@@ -16,9 +16,12 @@ import {
 
 export default function McpPromptPanel({
   serverId,
+  sessionId,
   supported,
 }: {
   serverId: number;
+  /** 当前会话 id：展开会进该会话的时间线（M2-11） */
+  sessionId: string;
   /** 服务器是否在握手时声明了 prompts 域 */
   supported: boolean;
 }) {
@@ -47,7 +50,7 @@ export default function McpPromptPanel({
 
   async function expand(p: McpPromptView, values: Record<string, string>) {
     try {
-      const messages = await getPrompt(serverId, p.name, values);
+      const messages = await getPrompt(serverId, p.name, values, sessionId);
       setPreview(promptPlainText(messages) || "（服务器返回了空内容）");
       setErr(null);
     } catch (e) {

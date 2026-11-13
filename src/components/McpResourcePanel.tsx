@@ -18,9 +18,12 @@ import { formatBytes } from "../lib/filePreview";
 
 export default function McpResourcePanel({
   serverId,
+  sessionId,
   supported,
 }: {
   serverId: number;
+  /** 当前会话 id：读取会进该会话的时间线（M2-11） */
+  sessionId: string;
   /** 服务器是否在握手时声明了 resources 域 */
   supported: boolean;
 }) {
@@ -48,7 +51,7 @@ export default function McpResourcePanel({
   async function open(r: McpResourceView) {
     if (r.template) return;
     try {
-      setPreview(await readResource(serverId, r.uri));
+      setPreview(await readResource(serverId, r.uri, sessionId));
       setErr(null);
     } catch (e) {
       setErr(typeof e === "string" ? e : String(e));
@@ -62,7 +65,7 @@ export default function McpResourcePanel({
     void listen<{ serverId: number; uri: string }>("mcp:resource", (e) => {
       if (e.payload.serverId !== serverId || !preview?.uri) return;
       if (e.payload.uri === preview.uri) {
-        void readResource(serverId, preview.uri)
+        void readResource(serverId, preview.uri, sessionId)
           .then(setPreview)
           .catch(() => {});
       }
@@ -74,7 +77,7 @@ export default function McpResourcePanel({
       disposed = true;
       un?.();
     };
-  }, [serverId, preview?.uri]);
+  }, [serverId, sessionId, preview?.uri]);
 
   return (
     <section className="mt-5">
