@@ -122,6 +122,12 @@ pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
              auto_reconnect  INTEGER NOT NULL DEFAULT 0,
              tool_limit      INTEGER NOT NULL DEFAULT 50,
              concurrent      INTEGER NOT NULL DEFAULT 0,
+             -- v0.8.2 M3-02：远程服务器。四列全带默认值，空 server_url = stdio，
+             -- 老库补列后既有配置行为完全不变。
+             server_url            TEXT NOT NULL DEFAULT '',
+             auth_mode             TEXT NOT NULL DEFAULT 'none',
+             oauth_client_id       TEXT NOT NULL DEFAULT '',
+             oauth_token_encrypted TEXT NOT NULL DEFAULT '',
              created_at      INTEGER NOT NULL DEFAULT 0,
              updated_at      INTEGER NOT NULL DEFAULT 0
          );",
@@ -169,6 +175,21 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
              ALTER TABLE mcp_servers ADD COLUMN auto_reconnect INTEGER NOT NULL DEFAULT 0;
              ALTER TABLE mcp_servers ADD COLUMN tool_limit INTEGER NOT NULL DEFAULT 50;
              ALTER TABLE mcp_servers ADD COLUMN concurrent INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+
+    // v0.8.2 M3-02：远程服务器配置四列。以 server_url 为哨兵，四列一起加。
+    let has_remote = conn
+        .prepare("SELECT 1 FROM pragma_table_info('mcp_servers') WHERE name = 'server_url'")?
+        .query([])?
+        .next()?
+        .is_some();
+    if !has_remote {
+        conn.execute_batch(
+            "ALTER TABLE mcp_servers ADD COLUMN server_url TEXT NOT NULL DEFAULT '';
+             ALTER TABLE mcp_servers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'none';
+             ALTER TABLE mcp_servers ADD COLUMN oauth_client_id TEXT NOT NULL DEFAULT '';
+             ALTER TABLE mcp_servers ADD COLUMN oauth_token_encrypted TEXT NOT NULL DEFAULT '';",
         )?;
     }
     Ok(())

@@ -23,6 +23,7 @@ import {
   capabilityDomains,
   commandSummary,
   defaultPolicy,
+  defaultRemote,
   policyLabel,
   getServerStatus,
   listServers,
@@ -33,6 +34,7 @@ import {
   testConnect,
   toLines,
   updateServer,
+  type McpRemoteConfig,
   type McpServerInput,
   type McpServerPolicy,
   type McpServerView,
@@ -581,6 +583,10 @@ function ServerForm({
   const [policy, setPolicy] = useState<McpServerPolicy>(
     initial?.policy ?? defaultPolicy(),
   );
+  // M3-02：远程服务器配置；留空即沿用 stdio
+  const [remote, setRemote] = useState<McpRemoteConfig>(
+    initial?.remote ?? defaultRemote(),
+  );
   const [confirmTrust, setConfirmTrust] = useState(false);
 
   const build = (): McpServerInput => ({
@@ -590,9 +596,13 @@ function ServerForm({
     env: parseEnv(envText),
     workspaces: toLines(workspacesText),
     policy,
+    remote,
   });
 
-  const valid = name.trim().length > 0 && command.trim().length > 0;
+  // 远程服务器不需要 command；stdio 仍强制非空（与后端 insert/update 一致）
+  const valid =
+    name.trim().length > 0 &&
+    (command.trim().length > 0 || remote.server_url.trim().length > 0);
 
   async function runTest() {
     if (!valid) return;
@@ -713,6 +723,58 @@ function ServerForm({
                 className="resize-none rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[12px] outline-none placeholder:text-subtle focus:border-brand/40"
               />
             </label>
+
+            <div className="rounded-tag border border-line p-2.5">
+              <span className="text-[11px] font-medium text-foreground">
+                远程服务器（可选）
+              </span>
+              <p className="mt-1 text-[10px] leading-relaxed text-subtle">
+                留空则按本地进程（stdio）启动；填写地址后走 Streamable HTTP。
+                非回环地址必须使用 https，凭据加密存储。
+              </p>
+              <label className="mt-2 block">
+                <span className="text-[11px] text-subtle">服务器地址</span>
+                <input
+                  value={remote.server_url}
+                  onChange={(e) =>
+                    setRemote((r) => ({ ...r, server_url: e.target.value }))
+                  }
+                  placeholder="https://mcp.example.com/mcp"
+                  aria-label="服务器地址"
+                  className="mt-1 w-full rounded-tag border border-line bg-surface px-2 py-1.5 font-mono text-[11px] text-foreground outline-none focus:border-brand"
+                />
+              </label>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[11px] text-subtle">认证方式</span>
+                  <select
+                    value={remote.auth_mode}
+                    onChange={(e) =>
+                      setRemote((r) => ({ ...r, auth_mode: e.target.value }))
+                    }
+                    aria-label="认证方式"
+                    className="mt-1 w-full rounded-tag border border-line bg-surface px-2 py-1.5 text-[11px] text-foreground outline-none focus:border-brand"
+                  >
+                    <option value="none">无</option>
+                    <option value="oauth">OAuth 2.1 + PKCE</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-[11px] text-subtle">OAuth Client ID</span>
+                  <input
+                    value={remote.oauth_client_id}
+                    onChange={(e) =>
+                      setRemote((r) => ({
+                        ...r,
+                        oauth_client_id: e.target.value,
+                      }))
+                    }
+                    aria-label="OAuth Client ID"
+                    className="mt-1 w-full rounded-tag border border-line bg-surface px-2 py-1.5 text-[11px] text-foreground outline-none focus:border-brand"
+                  />
+                </label>
+              </div>
+            </div>
 
             <div className="rounded-tag border border-line p-2.5">
               <span className="text-[11px] font-medium text-foreground">

@@ -2595,6 +2595,10 @@ pub struct McpServerView {
     pub workspaces: Vec<String>,
     /// 信任分级与连接策略（M2-08）
     pub policy: crate::mcp::config::ServerPolicy,
+    /// 远程连接配置（M3-02）；全空表示 stdio
+    pub remote: crate::mcp::config::RemoteConfig,
+    /// 是否已保存 OAuth token（明文永不回传前端）
+    pub has_token: bool,
 }
 
 /// 单个工具（详情展示用）。
@@ -2665,6 +2669,8 @@ async fn mcp_view(cfg: &crate::mcp::McpServerConfig) -> McpServerView {
         tool_count,
         workspaces: cfg.workspaces.clone(),
         policy: cfg.policy.clone(),
+        remote: cfg.remote.clone(),
+        has_token: cfg.has_token,
     }
 }
 
@@ -2746,6 +2752,7 @@ pub async fn mcp_add_server(
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
     policy: crate::mcp::config::ServerPolicy,
+    remote: crate::mcp::config::RemoteConfig,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2758,7 +2765,9 @@ pub async fn mcp_add_server(
     }
     let cfg = {
         let db = state.db.lock().map_err(lock_err)?;
-        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true, policy)?
+        crate::mcp::config::insert(
+            &db, &name, &command, args, env, workspaces, true, policy, remote,
+        )?
     };
     let cwd = mcp_cwd(&state);
     if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
@@ -2781,6 +2790,7 @@ pub async fn mcp_update_server(
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
     policy: crate::mcp::config::ServerPolicy,
+    remote: crate::mcp::config::RemoteConfig,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2802,7 +2812,9 @@ pub async fn mcp_update_server(
         } else {
             env
         };
-        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces, policy)?
+        crate::mcp::config::update(
+            &db, id, &name, &command, args, env, workspaces, policy, remote,
+        )?
     };
     crate::mcp::disconnect_server(id).await;
     if cfg.enabled {

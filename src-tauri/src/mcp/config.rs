@@ -54,6 +54,39 @@ impl ServerPolicy {
     }
 }
 
+/// 远程服务器配置（v0.8.2 · M3-02）。
+///
+/// 全部带默认值：空 `server_url` 表示沿用一期/二期的 stdio 链路，
+/// 老库补列后逐台服务器行为完全不变，不需要数据迁移脚本。
+/// `auth_mode` 只认 `none` / `oauth`，其余回落 `none`（从严）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RemoteConfig {
+    pub server_url: String,
+    pub auth_mode: String,
+    pub oauth_client_id: String,
+}
+
+impl RemoteConfig {
+    pub fn normalized(mut self) -> Self {
+        self.server_url = self.server_url.trim().to_string();
+        self.auth_mode = if self.auth_mode.trim().eq_ignore_ascii_case("oauth") {
+            "oauth".to_string()
+        } else {
+            "none".to_string()
+        };
+        self.oauth_client_id = self.oauth_client_id.trim().to_string();
+        self
+    }
+
+    pub fn is_remote(&self) -> bool {
+        !self.server_url.is_empty()
+    }
+
+    pub fn needs_oauth(&self) -> bool {
+        self.auth_mode == "oauth"
+    }
+}
+
 /// 一台 MCP 服务器的配置。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
@@ -67,6 +100,10 @@ pub struct McpServerConfig {
     /// 允许可见的工作区路径；空数组 = 全部工作区可见。
     pub workspaces: Vec<String>,
     pub policy: ServerPolicy,
+    /// 远程连接配置；默认全空 = stdio（M3-02）
+    pub remote: RemoteConfig,
+    /// 是否已存 OAuth token；**明文永不进这个结构、也不回传前端**
+    pub has_token: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -74,6 +111,7 @@ pub struct McpServerConfig {
 /// 所有 SELECT 共用一份列清单，避免 list/get 两处漂移。
 const COLUMNS: &str = "id, name, command, args_json, env_encrypted, enabled, \
      workspaces_json, trust_level, auto_reconnect, tool_limit, concurrent, \
+     server_url, auth_mode, oauth_client_id, oauth_token_encrypted, \
      created_at, updated_at";
 
 /// 环境变量加密：把 map 序列化后交给 `secure::protect`。
@@ -118,9 +156,91 @@ fn row_to_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpServerConfig> {
             concurrent: row.get::<_, i64>("concurrent").unwrap_or(0) != 0,
         }
         .normalized(),
+        // M3-02：老库补列后有 DEFAULT；仍做兜底方便单测用极简表
+        remote: RemoteConfig {
+            server_url: row
+                .get::<_, String>("server_url")
+                .unwrap_or_default(),
+            auth_mode: row
+                .get::<_, String>("auth_mode")
+                .unwrap_or_else(|_| "none".to_string()),
+            oauth_client_id: row
+                .get::<_, String>("oauth_client_id")
+                .unwrap_or_default(),
+        }
+        .normalized(),
+        has_token: !row
+            .get::<_, String>("oauth_token_encrypted")
+            .unwrap_or_default()
+            .is_empty(),
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
+}
+
+/// OAuth token 落库（M3-04 使用）：与 env 走同一套 `secure` 加密，不建第二套凭据机制。
+pub fn set_oauth_token(conn: &Connection, id: i64, token: &str) -> Result<(), String> {
+    let blob = if token.is_empty() {
+        String::new()
+    } else {
+        crate::secure::protect(token).map_err(|e| format!("凭据加密失败：{e}"))?
+    };
+    let changed = conn
+        .execute(
+            "UPDATE mcp_servers SET oauth_token_encrypted = ?1, updated_at = ?2 WHERE id = ?3",
+            params![blob, now(), id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("服务器不存在".into());
+    }
+    Ok(())
+}
+
+/// 读取 token 明文，仅后端连接层调用；解不开返回 None（不把损坏凭据当致命错误）。
+pub fn oauth_token(conn: &Connection, id: i64) -> Result<Option<String>, String> {
+    let blob: String = conn
+        .query_row(
+            "SELECT oauth_token_encrypted FROM mcp_servers WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if blob.is_empty() {
+        return Ok(None);
+    }
+    Ok(crate::secure::unprotect(&blob).ok())
+}
+
+/// 远程 URL 静态审查（M3-02）：沿用一期 M-06 的规则表口径，
+/// 并额外限制 scheme —— 明文 http 只允许回环地址，避免凭据在局域网裸奔。
+pub fn audit_url(raw: &str) -> Result<Option<String>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(raw).map_err(|e| format!("远程地址无效：{e}"))?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            let host = parsed.host_str().unwrap_or("");
+            if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+                return Err("非回环地址必须使用 https".into());
+            }
+        }
+        other => return Err(format!("不支持的协议：{other}")),
+    }
+    match crate::security::rules::check_command(raw) {
+        Some(hit) if hit.action == crate::security::rules::Action::HardBlock => Err(format!(
+            "该地址命中安全规则「{}」：{}",
+            hit.id, hit.reason
+        )),
+        Some(hit) => Ok(Some(format!(
+            "该地址命中提示规则「{}」：{}",
+            hit.id, hit.reason
+        ))),
+        None => Ok(None),
+    }
 }
 
 /// 列出全部服务器（按 id 升序，稳定展示顺序）。
@@ -169,14 +289,18 @@ pub fn insert(
     workspaces: Vec<String>,
     enabled: bool,
     policy: ServerPolicy,
+    remote: RemoteConfig,
 ) -> Result<McpServerConfig, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("名称不能为空".into());
     }
-    if command.trim().is_empty() {
+    let remote = remote.normalized();
+    // 远程服务器不需要 command；stdio 仍按一期口径强制非空。
+    if !remote.is_remote() && command.trim().is_empty() {
         return Err("命令不能为空".into());
     }
+    audit_url(&remote.server_url)?;
     let p = policy.normalized();
     let ts = now();
     let args_json = serde_json::to_string(&args).map_err(|e| e.to_string())?;
@@ -185,8 +309,9 @@ pub fn insert(
     conn.execute(
         "INSERT INTO mcp_servers \
          (name, command, args_json, env_encrypted, enabled, workspaces_json, \
-          trust_level, auto_reconnect, tool_limit, concurrent, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+          trust_level, auto_reconnect, tool_limit, concurrent, \
+          server_url, auth_mode, oauth_client_id, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
         params![
             name,
             command.trim(),
@@ -198,6 +323,9 @@ pub fn insert(
             if p.auto_reconnect { 1 } else { 0 },
             p.tool_limit as i64,
             if p.concurrent { 1 } else { 0 },
+            remote.server_url,
+            remote.auth_mode,
+            remote.oauth_client_id,
             ts
         ],
     )
@@ -222,14 +350,17 @@ pub fn update(
     env: BTreeMap<String, String>,
     workspaces: Vec<String>,
     policy: ServerPolicy,
+    remote: RemoteConfig,
 ) -> Result<McpServerConfig, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("名称不能为空".into());
     }
-    if command.trim().is_empty() {
+    let remote = remote.normalized();
+    if !remote.is_remote() && command.trim().is_empty() {
         return Err("命令不能为空".into());
     }
+    audit_url(&remote.server_url)?;
     let p = policy.normalized();
     let args_json = serde_json::to_string(&args).map_err(|e| e.to_string())?;
     let env_blob = encrypt_env(&env)?;
@@ -239,7 +370,8 @@ pub fn update(
             "UPDATE mcp_servers SET name = ?1, command = ?2, args_json = ?3, \
              env_encrypted = ?4, workspaces_json = ?5, trust_level = ?6, \
              auto_reconnect = ?7, tool_limit = ?8, concurrent = ?9, \
-             updated_at = ?10 WHERE id = ?11",
+             server_url = ?10, auth_mode = ?11, oauth_client_id = ?12, \
+             updated_at = ?13 WHERE id = ?14",
             params![
                 name,
                 command.trim(),
@@ -250,6 +382,9 @@ pub fn update(
                 if p.auto_reconnect { 1 } else { 0 },
                 p.tool_limit as i64,
                 if p.concurrent { 1 } else { 0 },
+                remote.server_url,
+                remote.auth_mode,
+                remote.oauth_client_id,
                 now(),
                 id
             ],
@@ -359,6 +494,10 @@ mod tests {
                 auto_reconnect INTEGER NOT NULL DEFAULT 0,
                 tool_limit INTEGER NOT NULL DEFAULT 50,
                 concurrent INTEGER NOT NULL DEFAULT 0,
+                server_url TEXT NOT NULL DEFAULT '',
+                auth_mode TEXT NOT NULL DEFAULT 'none',
+                oauth_client_id TEXT NOT NULL DEFAULT '',
+                oauth_token_encrypted TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0
             );",
@@ -381,6 +520,7 @@ mod tests {
             vec![],
             true,
             ServerPolicy::default(),
+            RemoteConfig::default(),
         )
         .expect("应能新增");
         assert_eq!(c.name, "filesystem");
@@ -406,6 +546,7 @@ mod tests {
             BTreeMap::new(),
             vec!["/w".into()],
             ServerPolicy::default(),
+            RemoteConfig::default(),
         )
         .unwrap();
         assert_eq!(updated.name, "fs2");
@@ -421,16 +562,16 @@ mod tests {
     #[test]
     fn duplicate_name_is_rejected_with_readable_message() {
         let conn = mem();
-        insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).unwrap();
-        let err = insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).unwrap_err();
+        insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default(), RemoteConfig::default()).unwrap();
+        let err = insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default(), RemoteConfig::default()).unwrap_err();
         assert!(err.contains("已存在"), "{err}");
     }
 
     #[test]
     fn empty_name_or_command_is_rejected() {
         let conn = mem();
-        assert!(insert(&conn, " ", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).is_err());
-        assert!(insert(&conn, "x", "  ", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).is_err());
+        assert!(insert(&conn, " ", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default(), RemoteConfig::default()).is_err());
+        assert!(insert(&conn, "x", "  ", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default(), RemoteConfig::default()).is_err());
     }
 
     #[test]
@@ -459,6 +600,7 @@ mod tests {
             vec![],
             true,
             ServerPolicy::default(),
+            RemoteConfig::default(),
         )
         .unwrap();
         assert!(!c.policy.is_trusted());
@@ -479,6 +621,7 @@ mod tests {
             vec![],
             true,
             ServerPolicy::default(),
+            RemoteConfig::default(),
         )
         .unwrap();
         set_policy(
@@ -534,5 +677,110 @@ mod tests {
         assert_eq!(row, ("strict".to_string(), 0, 50, 0));
         // 重复执行不能因列已存在而失败
         crate::db::migrate(&conn).unwrap();
+        let remote: (String, String) = conn
+            .query_row(
+                "SELECT server_url, auth_mode FROM mcp_servers WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(remote, (String::new(), "none".to_string()));
+    }
+
+    #[test]
+    fn remote_config_roundtrip_and_token_is_encrypted() {
+        let conn = mem();
+        let c = insert(
+            &conn,
+            "remote",
+            "",
+            vec![],
+            BTreeMap::new(),
+            vec![],
+            true,
+            ServerPolicy::default(),
+            RemoteConfig {
+                server_url: "https://mcp.example.com/mcp".into(),
+                auth_mode: "oauth".into(),
+                oauth_client_id: "aura-desktop".into(),
+            },
+        )
+        .unwrap();
+        assert!(c.remote.is_remote());
+        assert!(c.remote.needs_oauth());
+        assert!(!c.has_token);
+
+        set_oauth_token(&conn, c.id, "access-token-secret").unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT oauth_token_encrypted FROM mcp_servers WHERE id = ?1",
+                params![c.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("access-token-secret"), "token 不应明文落库");
+        assert_eq!(
+            oauth_token(&conn, c.id).unwrap().as_deref(),
+            Some("access-token-secret")
+        );
+        assert!(get(&conn, c.id).unwrap().unwrap().has_token);
+
+        set_oauth_token(&conn, c.id, "").unwrap();
+        assert!(!get(&conn, c.id).unwrap().unwrap().has_token);
+    }
+
+    #[test]
+    fn stdio_requires_command_remote_does_not() {
+        let conn = mem();
+        assert!(insert(
+            &conn,
+            "stdio",
+            "",
+            vec![],
+            BTreeMap::new(),
+            vec![],
+            true,
+            ServerPolicy::default(),
+            RemoteConfig::default(),
+        )
+        .is_err());
+        assert!(insert(
+            &conn,
+            "remote",
+            "",
+            vec![],
+            BTreeMap::new(),
+            vec![],
+            true,
+            ServerPolicy::default(),
+            RemoteConfig {
+                server_url: "http://127.0.0.1:8080/mcp".into(),
+                ..Default::default()
+            },
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn audit_url_enforces_scheme_and_loopback() {
+        assert!(audit_url("").unwrap().is_none());
+        assert!(audit_url("https://mcp.example.com/mcp").is_ok());
+        assert!(audit_url("http://127.0.0.1:8080/mcp").is_ok());
+        assert!(audit_url("http://example.com/mcp").is_err());
+        assert!(audit_url("file:///etc/passwd").is_err());
+        assert!(audit_url("not a url").is_err());
+    }
+
+    #[test]
+    fn remote_config_normalizes_unknown_auth_mode() {
+        let r = RemoteConfig {
+            server_url: "  https://x.example.com/mcp  ".into(),
+            auth_mode: "admin".into(),
+            oauth_client_id: "  cid  ".into(),
+        }
+        .normalized();
+        assert_eq!(r.server_url, "https://x.example.com/mcp");
+        assert_eq!(r.auth_mode, "none");
+        assert_eq!(r.oauth_client_id, "cid");
     }
 }

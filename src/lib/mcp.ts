@@ -19,6 +19,18 @@ export interface McpServerPolicy {
   concurrent: boolean;
 }
 
+/** 远程服务器配置（v0.8.2 M3-02）；全空表示一期/二期的 stdio 本地进程。 */
+export interface McpRemoteConfig {
+  server_url: string;
+  /** "none" | "oauth" */
+  auth_mode: string;
+  oauth_client_id: string;
+}
+
+export function defaultRemote(): McpRemoteConfig {
+  return { server_url: "", auth_mode: "none", oauth_client_id: "" };
+}
+
 /** 默认策略刻意保持一期行为：严格审批 / 不自动重连 / 串行 / 50 上限。 */
 export function defaultPolicy(): McpServerPolicy {
   return {
@@ -45,6 +57,10 @@ export interface McpServerView {
   tool_count: number;
   workspaces: string[];
   policy: McpServerPolicy;
+  /** 远程连接配置（M3-02） */
+  remote: McpRemoteConfig;
+  /** 是否已保存 OAuth token（明文永不回传前端） */
+  has_token: boolean;
 }
 
 /** 单个工具（详情展示：原始名与对外改写名对照）。 */
@@ -230,6 +246,7 @@ export interface McpServerInput {
   env: Record<string, string>;
   workspaces: string[];
   policy: McpServerPolicy;
+  remote: McpRemoteConfig;
 }
 
 /** 状态 → 展示元信息。 */
