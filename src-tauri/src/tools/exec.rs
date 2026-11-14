@@ -62,18 +62,15 @@ pub fn check_dangerous(command: &str) -> Option<&'static str> {
     check_command(command).map(|hit| hit.reason)
 }
 
-/// 被规则拦下时回给模型的说明。
+/// 被 HardBlock 规则拦下时回给模型的说明。
 ///
-/// 带上规则 id 与表版本：用户报「为什么这条命令跑不了」时，靠它定位是
-/// 哪条规则、什么时候加的，而不是对着自然语言猜。
+/// 只服务 HardBlock：RequireApproval / Warn 命中不再在此拦下（见
+/// [`run_script`]），带上规则 id 与表版本——用户报「为什么这条命令
+/// 跑不了」时，靠它定位是哪条规则、什么时候加的。
 fn blocked_message(command: &str, hit: &crate::security::rules::CommandHit) -> String {
-    let ask = match hit.action {
-        Action::RequireApproval => "该类命令需要用户逐次确认（审批流见后续版本），当前一律拦下。",
-        _ => "如确需执行，请调整命令写法以避开该模式。",
-    };
     format!(
-        "命令被安全策略拦截（疑似{}，规则 {} · 表 v{}）：{}\n{}",
-        hit.reason, hit.id, RULES_VERSION, command, ask
+        "命令被安全策略拦截（疑似{}，规则 {} · 表 v{}）：{}\n如确需执行，请调整命令写法以避开该模式。",
+        hit.reason, hit.id, RULES_VERSION, command
     )
 }
 
@@ -122,20 +119,29 @@ pub fn run_script(scope: &AccessScope, args: &Value) -> Result<ToolOutput, Strin
     if command.is_empty() {
         return Err("`command` 不能为空".into());
     }
-    // 判定统一走规则表（v0.8.0 C38）。HardBlock 直接拒；RequireApproval
-    // 在审批流（C40）落地前也按拒绝处理——宁可少放行，不要静默执行。
+    // 判定统一走规则表（v0.8.0 C38），v0.8.2 起按动作分级：
+    //
+    // - HardBlock：直接拒。不可逆破坏没有「问一下」的空间——问一次的
+    //   成本用户会点同意。
+    // - RequireApproval / Warn：**不再在此拦下**。审批闸门
+    //   （`runner::approval_gate`）是工具调用必经点，RequireApproval 已在
+    //   那里按会话策略问过用户；旧实现对任何命中一律 Err，出现两个倒挂：
+    //   (a) Dangerous 档审批放行后仍被这里拦下，(b) Auto 档对
+    //   RequireApproval 的有意放行（approval.rs 测试锁定）被打断。
+    //   改为记一条 `warned_command` 事件后放行，命中始终留痕。
     if let Some(hit) = check_command(command) {
-        // 打点在**真正拦下的地方**，而不是前置的审批闸门：命令可能从
-        // 别的调用路径进来（未来的 MCP 工具），只有这里一定经过。
-        // 这里拿不到会话 id（纯函数），留在库里由用户按对象排查。
-        crate::security::log_simple(
-            crate::security::Kind::BlockedCommand,
-            "",
-            command,
-            hit.reason,
-            hit.id,
-        );
-        return Err(blocked_message(command, &hit));
+        // 打点在**真正处置的地方**：命令可能从别的调用路径进来，
+        // 只有这里与审批闸门一定经过。这里拿不到会话 id（纯函数），
+        // 留在库里由用户按对象排查。
+        let kind = if hit.action == Action::HardBlock {
+            crate::security::Kind::BlockedCommand
+        } else {
+            crate::security::Kind::WarnedCommand
+        };
+        crate::security::log_simple(kind, "", command, hit.reason, hit.id);
+        if hit.action == Action::HardBlock {
+            return Err(blocked_message(command, &hit));
+        }
     }
 
     let timeout_ms = args
@@ -513,6 +519,34 @@ mod tests {
         // 也一律拦截。误拦的代价远小于漏拦。
         assert!(check_dangerous("echo 'rm -rf /'").is_some());
         assert!(check_dangerous("echo 'mkfs'").is_some());
+    }
+
+    /// v0.8.2：非 HardBlock 命中不再在执行层二次拦截。
+    ///
+    /// 审批闸门（`runner::approval_gate`）是工具调用的必经点，RequireApproval
+    /// 已在那里按会话策略问过用户；旧实现对任何命中一律 Err，导致审批放行
+    /// 后仍被这里拦下（强度倒挂），Auto 档的有意放行也被打断。
+    #[test]
+    fn approval_grade_hits_pass_through_after_logging() {
+        let ws = std::env::temp_dir().join("aura_exec_warn_pass");
+        let _ = std::fs::create_dir_all(&ws);
+
+        // 命中 RequireApproval（命令替换 `$(...)`）：放行，只留 warned_command
+        let out = run_script(
+            &test_scope(ws.clone()),
+            &serde_json::json!({ "command": "echo $(whoami)" }),
+        )
+        .expect("非 HardBlock 命中不应在执行层被拦下");
+        assert!(out.result.contains("退出码 0"), "{:?}", out.result);
+
+        // HardBlock 依旧直接拒，且说明带规则 id 与表版本
+        let err = run_script(
+            &test_scope(ws),
+            &serde_json::json!({ "command": "rm -rf /" }),
+        )
+        .expect_err("HardBlock 必须拦下");
+        assert!(err.contains("cmd_rm_root"), "{err}");
+        assert!(err.contains("表 v"), "{err}");
     }
 
     // ---- 解释器绕过：v0.4.4 修复的核心缺口 ----
