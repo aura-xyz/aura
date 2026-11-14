@@ -275,12 +275,15 @@ export default function MarkdownEditor({
   onChange,
   onKeyDown,
   placeholder,
+  listboxA11y,
 }: {
   initialValue: string;
   editorRef: MutableRefObject<LexicalEditor | null>;
   onChange: (snapshot: EditorSnapshot, programmatic: boolean) => void;
   onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => void;
   placeholder: ReactNode;
+  /** @ / 候选面板打开时的读屏联动（v0.8.1 P10） */
+  listboxA11y?: { id: string; activeId: string; expanded: boolean };
 }) {
   // 占位层必须与 contentEditable 的首行文本盒完全重合：同样的 py-0.5 与
   // leading-6，top 从 0 起。此前用 top-2（8px）而首行从 py-0.5（2px）起，
@@ -317,6 +320,11 @@ export default function MarkdownEditor({
               role="textbox"
               aria-label="消息输入框"
               aria-multiline
+              aria-haspopup={listboxA11y ? "listbox" : undefined}
+              aria-expanded={listboxA11y?.expanded}
+              aria-controls={listboxA11y?.id}
+              aria-activedescendant={listboxA11y?.activeId}
+              aria-autocomplete={listboxA11y ? "list" : undefined}
               className="max-h-[33vh] min-h-12 w-full overflow-y-auto py-0.5 text-base leading-6 outline-none"
             />
           }

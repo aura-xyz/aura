@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import type { CommandItem } from "../lib/commandItems";
-import MenuPopup from "./MenuPopup";
+import MenuPopup, {
+  COMMAND_LISTBOX_ID,
+  listboxOptionId,
+} from "./MenuPopup";
 
 /**
  * 统一的鼠标可点命令面板。键盘上下/回车由输入框统一处理，
@@ -28,6 +31,8 @@ export default function CommandMenu({
 }) {
   return (
     <MenuPopup
+      id={COMMAND_LISTBOX_ID}
+      activeDescendant={listboxOptionId(COMMAND_LISTBOX_ID, activeIndex)}
       label={title}
       header={
         <>
@@ -39,6 +44,7 @@ export default function CommandMenu({
       {items.map((item, i) => (
         <button
           key={item.id}
+          id={listboxOptionId(COMMAND_LISTBOX_ID, i)}
           type="button"
           role="option"
           aria-selected={i === activeIndex}

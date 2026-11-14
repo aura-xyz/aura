@@ -1,6 +1,9 @@
 import { FileCode2, Folder, Sparkles } from "lucide-react";
 import type { MentionItem } from "../lib/mentions";
-import MenuPopup from "./MenuPopup";
+import MenuPopup, {
+  MENTION_LISTBOX_ID,
+  listboxOptionId,
+} from "./MenuPopup";
 
 /**
  * `@` / `/` 的候选浮层，出现在**输入框上方**。
@@ -28,6 +31,8 @@ export default function MentionMenu({
 
   return (
     <MenuPopup
+      id={MENTION_LISTBOX_ID}
+      activeDescendant={listboxOptionId(MENTION_LISTBOX_ID, activeIndex)}
       label={kind === "file" ? "文件引用" : "技能调用"}
       maxHeight="max-h-64"
       header={
@@ -48,6 +53,7 @@ export default function MentionMenu({
       {items.map((item, i) => (
         <button
           key={`${item.kind}:${item.insert}`}
+          id={listboxOptionId(MENTION_LISTBOX_ID, i)}
           type="button"
           role="option"
           aria-selected={i === activeIndex}

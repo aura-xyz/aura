@@ -13,6 +13,47 @@ use rusqlite::{params, Connection};
 
 use crate::db::now;
 
+/// 信任分级与连接策略（v0.8.1 M2-08）。
+///
+/// 默认值刻意保持一期行为：strict（Exec + 逐次审批）、不自动重连、
+/// 串行调用、50 工具上限。任何一项放宽都必须由用户在本机显式改。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ServerPolicy {
+    /// `"strict"`（默认）或 `"trusted"`
+    pub trust_level: String,
+    pub auto_reconnect: bool,
+    pub tool_limit: usize,
+    pub concurrent: bool,
+}
+
+impl Default for ServerPolicy {
+    fn default() -> Self {
+        ServerPolicy {
+            trust_level: "strict".to_string(),
+            auto_reconnect: false,
+            tool_limit: 50,
+            concurrent: false,
+        }
+    }
+}
+
+impl ServerPolicy {
+    /// 归一化：只认 `trusted`，其余一律回落 strict；工具上限夹在 1..=500。
+    pub fn normalized(mut self) -> Self {
+        self.trust_level = if self.trust_level.trim().eq_ignore_ascii_case("trusted") {
+            "trusted".to_string()
+        } else {
+            "strict".to_string()
+        };
+        self.tool_limit = self.tool_limit.clamp(1, 500);
+        self
+    }
+
+    pub fn is_trusted(&self) -> bool {
+        self.trust_level == "trusted"
+    }
+}
+
 /// 一台 MCP 服务器的配置。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
@@ -25,9 +66,15 @@ pub struct McpServerConfig {
     pub enabled: bool,
     /// 允许可见的工作区路径；空数组 = 全部工作区可见。
     pub workspaces: Vec<String>,
+    pub policy: ServerPolicy,
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+/// 所有 SELECT 共用一份列清单，避免 list/get 两处漂移。
+const COLUMNS: &str = "id, name, command, args_json, env_encrypted, enabled, \
+     workspaces_json, trust_level, auto_reconnect, tool_limit, concurrent, \
+     created_at, updated_at";
 
 /// 环境变量加密：把 map 序列化后交给 `secure::protect`。
 fn encrypt_env(env: &BTreeMap<String, String>) -> Result<String, String> {
@@ -61,6 +108,16 @@ fn row_to_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpServerConfig> {
             .filter(|s| !s.trim().is_empty())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        // 老库补列后一定有 DEFAULT；这里仍做兜底，方便单测用极简表。
+        policy: ServerPolicy {
+            trust_level: row
+                .get::<_, String>("trust_level")
+                .unwrap_or_else(|_| "strict".to_string()),
+            auto_reconnect: row.get::<_, i64>("auto_reconnect").unwrap_or(0) != 0,
+            tool_limit: row.get::<_, i64>("tool_limit").unwrap_or(50).max(1) as usize,
+            concurrent: row.get::<_, i64>("concurrent").unwrap_or(0) != 0,
+        }
+        .normalized(),
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -69,10 +126,9 @@ fn row_to_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpServerConfig> {
 /// 列出全部服务器（按 id 升序，稳定展示顺序）。
 pub fn list(conn: &Connection) -> Result<Vec<McpServerConfig>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, command, args_json, env_encrypted, enabled, \
-             workspaces_json, created_at, updated_at FROM mcp_servers ORDER BY id ASC",
-        )
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM mcp_servers ORDER BY id ASC"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_to_config)
@@ -87,10 +143,9 @@ pub fn list(conn: &Connection) -> Result<Vec<McpServerConfig>, String> {
 /// 取单台服务器。
 pub fn get(conn: &Connection, id: i64) -> Result<Option<McpServerConfig>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, command, args_json, env_encrypted, enabled, \
-             workspaces_json, created_at, updated_at FROM mcp_servers WHERE id = ?1",
-        )
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM mcp_servers WHERE id = ?1"
+        ))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt.query_map(params![id], row_to_config).map_err(|e| e.to_string())?;
     match rows.next() {
@@ -113,6 +168,7 @@ pub fn insert(
     env: BTreeMap<String, String>,
     workspaces: Vec<String>,
     enabled: bool,
+    policy: ServerPolicy,
 ) -> Result<McpServerConfig, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -121,14 +177,16 @@ pub fn insert(
     if command.trim().is_empty() {
         return Err("命令不能为空".into());
     }
+    let p = policy.normalized();
     let ts = now();
     let args_json = serde_json::to_string(&args).map_err(|e| e.to_string())?;
     let env_blob = encrypt_env(&env)?;
     let workspaces_json = serde_json::to_string(&workspaces).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO mcp_servers \
-         (name, command, args_json, env_encrypted, enabled, workspaces_json, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+         (name, command, args_json, env_encrypted, enabled, workspaces_json, \
+          trust_level, auto_reconnect, tool_limit, concurrent, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
         params![
             name,
             command.trim(),
@@ -136,6 +194,10 @@ pub fn insert(
             env_blob,
             if enabled { 1 } else { 0 },
             workspaces_json,
+            p.trust_level,
+            if p.auto_reconnect { 1 } else { 0 },
+            p.tool_limit as i64,
+            if p.concurrent { 1 } else { 0 },
             ts
         ],
     )
@@ -159,6 +221,7 @@ pub fn update(
     args: Vec<String>,
     env: BTreeMap<String, String>,
     workspaces: Vec<String>,
+    policy: ServerPolicy,
 ) -> Result<McpServerConfig, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -167,14 +230,29 @@ pub fn update(
     if command.trim().is_empty() {
         return Err("命令不能为空".into());
     }
+    let p = policy.normalized();
     let args_json = serde_json::to_string(&args).map_err(|e| e.to_string())?;
     let env_blob = encrypt_env(&env)?;
     let workspaces_json = serde_json::to_string(&workspaces).map_err(|e| e.to_string())?;
     let changed = conn
         .execute(
             "UPDATE mcp_servers SET name = ?1, command = ?2, args_json = ?3, \
-             env_encrypted = ?4, workspaces_json = ?5, updated_at = ?6 WHERE id = ?7",
-            params![name, command.trim(), args_json, env_blob, workspaces_json, now(), id],
+             env_encrypted = ?4, workspaces_json = ?5, trust_level = ?6, \
+             auto_reconnect = ?7, tool_limit = ?8, concurrent = ?9, \
+             updated_at = ?10 WHERE id = ?11",
+            params![
+                name,
+                command.trim(),
+                args_json,
+                env_blob,
+                workspaces_json,
+                p.trust_level,
+                if p.auto_reconnect { 1 } else { 0 },
+                p.tool_limit as i64,
+                if p.concurrent { 1 } else { 0 },
+                now(),
+                id
+            ],
         )
         .map_err(|e| {
             if is_unique_violation(&e) {
@@ -202,6 +280,30 @@ pub fn set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<(), Stri
         .execute(
             "UPDATE mcp_servers SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
             params![if enabled { 1 } else { 0 }, now(), id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("服务器不存在".into());
+    }
+    Ok(())
+}
+
+/// 单独更新信任分级与连接策略（M2-08）。
+/// 降级/升级都会重连，由命令层负责断开与重新拉起，这里只管落库。
+pub fn set_policy(conn: &Connection, id: i64, policy: ServerPolicy) -> Result<(), String> {
+    let p = policy.normalized();
+    let changed = conn
+        .execute(
+            "UPDATE mcp_servers SET trust_level = ?1, auto_reconnect = ?2, \
+             tool_limit = ?3, concurrent = ?4, updated_at = ?5 WHERE id = ?6",
+            params![
+                p.trust_level,
+                if p.auto_reconnect { 1 } else { 0 },
+                p.tool_limit as i64,
+                if p.concurrent { 1 } else { 0 },
+                now(),
+                id
+            ],
         )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
@@ -253,6 +355,10 @@ mod tests {
                 env_encrypted TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 workspaces_json TEXT,
+                trust_level TEXT NOT NULL DEFAULT 'strict',
+                auto_reconnect INTEGER NOT NULL DEFAULT 0,
+                tool_limit INTEGER NOT NULL DEFAULT 50,
+                concurrent INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0
             );",
@@ -274,6 +380,7 @@ mod tests {
             env,
             vec![],
             true,
+            ServerPolicy::default(),
         )
         .expect("应能新增");
         assert_eq!(c.name, "filesystem");
@@ -290,7 +397,17 @@ mod tests {
         assert_eq!(list(&conn).unwrap().len(), 1);
         assert_eq!(get(&conn, c.id).unwrap().unwrap().name, "filesystem");
 
-        let updated = update(&conn, c.id, "fs2", "node", vec!["a".into()], BTreeMap::new(), vec!["/w".into()]).unwrap();
+        let updated = update(
+            &conn,
+            c.id,
+            "fs2",
+            "node",
+            vec!["a".into()],
+            BTreeMap::new(),
+            vec!["/w".into()],
+            ServerPolicy::default(),
+        )
+        .unwrap();
         assert_eq!(updated.name, "fs2");
         assert_eq!(updated.workspaces, vec!["/w".to_string()]);
 
@@ -304,16 +421,16 @@ mod tests {
     #[test]
     fn duplicate_name_is_rejected_with_readable_message() {
         let conn = mem();
-        insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true).unwrap();
-        let err = insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true).unwrap_err();
+        insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).unwrap();
+        let err = insert(&conn, "dup", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).unwrap_err();
         assert!(err.contains("已存在"), "{err}");
     }
 
     #[test]
     fn empty_name_or_command_is_rejected() {
         let conn = mem();
-        assert!(insert(&conn, " ", "npx", vec![], BTreeMap::new(), vec![], true).is_err());
-        assert!(insert(&conn, "x", "  ", vec![], BTreeMap::new(), vec![], true).is_err());
+        assert!(insert(&conn, " ", "npx", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).is_err());
+        assert!(insert(&conn, "x", "  ", vec![], BTreeMap::new(), vec![], true, ServerPolicy::default()).is_err());
     }
 
     #[test]
@@ -328,5 +445,94 @@ mod tests {
         // 常规 npx 服务器不应被硬拒。
         let r = audit_server("npx", &["-y".into(), "server-filesystem".into()]);
         assert!(r.is_ok(), "普通命令不应被拒绝：{r:?}");
+    }
+
+    #[test]
+    fn policy_defaults_keep_phase_one_behavior() {
+        let conn = mem();
+        let c = insert(
+            &conn,
+            "p",
+            "npx",
+            vec![],
+            BTreeMap::new(),
+            vec![],
+            true,
+            ServerPolicy::default(),
+        )
+        .unwrap();
+        assert!(!c.policy.is_trusted());
+        assert!(!c.policy.auto_reconnect);
+        assert!(!c.policy.concurrent);
+        assert_eq!(c.policy.tool_limit, 50);
+    }
+
+    #[test]
+    fn set_policy_roundtrip_normalizes_values() {
+        let conn = mem();
+        let c = insert(
+            &conn,
+            "p",
+            "npx",
+            vec![],
+            BTreeMap::new(),
+            vec![],
+            true,
+            ServerPolicy::default(),
+        )
+        .unwrap();
+        set_policy(
+            &conn,
+            c.id,
+            ServerPolicy {
+                trust_level: "TRUSTED".into(),
+                auto_reconnect: true,
+                tool_limit: 9999,
+                concurrent: true,
+            },
+        )
+        .unwrap();
+        let got = get(&conn, c.id).unwrap().unwrap().policy;
+        assert!(got.is_trusted());
+        assert!(got.auto_reconnect);
+        assert!(got.concurrent);
+        assert_eq!(got.tool_limit, 500);
+    }
+
+    #[test]
+    fn unknown_trust_level_falls_back_to_strict() {
+        let p = ServerPolicy {
+            trust_level: "admin".into(),
+            ..Default::default()
+        }
+        .normalized();
+        assert!(!p.is_trusted());
+        assert_eq!(p.trust_level, "strict");
+    }
+
+    #[test]
+    fn migrate_adds_policy_columns_to_legacy_table_idempotently() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id INTEGER PRIMARY KEY, workspace TEXT, todos_json TEXT);
+             CREATE TABLE mcp_servers (
+                id INTEGER PRIMARY KEY, name TEXT, command TEXT, args_json TEXT,
+                env_encrypted TEXT, enabled INTEGER, workspaces_json TEXT,
+                created_at INTEGER, updated_at INTEGER);
+             INSERT INTO mcp_servers (id, name, command) VALUES (1, 'old', 'npx');",
+        )
+        .unwrap();
+        crate::db::migrate(&conn).unwrap();
+        let row: (String, i64, i64, i64) = conn
+            .query_row(
+                "SELECT trust_level, auto_reconnect, tool_limit, concurrent \
+                 FROM mcp_servers WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("strict".to_string(), 0, 50, 0));
+        // 重复执行不能因列已存在而失败
+        crate::db::migrate(&conn).unwrap();
     }
 }

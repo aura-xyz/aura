@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  startTransition,
   type ReactNode,
 } from "react";
 import {
@@ -46,6 +47,10 @@ import {
   type Todo,
   type TodoStatus,
 } from "./lib/todo";
+import { planChunk } from "./lib/streamChunks";
+import { toStreamFailure, type AppErrorCode } from "./lib/apiError";
+import { waterOverflow } from "./lib/contextWater";
+import { notify } from "./lib/notices";
 
 // 统一工作区键：反斜杠转 /，并剥离 Windows 扩展路径的 //?/ 前缀，
 // 保证与 Rust 侧 canonicalize 后的键一致
@@ -146,12 +151,28 @@ export interface Session {
   llmMs?: number;
 }
 
+/** 一轮生成失败后的可恢复状态（v0.8.1 P12）。 */
+export interface StreamFailure {
+  sessionId: string;
+  kind: "interrupted" | "failed";
+  code: AppErrorCode;
+  message: string;
+  /** 原始错误文本，折叠展示 */
+  detail: string;
+  retryable: boolean;
+  /** 触发本轮的用户消息序号（1-based）与原文，供「重试」回滚重发 */
+  userIndex: number;
+  text: string;
+}
+
 interface State {
   workspaces: string[];
   workspace: string;
   sessions: Session[];
   activeId: string;
   busy: boolean;
+  /** 当前失败状态；新一轮发送开始时清空 */
+  failure: StreamFailure | null;
   models: ModelInfo[];
   selectedModel: string;
   /** 当前会话模式，每次发送时随消息带上 */
@@ -186,6 +207,13 @@ interface StoreValue extends State {
     text: string,
     options?: { archive?: boolean; force?: boolean },
   ) => Promise<void>;
+  /**
+   * 重试最近一次流式失败：回滚到最后一条用户消息重新生成（v0.8.1 P12）。
+   * 已生成的内容不删，走 resendFrom 的常规副作用预检。
+   */
+  retryLast: () => Promise<void>;
+  /** 收起失败提示，但保留已生成的回答内容。 */
+  dismissFailure: () => void;
   /**
    * 切换某条 assistant 消息显示的版本（v0.7.0）。
    * 只改显示，不回滚后端上下文。
@@ -371,6 +399,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     sessions: [],
     activeId: "",
     busy: false,
+    failure: null,
     models: [],
     selectedModel: "",
     mode: "chat",
@@ -425,6 +454,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const bufferRef = useRef("");
   const streamRef = useRef<StreamTarget | null>(null);
   const sawErrorRef = useRef(false);
+  /** 本轮的触发信息：失败时用来拼出「重试」所需的回滚坐标。 */
+  const pendingTurnRef = useRef<{
+    sessionId: string;
+    userIndex: number;
+    text: string;
+  } | null>(null);
 
   const persistNow = useCallback(
     (id: string, title: string, workspace: string, messages: ChatMessage[]) => {
@@ -467,6 +502,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  /**
+   * 记录一次流式失败（v0.8.1 P12），返回用户可见文案供 error block 复用。
+   *
+   * 只在有本轮触发信息时才写 state：后端偶尔会在流之外补发 error 事件，
+   * 那种情况不该凭空造一个「可重试」的失败条。
+   */
+  const recordFailure = useCallback((raw: unknown): string => {
+    const info = toStreamFailure(raw);
+    const turn = pendingTurnRef.current;
+    if (turn) {
+      setState((s) => ({ ...s, failure: { ...turn, ...info } }));
+    }
+    return info.message;
+  }, []);
 
   /**
    * 把缓冲区里尚未渲染的文字**立即**落到消息里。
@@ -597,7 +647,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const stream = streamRef.current;
       if (!stream || stream.sessionId !== p.session_id) return;
       sawErrorRef.current = true;
-      insertTailBlock(stream, { kind: "error", text: p.text ?? "" });
+      // 失败时先排空打字机缓冲：最后一段已收到的正文可能还躺在 buffer 里，
+      // 不落位就会在失败提示出现的同时凭空少一截。
+      flushBuffer();
+      const message = recordFailure(p.text ?? "");
+      insertTailBlock(stream, { kind: "error", text: message });
     });
     on<{ session_id: string }>("agent:done", (p) => {
       const stream = streamRef.current;
@@ -618,29 +672,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       total: number;
       llm_ms: number;
     }>("agent:usage", (p) => {
-      setState((s) => ({
-        ...s,
-        sessions: s.sessions.map((sess) =>
-          sess.id === p.session_id
-            ? {
-                ...sess,
-                lastUsage: {
-                  input: p.input ?? 0,
-                  output: p.output ?? 0,
-                  total: p.total ?? 0,
-                  llmMs: p.llm_ms ?? 0,
-                },
-                llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
-                usageTotals: {
-                  input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
-                  output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
-                  total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
-                  turns: (sess.usageTotals?.turns ?? 0) + 1,
-                },
-              }
-            : sess,
-        ),
-      }));
+      // 用量统计每轮只推一次，且与消息块的先后顺序完全无关，是唯一能
+      // 安全降级的状态更新：用户此刻在输入/滚动时，统计面板让路给交互。
+      // 正文写入与 todo 勾选都不套 startTransition——前者被中断重放会把
+      // 文字排到动作卡片后面，后者要即时反馈。
+      startTransition(() => {
+        setState((s) => ({
+          ...s,
+          sessions: s.sessions.map((sess) =>
+            sess.id === p.session_id
+              ? {
+                  ...sess,
+                  lastUsage: {
+                    input: p.input ?? 0,
+                    output: p.output ?? 0,
+                    total: p.total ?? 0,
+                    llmMs: p.llm_ms ?? 0,
+                  },
+                  llmMs: (sess.llmMs ?? 0) + (p.llm_ms ?? 0),
+                  usageTotals: {
+                    input: (sess.usageTotals?.input ?? 0) + (p.input ?? 0),
+                    output: (sess.usageTotals?.output ?? 0) + (p.output ?? 0),
+                    total: (sess.usageTotals?.total ?? 0) + (p.total ?? 0),
+                    turns: (sess.usageTotals?.turns ?? 0) + 1,
+                  },
+                }
+              : sess,
+          ),
+        }));
+      });
     });
 
     // 规划模式产出的任务清单。注意这里**不要求** streamRef 匹配：
@@ -681,31 +741,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       disposed = true;
       unsubs.forEach((u) => u());
     };
-  }, [insertTailBlock, flushBuffer]);
+  }, [insertTailBlock, flushBuffer, recordFailure]);
 
+  /**
+   * 打字机由 requestAnimationFrame 驱动（v0.8.1 P01）。
+   *
+   * 旧版固定 30ms 的 setInterval 与真实渲染耗时脱钩：Markdown 解析一旦
+   * 超过 30ms，定时器回调仍按点触发，backlog 越堆越大，表现为「越写越卡」。
+   * 帧驱动保证一帧最多消费一次、且消费发生在浏览器绘制之前；再用相邻两帧
+   * 的间隔作为主线程压力代理，掉帧时单帧多吞一些字符尽快追平积压。
+   */
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    let lastFrame = 0;
+    let stopped = false;
+
+    const consume = (frameMs: number) => {
       const buf = bufferRef.current;
       const stream = streamRef.current;
       if (!buf || !stream) return;
       const chars = Array.from(buf);
-      const backlog = chars.length;
-      // 自适应消费：正常流逐字推进（打字机节奏），
-      // 网络突发积压时按时间预算加速，约 0.5s 内追平，避免卡顿滞后
-      let n: number;
-      if (backlog <= 60) {
-        n = backlog > 40 ? 2 : 1;
-      } else if (backlog <= 300) {
-        n = Math.ceil(backlog / 30);
-      } else {
-        n = Math.ceil(backlog / 15) + 4;
-      }
-      n = Math.min(Math.max(n, 1), backlog);
-      const take = chars.slice(0, n).join("");
+      const n = planChunk(chars.length, frameMs);
+      if (n <= 0) return;
       bufferRef.current = chars.slice(n).join("");
-      writeToStream(stream, take);
-    }, 30);
-    return () => window.clearInterval(timer);
+      writeToStream(stream, chars.slice(0, n).join(""));
+    };
+
+    // jsdom / 极老 WebView 可能没有 rAF：退化成定时器，但节奏仍走 planChunk，
+    // 保持与帧驱动一致的自适应背压，而不是回到写死 30ms 的老路。
+    if (typeof window.requestAnimationFrame !== "function") {
+      const timer = window.setInterval(() => consume(30), 30);
+      return () => window.clearInterval(timer);
+    }
+
+    let raf = 0;
+    const onFrame = (ts: number) => {
+      if (stopped) return;
+      // 首帧没有上一帧可参照，按 60fps 的 16ms 处理；窗口从后台恢复时
+      // 间隔可能是几秒，钳到 100ms，避免一次把整段正文吞掉。
+      const frameMs = lastFrame ? Math.min(ts - lastFrame, 100) : 16;
+      lastFrame = ts;
+      consume(frameMs);
+      raf = window.requestAnimationFrame(onFrame);
+    };
+    raf = window.requestAnimationFrame(onFrame);
+
+    // 窗口最小化 / WebView 进后台时 rAF 会被节流甚至暂停。只在 rAF 确实
+    // 停摆（>200ms 没跑）时用低频定时器兜底，避免与帧驱动重复消费。
+    const fallback = window.setInterval(() => {
+      if (performance.now() - lastFrame < 200) return;
+      consume(60);
+    }, 120);
+
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(raf);
+      window.clearInterval(fallback);
+    };
   }, [writeToStream]);
 
   const drainBuffer = useCallback(async () => {
@@ -890,7 +981,21 @@ let sessions = restored;
       if (state.busy) return;
       const sessionId = state.activeId;
       if (!sessionId) return;
-      setState((s) => ({ ...s, busy: true }));
+      // v0.8.1 P13：上下文已占满时硬拦截，并明确告知原因。
+      // 不能静默 return——用户会以为「发送按钮坏了」。组件同时给出
+      // 「压缩历史 / 新开会话」两个脱困动作。
+      const limit = stateRef.current.models.find(
+        (m) =>
+          m.key === stateRef.current.selectedModel ||
+          m.id === stateRef.current.selectedModel,
+      )?.context_limit;
+      const used = stateRef.current.sessions.find((x) => x.id === sessionId)
+        ?.lastUsage?.input;
+      if (waterOverflow(used, limit)) {
+        notify("error", "上下文已占满，请先压缩历史或新开会话");
+        return;
+      }
+      setState((s) => ({ ...s, busy: true, failure: null }));
       sawErrorRef.current = false;
       bufferRef.current = "";
       const userMsg: ChatMessage = {
@@ -924,6 +1029,12 @@ let sessions = restored;
         current.title === "新对话" ? deriveTitle(text) : current.title;
       const messages = [...current.messages, userMsg, assistantMsg];
       streamRef.current = { sessionId, messageId: assistantMsg.id, textIndex: 0 };
+      // 失败重试要回滚到「这条用户消息」；序号按会话内用户消息计数（1-based）
+      pendingTurnRef.current = {
+        sessionId,
+        userIndex: current.messages.filter((m) => m.role === "user").length + 1,
+        text,
+      };
       setState((s) => ({
         ...s,
         sessions: s.sessions.map((sess) =>
@@ -937,9 +1048,13 @@ let sessions = restored;
         await sendMessageApi(sessionId, text, stateRef.current.mode, images);
       } catch (e) {
         if (!sawErrorRef.current) {
+          // invoke 直接抛错（后端没来得及发 agent:error）：同样先排空缓冲，
+          // 保留已生成内容，再写错误块与失败状态。
+          flushBuffer();
+          const message = recordFailure(e);
           appendBlocks(sessionId, assistantMsg.id, (b) => [
             ...b,
-            { kind: "error", text: String(e) },
+            { kind: "error", text: message },
           ]);
         }
       } finally {
@@ -968,7 +1083,15 @@ let sessions = restored;
         }
       }
     },
-    [state.busy, state.activeId, appendBlocks, drainBuffer, persistNow],
+    [
+      state.busy,
+      state.activeId,
+      appendBlocks,
+      drainBuffer,
+      persistNow,
+      flushBuffer,
+      recordFailure,
+    ],
   );
 
   const stop = useCallback(async () => {
@@ -1261,6 +1384,20 @@ setState((s) => {
     }));
   }, []);
 
+  /** v0.8.1 P12：失败条上的「重试」与「忽略」。 */
+  const dismissFailure = useCallback(() => {
+    setState((s) => ({ ...s, failure: null }));
+  }, []);
+
+  const retryLast = useCallback(async () => {
+    const f = stateRef.current.failure;
+    if (!f || stateRef.current.busy) return;
+    // 先收起提示；resendFrom 的副作用预检若弹出确认框，用户取消后
+    // 旧提示也不该一直挂着。已生成的回答原文保留在消息里。
+    setState((s) => ({ ...s, failure: null }));
+    await resendFrom(f.userIndex, f.text);
+  }, [resendFrom]);
+
   const value = useMemo<StoreValue>(
     () => ({
       ...state,
@@ -1271,6 +1408,8 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      retryLast,
+      dismissFailure,
       switchMessageVersion,
       editingUserIndex,
       editPrefill,
@@ -1304,6 +1443,8 @@ setState((s) => {
       renameSession,
       sendMessage,
       resendFrom,
+      retryLast,
+      dismissFailure,
       switchMessageVersion,
       editingUserIndex,
       editPrefill,

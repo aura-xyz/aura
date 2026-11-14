@@ -55,6 +55,14 @@ import ScrollToBottom, { NEAR_BOTTOM_PX } from "./components/ScrollToBottom";
 import TurnNavigator from "./components/TurnNavigator";
 import { activeTurnAt, buildTurnItems } from "./lib/turnRail";
 import { shouldBlockDevtools } from "./lib/devtools";
+import { useShortcuts } from "./hooks/useShortcuts";
+import { resolveAction } from "./lib/shortcuts";
+import { closeTopOverlay } from "./lib/overlayStack";
+import { focusInput } from "./lib/focusInput";
+import ErrorBoundary from "./components/ErrorBoundary";
+import StreamFailureBar from "./components/StreamFailureBar";
+import ContextWaterAlert from "./components/ContextWaterAlert";
+import { installGlobalErrorHandlers } from "./lib/globalErrors";
 import {
   actionCommandItems,
   nextMode,
@@ -223,6 +231,13 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
   const turnItems = useMemo(
     () => buildTurnItems(activeSession?.messages ?? []),
     [activeSession?.messages],
+  );
+  /** 上下文预警条与输入框里的水位条共用同一个上限口径。 */
+  const contextLimit = useMemo(
+    () =>
+      models.find((m) => m.key === selectedModel)?.context_limit ??
+      models.find((m) => m.id === selectedModel)?.context_limit,
+    [models, selectedModel],
   );
   // 初始宽度按视口算一次：屏幕宽就多给右栏（网页/终端要横向空间），
   // 之后再被用户拖拽覆盖。窗口尺寸变化不重新算——用户拖过的宽度不该
@@ -448,75 +463,82 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     }
   }, []);
 
-  // v0.6.3：拦截刷新快捷键。
-  // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
-  // 应用重新启动，用户看起来就是「闪了一下、状态可能丢了」。
-  // 本次只拦截不映射行为，留待后续按需定义应用内语义。
-  //
   /** 供全局快捷键读取最新模式：effect 只注册一次监听，不能依赖 mode。 */
   const modeRef = useRef(mode);
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
 
-  // v0.7.0：Ctrl+F 呼出应用内会话搜索（网页做不到的全局快捷键能力）。
+  // 可配置全局快捷键（v0.8.1）：键位表由设置页维护，这里只负责查表分发。
+  const shortcuts = useShortcuts();
+  const shortcutsRef = useRef(shortcuts);
+  // 直接赋值而非 effect：改完键位的那一帧就该生效，不能落后一个渲染周期
+  shortcutsRef.current = shortcuts;
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.key.toLowerCase() === "n") {
+      if (e.isComposing) return;
+      // 无边框窗口里 WebView 的 F5 / Ctrl+R 会整页重载——白屏一下再把整个
+      // 应用重新启动。这是固定保护，不作为可配置动作（否则用户一改就失去保护）。
+      if (e.key === "F5" || (e.ctrlKey && e.key.toLowerCase() === "r")) {
         e.preventDefault();
-        newSession();
-        setView("chat");
         return;
       }
-      // 模式循环：Tab 已还给焦点移动（WCAG 无键盘陷阱），改用组合键。
-      // 放在 App 而不是输入框里，焦点在别处时也能切。
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "m") {
-        e.preventDefault();
-        changeMode(nextMode(modeRef.current));
-        return;
-      }
-      // Ctrl+F 只搜会话（快、窄）；Ctrl+K 开全局面板（动作 / 会话 / 技能 / 文件）。
-      if (e.ctrlKey && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setSearchOpen(true);
-        return;
-      }
-      if (e.ctrlKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-        setPaletteQuery("");
-        return;
-      }
-      // v0.8.0：侧栏三个入口的快捷键，与开始页卡片上标注的一致。
-      // Ctrl+P 在 WebView 里默认是「打印」，必须拦下来；
-      // Ctrl+T 默认是「恢复刚关闭的标签页」，同理。
-      if (e.ctrlKey && !e.shiftKey && !e.altKey) {
-        const key = e.key.toLowerCase();
-        if (key === "p") {
-          e.preventDefault();
+      const action = resolveAction(e, shortcutsRef.current);
+      if (!action) return;
+      e.preventDefault();
+      switch (action) {
+        case "newSession":
+          newSession();
+          setView("chat");
+          break;
+        // 模式循环：Tab 已还给焦点移动（WCAG 无键盘陷阱），改用组合键。
+        case "cycleMode":
+          changeMode(nextMode(modeRef.current));
+          break;
+        case "openSessionSearch":
+          setSearchOpen(true);
+          break;
+        case "openCommandPalette":
+          setPaletteOpen((v) => !v);
+          setPaletteQuery("");
+          break;
+        case "openSettings":
+          setView((v) => (v === "settings" ? "chat" : "settings"));
+          break;
+        case "toggleSidebar":
+          setSidebarCollapsed((v) => !v);
+          break;
+        case "toggleRightbar":
+          if (rightbarShown) closeRightbar();
+          else openRightbar();
+          break;
+        // 三个面板入口：Ctrl+P 在 WebView 里默认是「打印」，Ctrl+T 默认是
+        // 「恢复刚关闭的标签页」，都必须先 preventDefault 再打开。
+        case "openFiles":
           openRightbar();
           openSidebarTab("files");
-          return;
-        }
-        if (key === "t") {
-          e.preventDefault();
+          break;
+        case "openWeb":
           openRightbar();
           openSidebarTab("web");
-          return;
-        }
-        if (e.key === "`" || e.code === "Backquote") {
-          e.preventDefault();
+          break;
+        case "openTerminal":
           openRightbar();
           openSidebarTab("terminal");
-          return;
-        }
+          break;
       }
-      if (e.key !== "F5" && !(e.ctrlKey && e.key.toLowerCase() === "r")) return;
-      e.preventDefault();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [newSession, openRightbar, openSidebarTab]);
+  }, [
+    newSession,
+    changeMode,
+    openRightbar,
+    closeRightbar,
+    rightbarShown,
+    openSidebarTab,
+  ]);
 
   // v0.8.0：正式版吞掉 F12 / Ctrl+Shift+I/J/C，避免终端用户误开检查器。
   // 开发模式（pnpm tauri dev，import.meta.env.PROD=false）**完全不注册**
@@ -531,6 +553,25 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     window.addEventListener("keydown", block, true);
     return () => window.removeEventListener("keydown", block, true);
   }, []);
+
+  // v0.8.1 P09：Esc 只关最上层浮层。捕获阶段抢在各浮层自己的监听之前，
+  // 命中后 stopPropagation，避免一次 Esc 连关两层或关错层；栈为空时
+  // 完全不拦截，小下拉等未入栈的浮层沿用各自的处理。
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (!closeTopOverlay()) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  }, []);
+
+  // 新建 / 切换会话、从设置页返回对话后把焦点交回输入框
+  useEffect(() => {
+    if (view === "chat") focusInput();
+  }, [view, activeId]);
 
   function onContextMenu(e: ReactMouseEvent) {
     if (shouldUseNativeMenu(e.target)) return;
@@ -936,6 +977,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
               </div>
               {dropBanner}
               {activeSession && <ApprovalCard sessionId={activeSession.id} />}
+              <ContextWaterAlert contextLimit={contextLimit} />
+              <StreamFailureBar />
               <InputArea {...inputProps} />
             </>
           )}
@@ -1129,9 +1172,15 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
 export default function App() {
   const themeApi = useTheme();
 
+  // v0.8.1 P11：事件回调异常 / 未处理的 Promise 拒绝统一进 toast。
+  // 装在 ErrorBoundary 外面，即便 Shell 崩了兜底也还活着。
+  useEffect(() => installGlobalErrorHandlers(), []);
+
   return (
-    <StoreProvider>
-      <Shell theme={themeApi} />
-    </StoreProvider>
+    <ErrorBoundary>
+      <StoreProvider>
+        <Shell theme={themeApi} />
+      </StoreProvider>
+    </ErrorBoundary>
   );
 }

@@ -1,19 +1,19 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/Aura_0.8.0_win_x64_Setup.exe",
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjUvaUdGQnlOQWdmZTNrWkppWmlnNmk3cno2NlRqVGVFV01KWGFNaldhanBtd04zQXZ3ZXZFQkNyWnlESlowa215UnQxTVdCb0MzRUVuL1hIUy8zUkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjg5NzU0CWZpbGU6YXVyYV8wLjguMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC44LjAKaCsyeUJTMlk2Q3dwMHlxblBvZEVyekx2SjRvNk5iKy9JU2NnT1JEdktGeWg4RjJjTjRRR1E4Y21CcFBvZVJpak80UmVSVHpIbzk1MStWeVNQQmdYRGc9PQo="
+                                             "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.1/Aura_0.8.1_win_x64_Setup.exe",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNnkwWG8rcGtpVzg2WmI1ZHdlb3hwell3WktYZUtnVHdyRGhwOG1TS1l6VHU5c3U2dm9Wd1dhTk1ZZzIrK2RVWDc5M3F2MmNlVGdSWWRpa2N5c1hHcEFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTcyNzU2CWZpbGU6YXVyYV8wLjguMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC44LjEKRW8zVlo1dEcxOFJTTFJQU3lPWWRzd0ZReGJpa0pCd25McDhaWUpsMERrQ1FobkpBNjB4d3V5ckIwbkpMSEFSaGlUdlQrbm5MSzg1amdsSzhUakg4QVE9PQo="
                                          },
                       "windows-x86_64-msi":  {
-                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/Aura_0.8.0_win_x64.msi",
-                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjFyaDdWRnp3L2ZEYTIxTjc0V1FNbDY2U0VmVlc4TEtTQU9jNVUyZ1JjWGtKb3dOemwwV1dUcWxZeWt5b0RLNVQwWHNCYi9zc3g0bUZyZndtU2RqL2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjg5NzU0CWZpbGU6YXVyYV8wLjguMF94NjRfZW4tVVMubXNpCXZlcnNpb246MC44LjAKVmRjUUNzazhocnQ1OXRFdnhhMzJjQkcybGRDWTdJNGtmNWZtQldpYkpwaTFpWEZsLzZ3KyttdkdJZjU1bEFvWkxiNFliU3RoMEtQKzlTbkx2R01hRHc9PQo="
+                                                 "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.1/Aura_0.8.1_win_x64.msi",
+                                                 "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNjJ6RnhoTzN5d3gzMm9aRGRhUS9INllVT0U0Tm95VHIzSjI3RU1UdG9maHY1NCsyZWtRa0orQlN3M3NlYjA5NjZMY2UxKzZrSDRSbTZGSXpZZUJLTmdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTcyNzU2CWZpbGU6YXVyYV8wLjguMV94NjRfZW4tVVMubXNpCXZlcnNpb246MC44LjEKYmNYUGNkekEyek80RkZoU2E1YTc3U2U1MVFjT2FvanFrSkd6WUR4cGsrdlhLUzNqSFpKNFMwYXZzWUNKa1VOTmY3ekQ5OEkyNXd4ZHBOb0RVY2V2RHc9PQo="
                                              },
                       "linux-x86_64":  {
-                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.0/aura_0.8.0_amd64.AppImage",
-                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNndYc2cxUGpDOU5iZXA4bW9QTGdDeXphV0E1K0pEQ1lqcEtpNTcvV3dvY254Tm13V0o3bXFYcHFsOTF2K3draUdzOWViTFBoeWhIcERHc29McnVmakFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkwMzIyCWZpbGU6YXVyYV8wLjguMF9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuOC4wCmRTekR0aW54YzJwVmFXeWxVNTlXcDFlNURSZ3pJbUVSMjYzZDZLVHNtMUdkdlN1WTN4UjBsVHIzS2psVDRQYkN3SjQrZUpwWnllU0hFWllrcnRXMkJ3PT0K"
+                                           "url":  "https://github.com/aura-xyz/aura/releases/download/v0.8.1/aura_0.8.1_amd64.AppImage",
+                                           "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMndwb29icGRMNi9oT2FrbTBUYkZUZmkyMjhBT2I3RVJDb2lBOFJHTjlxb3VHKzNxc3Rsblp6Q0RtOFNkcXE5RFkxVnhOMksvR3dZYURMcXB5czBrUFBoUkRBNXorbGc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc1MjU4CWZpbGU6YXVyYV8wLjguMV9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuOC4xCk5CTlNLWmR4T2FFQlJHYkVtSW51bE91d0YxV2ZPUzkrT002RTdDZVlqZGQzN1VnVTdqUW5iNFZPdXhHYnFnSjdraFAzWktDeVh4cExva25Na1JJQ0FnPT0K"
                                        }
                   },
-    "pub_date":  "2026-11-10T06:13:51Z",
-    "version":  "0.8.0",
-    "notes":  "v0.8.0 正式版：界面重构、MCP 第一部分、安全增强与 Linux 兼容性修复，详见 Release 页。"
+    "pub_date":  "2026-11-14T05:19:47Z",
+    "version":  "0.8.1",
+    "notes":  "v0.8.1 正式版：MCP 资源与提示词、信任分级与自动重连，交互与性能改进，详见 Release 页。"
 }

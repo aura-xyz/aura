@@ -41,6 +41,23 @@ import { CONTENT_WIDTH } from "../lib/layout";
 import { loadFrecency, rankByFrecency, recordUse } from "../lib/frecency";
 import { notify } from "../lib/notices";
 import { useMarkdownLive } from "../hooks/useMarkdownLive";
+import { useShortcuts } from "../hooks/useShortcuts";
+import { onFocusInput } from "../lib/focusInput";
+import {
+  COMMAND_LISTBOX_ID,
+  MENTION_LISTBOX_ID,
+  listboxOptionId,
+} from "./MenuPopup";
+import { errorText } from "../lib/apiError";
+import {
+  getPrompt,
+  loadAllPrompts,
+  mcpPromptCommandId,
+  mcpPromptCommandItems,
+  promptPlainText,
+  type McpPromptItemView,
+} from "../lib/mcp";
+import McpPromptArgsDialog from "./McpPromptArgsDialog";
 import MarkdownEditor, {
   insertAtCaret,
   replaceTrigger,
@@ -158,6 +175,9 @@ function consume(e: KeyboardEvent<HTMLElement>): void {
   e.stopPropagation();
 }
 
+/** @ 候选面板一次翻页跨过的条数（v0.8.1 P10）。 */
+const MENTION_PAGE_STEP = 8;
+
 export default function InputArea({
   onSend,
   onStop,
@@ -195,6 +215,19 @@ export default function InputArea({
 
   const liveSetting = useMarkdownLive();
   const markdownLive = markdownLiveProp ?? liveSetting;
+  // 底部提示跟着键位表走，用户在设置页改了「切模式」后这里不会留旧键位
+  const bindings = useShortcuts();
+
+  // v0.8.1 P09：外部（切换会话 / 关闭浮层）通过事件把焦点交回输入框。
+  // 富文本与纯文本两条路径各有一个 ref，都在这里兜住。
+  useEffect(
+    () =>
+      onFocusInput(() => {
+        if (editorRef.current) editorRef.current.focus();
+        else textareaRef.current?.focus();
+      }),
+    [],
+  );
 
   const setValue = useCallback((next: string) => {
     valueRef.current = next;
@@ -213,6 +246,9 @@ export default function InputArea({
   const [skills, setSkills] = useState<SkillView[]>([]);
   const [goal, setGoal] = useState("");
   const goalRef = useRef("");
+  // v0.8.1 M2-06：MCP 提示词作为 / 面板的一组候选项；参数表单单独成浮层
+  const [mcpPrompts, setMcpPrompts] = useState<McpPromptItemView[]>([]);
+  const [promptDialog, setPromptDialog] = useState<McpPromptItemView | null>(null);
 
   // 切会话：装入该会话的草稿，同时把富文本编辑器内容一起换掉。
   useEffect(() => {
@@ -306,11 +342,28 @@ export default function InputArea({
     };
   }, [cmd?.view]);
 
+  // 提示词清单只在挂载时拉一次：单台服务器不可用不该拖慢打字，
+  // 失败也静默——/ 面板只是少一组候选项，不影响既有命令。
+  useEffect(() => {
+    let alive = true;
+    void loadAllPrompts()
+      .then((items) => {
+        if (alive) setMcpPrompts(items);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const activeItems = useMemo<CommandItem[]>(() => {
     if (!cmd) return [];
     switch (cmd.view) {
       case "root":
-        return rootCommandItems(cmd.query);
+        return [
+          ...rootCommandItems(cmd.query),
+          ...mcpPromptCommandItems(mcpPrompts, cmd.query),
+        ];
       case "skill": {
         const items = skillCommandItems(skills, cmd.query);
         // 与全局面板同一套「最近使用」排序，位置不算搜索时由它决定
@@ -327,7 +380,7 @@ export default function InputArea({
       case "goal":
         return [];
     }
-  }, [cmd, skills, models, selectedModel, mode]);
+  }, [cmd, skills, models, selectedModel, mode, mcpPrompts]);
 
   function closeMentions() {
     setTrigger(null);
@@ -528,9 +581,42 @@ export default function InputArea({
     finishCommand("");
   }
 
+  /** 展开 MCP 提示词并追加到当前输入，由用户看过再自行发送。 */
+  async function insertPrompt(
+    p: McpPromptItemView,
+    args: Record<string, string>,
+  ) {
+    try {
+      const messages = await getPrompt(p.server_id, p.name, args, sessionId);
+      const text = promptPlainText(messages);
+      if (!text.trim()) {
+        notify("error", "服务器返回了空的提示词内容");
+        return;
+      }
+      const cur = valueRef.current.trim();
+      applyText(cur ? `${cur}\n\n${text}` : text);
+    } catch (e) {
+      notify("error", errorText(e));
+    } finally {
+      setPromptDialog(null);
+    }
+  }
+
   function pickCommand(item: CommandItem) {
     const c = cmd;
     if (!c) return;
+    // MCP 提示词不是内置 slash 命令，必须在 id → CommandId 转换之前拦下。
+    if (item.id.startsWith("mcp-prompt:")) {
+      const p = mcpPrompts.find((x) => mcpPromptCommandId(x) === item.id);
+      // 由 `/` 触发时把触发词替掉，否则展开的文本前面会挂着一个孤零零的 /
+      if (c.source === "slash") replaceRange(c.start, c.end, "", true);
+      else closeCommand();
+      if (p) {
+        if (p.arguments.length > 0) setPromptDialog(p);
+        else void insertPrompt(p, {});
+      }
+      return;
+    }
     if (c.view === "root") {
       const id = item.id as CommandId;
       if (c.source === "plus") {
@@ -630,6 +716,24 @@ export default function InputArea({
         setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length);
         return;
       }
+      // 长文件列表靠逐键上下太慢：PageUp/PageDown 一次跨 8 条。
+      // 用 clamp 而非取模，翻到头就停住，不会从末尾绕回开头。
+      if (e.key === "PageDown" && mentionItems.length > 1) {
+        consume(e);
+        setMentionIndex((i) => Math.min(i + MENTION_PAGE_STEP, mentionItems.length - 1));
+        return;
+      }
+      if (e.key === "PageUp" && mentionItems.length > 1) {
+        consume(e);
+        setMentionIndex((i) => Math.max(i - MENTION_PAGE_STEP, 0));
+        return;
+      }
+      if (e.key === "Tab") {
+        // 只选中当前候选，**不** consume：Tab 必须继续把焦点移出输入框
+        // （WCAG 2.1.2 无键盘陷阱），吞掉它等于把键盘用户锁在这里。
+        pickMention(mentionItems[mentionIndex] ?? mentionItems[0]);
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         consume(e);
         pickMention(mentionItems[mentionIndex] ?? mentionItems[0]);
@@ -653,6 +757,22 @@ export default function InputArea({
       submit();
     }
   }
+
+  // v0.8.1 P10：输入框与候选 listbox 的读屏联动。焦点始终留在输入框，
+  // 因此用 aria-activedescendant 告诉读屏「当前高亮的是哪一项」。
+  const activeListbox = cmd
+    ? COMMAND_LISTBOX_ID
+    : mentionItems.length > 0
+      ? MENTION_LISTBOX_ID
+      : undefined;
+  const activeListboxIndex = cmd ? cmdIndex : mentionIndex;
+  const listboxA11y = activeListbox
+    ? {
+        id: activeListbox,
+        activeId: listboxOptionId(activeListbox, activeListboxIndex),
+        expanded: true,
+      }
+    : undefined;
 
   const placeholder =
     mode === "plan"
@@ -737,6 +857,14 @@ export default function InputArea({
           }
         />
       )}
+      {/* MCP 提示词参数表单：独立浮层，避免被输入框的键盘导航抢按键 */}
+      {promptDialog && (
+        <McpPromptArgsDialog
+          prompt={promptDialog}
+          onSubmit={(args) => void insertPrompt(promptDialog, args)}
+          onCancel={() => setPromptDialog(null)}
+        />
+      )}
       {/* 图片附件 chip：粘贴 / 拖放图片后出现在输入框上方 */}
       {attachments.length > 0 && (
         <div className={`mx-auto mb-2 flex flex-wrap gap-2 ${CONTENT_WIDTH}`}>
@@ -777,6 +905,7 @@ export default function InputArea({
             onChange={handleSnapshot}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
+            listboxA11y={listboxA11y}
           />
         ) : (
           <textarea
@@ -787,6 +916,11 @@ export default function InputArea({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             aria-label="消息输入框"
+            aria-haspopup={activeListbox ? "listbox" : undefined}
+            aria-expanded={activeListbox ? true : undefined}
+            aria-controls={activeListbox}
+            aria-activedescendant={listboxA11y?.activeId}
+            aria-autocomplete={activeListbox ? "list" : undefined}
             className="max-h-[33vh] min-h-12 w-full resize-none overflow-y-auto bg-transparent py-0.5 text-[15px] leading-6 outline-none placeholder:text-subtle"
           />
         )}
@@ -854,7 +988,7 @@ export default function InputArea({
           />
         </div>
         <p className="shrink-0 text-xs text-subtle">
-          Enter 发送 · Shift+Enter 换行 · Ctrl+Shift+M 切模式
+          Enter 发送 · Shift+Enter 换行 · {bindings.cycleMode} 切模式
         </p>
       </div>
     </div>

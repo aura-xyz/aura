@@ -561,6 +561,75 @@ pub async fn truncate_history(
     })
 }
 
+/// 一键压缩上下文的结果（v0.8.1 P13）。
+#[derive(serde::Serialize)]
+pub struct CompactResult {
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+    pub dropped_messages: usize,
+    pub changed: bool,
+}
+
+/// 压缩目标：压到窗口的 70%，再交给 `local_trim`（它内部还有 0.85 系数），
+/// 实际落在约 60%，给下一轮 system prompt 与工具输出留出余量。
+const COMPACT_TARGET_RATIO: f64 = 0.7;
+
+/// 纯计算部分，脱离 AppState 可单测。
+fn plan_compaction(
+    history: &[Value],
+    context_limit: usize,
+) -> (Vec<Value>, CompactResult) {
+    let before_tokens = crate::agent::context::history_tokens(history);
+    let target = (context_limit as f64 * COMPACT_TARGET_RATIO) as usize;
+    let trimmed = crate::agent::context::local_trim(history, target, 0);
+    let after_tokens = crate::agent::context::history_tokens(&trimmed);
+    let dropped_messages = history.len().saturating_sub(trimmed.len());
+    (
+        trimmed,
+        CompactResult {
+            before_tokens,
+            after_tokens,
+            dropped_messages,
+            changed: dropped_messages > 0,
+        },
+    )
+}
+
+/// 一键压缩会话的 agent 历史（v0.8.1 P13）。
+///
+/// 与 runner 里的自动压缩不同，这是用户主动触发的「先腾空间再继续聊」：
+/// 只折叠模型可见的早期上下文，**界面上的对话记录一条都不删**。
+/// 内存与 DB 必须同步写，否则重启后旧历史又被读回来（与 truncate_history 同因）。
+#[tauri::command]
+pub async fn compact_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    context_limit: usize,
+) -> Result<CompactResult, String> {
+    if context_limit == 0 {
+        return Err("上下文窗口上限无效".into());
+    }
+    let mut sessions = state.sessions.lock().await;
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return Ok(CompactResult {
+            before_tokens: 0,
+            after_tokens: 0,
+            dropped_messages: 0,
+            changed: false,
+        });
+    };
+    let (trimmed, result) = plan_compaction(&session.history, context_limit);
+    if result.changed {
+        session.history = trimmed;
+        let db = state.db.lock().map_err(lock_err)?;
+        db::save_history(&db, &session_id, &session.history, session.model_idx)
+            .map_err(|e| e.to_string())?;
+        db::truncate_agent_history(&db, &session_id, session.history.len())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(result)
+}
+
 /// **增量**落库 agent 历史（v0.8.1 C49）。
 ///
 /// 库里已有的条数与内存长度对比后，只写差量：
@@ -1579,20 +1648,18 @@ fn join_panel_path(base: &str, name: &str) -> String {
     format!("{}/{name}", base.trim_end_matches('/'))
 }
 
-/// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
+/// 文件面板的路径上下文：会话工作区 + 运行时白名单（v0.8.1 P05）。
 ///
-/// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
-/// 前导 `/` 是工作区根，`C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
-#[tauri::command]
-pub fn list_directory(
-    state: State<'_, AppState>,
-    session_id: String,
-    path: String,
-) -> Result<Vec<DirEntryView>, String> {
+/// 从 `AppState` 取出后转成 owned 值，才能送进 `spawn_blocking` 的
+/// `'static` 闭包——`State<'_, _>` 是借用，不能跨线程持有。
+fn panel_context(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(PathBuf, Vec<PathBuf>), String> {
     // 会话自己的工作区；查不到（内存新建、尚未落库）才回落全局。
     let workspace = {
         let db = state.db.lock().map_err(lock_err)?;
-        db::load_session_workspace(&db, &session_id)
+        db::load_session_workspace(&db, session_id)
             .ok()
             .flatten()
             .filter(|s| !s.is_empty())
@@ -1601,18 +1668,61 @@ pub fn list_directory(
         Some(w) => PathBuf::from(w),
         None => state.workspace.lock().map_err(lock_err)?.clone(),
     };
-    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
-        return Ok(Vec::new());
-    }
-
     let allowlist = {
         let db = state.db.lock().map_err(lock_err)?;
         allowlist_paths(&db)
     };
+    Ok((workspace, allowlist))
+}
+
+/// 目录列举结果（v0.8.1 P06）。
+///
+/// 超上限时不再把几千条一次性塞进 JSON：只回前 [`MAX_DIR_ENTRIES`] 条，
+/// 并用 `truncated` / `total` 让前端明确提示「已截断」，而不是静默少显示。
+#[derive(serde::Serialize)]
+pub struct DirectoryListing {
+    pub entries: Vec<DirEntryView>,
+    pub truncated: bool,
+    pub total: usize,
+}
+
+const MAX_DIR_ENTRIES: usize = 2000;
+
+/// 列出某个目录下的条目（右侧文件浏览面板用，v0.8.0）。
+///
+/// 路径语义与工具一致（见 `tools::resolve_path`）：相对路径按会话工作区解析，
+/// 前导 `/` 是工作区根，`C:/...` 是盘符绝对路径。访问范围受工作区 + 白名单约束。
+///
+/// v0.8.1 P05：命令改 `async`，磁盘 IO 整体下沉到阻塞池。同步版本在
+/// 上千条目录的 `read_dir` + 逐条 `metadata` 期间会占住 IPC 线程，
+/// 前端 `invoke` 迟迟不返回，表现为「整个应用卡住」。
+#[tauri::command]
+pub async fn list_directory(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<DirectoryListing, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        list_directory_blocking(workspace, allowlist, &path)
+    })
+    .await
+    .map_err(|e| format!("目录列举异常: {e}"))?
+}
+
+/// 纯磁盘部分：抽出来是为了能脱离 AppState / SQLite 直接单测。
+fn list_directory_blocking(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<DirectoryListing, String> {
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Ok(DirectoryListing { entries: Vec::new(), truncated: false, total: 0 });
+    }
     let scope = crate::tools::AccessScope::new(workspace, allowlist)
         .map_err(|e| format!("{e}"))?;
 
-    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::resolve_path(&scope, path)?;
     let target = crate::tools::ensure_allowed(&scope, &target)?;
     let meta = std::fs::metadata(&target).map_err(|e| format!("目录不存在: {e}"))?;
     if !meta.is_dir() {
@@ -1620,10 +1730,19 @@ pub fn list_directory(
     }
 
     let mut out: Vec<DirEntryView> = Vec::new();
+    let mut total = 0usize;
+    let mut truncated = false;
     for entry in std::fs::read_dir(&target).map_err(|e| format!("读取目录失败: {e}"))? {
         let entry = entry.map_err(|e| format!("读取目录失败: {e}"))?;
+        total += 1;
+        if out.len() >= MAX_DIR_ENTRIES {
+            truncated = true;
+            // 只计数、不再逐条 metadata：超大目录不该为「告诉用户有多少条」
+            // 付几千次系统调用。
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().to_string();
-        let next_path = join_panel_path(&path, &name);
+        let next_path = join_panel_path(path, &name);
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let meta = entry.metadata().ok();
         let size = meta.as_ref().map(|m| if is_dir { 0 } else { m.len() }).unwrap_or(0);
@@ -1660,41 +1779,40 @@ pub fn list_directory(
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    Ok(out)
+    Ok(DirectoryListing { entries: out, truncated, total })
 }
 
 /// 读取文本文件内容（右侧文件浏览面板预览用，v0.8.0）。
 ///
 /// 上限 256KB，超限或非 UTF-8 直接返回可读错误；访问范围同样受工作区 + 白名单约束。
+/// v0.8.1 P05：与 `list_directory` 一样改 async + 阻塞池，大文件读盘不再卡住 IPC。
 #[tauri::command]
-pub fn read_file_text(
+pub async fn read_file_text(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
 ) -> Result<String, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        read_file_text_blocking(workspace, allowlist, &path)
+    })
+    .await
+    .map_err(|e| format!("文件读取异常: {e}"))?
+}
+
+fn read_file_text_blocking(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<String, String> {
     const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
-    let workspace = {
-        let db = state.db.lock().map_err(lock_err)?;
-        db::load_session_workspace(&db, &session_id)
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-    };
-    let workspace = match workspace {
-        Some(w) => PathBuf::from(w),
-        None => state.workspace.lock().map_err(lock_err)?.clone(),
-    };
     if workspace.as_os_str().is_empty() || !workspace.is_dir() {
         return Err("尚未选择工作区".into());
     }
-    let allowlist = {
-        let db = state.db.lock().map_err(lock_err)?;
-        allowlist_paths(&db)
-    };
     let scope = crate::tools::AccessScope::new(workspace, allowlist)
         .map_err(|e| format!("{e}"))?;
 
-    let target = crate::tools::resolve_path(&scope, &path)?;
+    let target = crate::tools::resolve_path(&scope, path)?;
     let target = crate::tools::ensure_allowed(&scope, &target)?;
     let meta = std::fs::metadata(&target).map_err(|e| format!("文件不存在: {e}"))?;
     if meta.is_dir() {
@@ -1708,6 +1826,142 @@ pub fn read_file_text(
         ));
     }
     std::fs::read_to_string(&target).map_err(|_| "无法读取为 UTF-8 文本（可能是二进制文件）".to_string())
+}
+
+/// 流式文件块（v0.8.1 P06）。`done` 是结束标记，不带文本。
+#[derive(Clone, serde::Serialize)]
+pub struct FileChunk {
+    pub index: u32,
+    pub text: String,
+    pub done: bool,
+}
+
+/// 流式读取的收尾信息，作为 `invoke` 的返回值。
+#[derive(serde::Serialize)]
+pub struct FileStreamMeta {
+    pub total_bytes: u64,
+    pub sent_bytes: u64,
+    pub truncated: bool,
+}
+
+const FILE_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_FILE_STREAM_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 分块读取文本文件（v0.8.1 P06）。
+///
+/// 旧版 `read_file_text` 把整个文件字符串作为一次 `invoke` 返回值：
+/// 2MB 文本会同时存在「读取 → 克隆 → JSON 序列化」三份拷贝，单次超大
+/// IPC 载荷还会让 WebView 反序列化顿一下。这里用 `Channel` 按 256KB
+/// 分块推送；超过 2MB 明确截断并回传 total / sent，前端给出提示。
+///
+/// `read_file_text` 保留给「只要一小段文本」的调用方（<=256KB），
+/// 文件面板预览统一走这条通道。
+#[tauri::command]
+pub async fn read_file_stream(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    channel: tauri::ipc::Channel<FileChunk>,
+) -> Result<FileStreamMeta, String> {
+    let (workspace, allowlist) = panel_context(&state, &session_id)?;
+    tokio::task::spawn_blocking(move || {
+        let batch = read_file_chunks(workspace, allowlist, &path)?;
+        let last = batch.chunks.len() as u32;
+        for (i, text) in batch.chunks.iter().enumerate() {
+            channel
+                .send(FileChunk {
+                    index: i as u32,
+                    text: text.clone(),
+                    done: false,
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        channel
+            .send(FileChunk {
+                index: last,
+                text: String::new(),
+                done: true,
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(FileStreamMeta {
+            total_bytes: batch.total_bytes,
+            sent_bytes: batch.sent_bytes,
+            truncated: batch.truncated,
+        })
+    })
+    .await
+    .map_err(|e| format!("文件流式读取异常: {e}"))?
+}
+
+struct FileChunkBatch {
+    chunks: Vec<String>,
+    total_bytes: u64,
+    sent_bytes: u64,
+    truncated: bool,
+}
+
+/// 读文件并切成 UTF-8 安全的块。
+///
+/// 按**行**累积到 256KB 再切：换行是 ASCII，多字节字符绝不会跨块被切断，
+/// 不需要额外的字符边界修补。非 UTF-8 字节用 lossy 替换，预览不至于
+/// 整个打不开（旧版是直接报错）。
+fn read_file_chunks(
+    workspace: PathBuf,
+    allowlist: Vec<PathBuf>,
+    path: &str,
+) -> Result<FileChunkBatch, String> {
+    use std::io::{BufRead, BufReader};
+
+    if workspace.as_os_str().is_empty() || !workspace.is_dir() {
+        return Err("尚未选择工作区".into());
+    }
+    let scope = crate::tools::AccessScope::new(workspace, allowlist)
+        .map_err(|e| format!("{e}"))?;
+    let target = crate::tools::resolve_path(&scope, path)?;
+    let target = crate::tools::ensure_allowed(&scope, &target)?;
+    let meta = std::fs::metadata(&target).map_err(|e| format!("文件不存在: {e}"))?;
+    if meta.is_dir() {
+        return Err("是目录，无法作为文本预览".into());
+    }
+    let total_bytes = meta.len();
+    let file = std::fs::File::open(&target).map_err(|e| format!("无法打开文件: {e}"))?;
+    let mut reader = BufReader::new(file);
+
+    let mut chunks = Vec::new();
+    let mut pending = Vec::<u8>::new();
+    let mut line = Vec::<u8>::new();
+    let mut sent_bytes = 0u64;
+    let mut truncated = false;
+
+    loop {
+        line.clear();
+        let n = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|e| format!("读取文件失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if sent_bytes + pending.len() as u64 + line.len() as u64 > MAX_FILE_STREAM_BYTES {
+            truncated = true;
+            break;
+        }
+        pending.extend_from_slice(&line);
+        if pending.len() >= FILE_CHUNK_BYTES {
+            sent_bytes += pending.len() as u64;
+            chunks.push(String::from_utf8_lossy(&pending).into_owned());
+            pending.clear();
+        }
+    }
+    if !pending.is_empty() {
+        sent_bytes += pending.len() as u64;
+        chunks.push(String::from_utf8_lossy(&pending).into_owned());
+    }
+    Ok(FileChunkBatch {
+        chunks,
+        total_bytes,
+        sent_bytes,
+        truncated,
+    })
 }
 
 /// 列出全部白名单条目（内置 + 用户添加）。
@@ -2339,6 +2593,8 @@ pub struct McpServerView {
     pub status_reason: Option<String>,
     pub tool_count: usize,
     pub workspaces: Vec<String>,
+    /// 信任分级与连接策略（M2-08）
+    pub policy: crate::mcp::config::ServerPolicy,
 }
 
 /// 单个工具（详情展示用）。
@@ -2350,6 +2606,8 @@ pub struct McpToolItem {
     pub external_name: String,
     pub description: String,
     pub schema: Option<String>,
+    /// 服务器自报注解的紧凑 JSON（M2-07）。仅展示，不参与放行判定。
+    pub annotations: Option<String>,
 }
 
 /// 单服务器状态详情（含 stderr 尾部、工具数与工具清单）。
@@ -2360,6 +2618,8 @@ pub struct McpStatusView {
     pub stderr: Vec<String>,
     pub tool_count: usize,
     pub tools: Vec<McpToolItem>,
+    /// 握手协商结果（M2-02）：协议版本、服务器信息与支持的域。
+    pub capabilities: crate::mcp::capabilities::ServerCapabilities,
 }
 
 /// 添加前的连通性试跑结果（不落库）。
@@ -2404,11 +2664,60 @@ async fn mcp_view(cfg: &crate::mcp::McpServerConfig) -> McpServerView {
         status_reason,
         tool_count,
         workspaces: cfg.workspaces.clone(),
+        policy: cfg.policy.clone(),
     }
 }
 
 fn mcp_cwd(state: &State<'_, AppState>) -> Option<std::path::PathBuf> {
     state.workspace.lock().ok().map(|p| p.clone())
+}
+
+/// MCP 资源/提示词读取的统一打点（M2-11）。
+///
+/// 安全事件**总是**写（哪怕没有会话上下文），timeline 只在给了会话 id 时写：
+/// 设置页里的预览不属于任何对话轮次，硬塞进时间线会污染用户回放。
+/// 两者都失败静默——记不下一条观测不该让读取本身失败。
+fn record_mcp_activity(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    kind: crate::security::Kind,
+    title: &str,
+    detail: Option<String>,
+) {
+    crate::security::log_simple(
+        kind,
+        session_id.unwrap_or(""),
+        title,
+        "MCP 数据读取",
+        "mcp_data",
+    );
+    let Some(sid) = session_id.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Ok(db) = state.db.lock() else {
+        return;
+    };
+    let seq: i64 = db
+        .query_row(
+            "SELECT COALESCE(MAX(seq) + 1, 0) FROM timeline WHERE session_id = ?1",
+            rusqlite::params![sid],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let mut entry = crate::timeline::TimelineEntry::new(
+        sid,
+        seq,
+        ts_ms,
+        0,
+        crate::timeline::EntryKind::Tool,
+        title,
+    );
+    entry.detail = detail;
+    let _ = db::add_timeline_entry(&db, &entry);
 }
 
 /// 列出全部服务器（含实时状态与工具数）。
@@ -2436,6 +2745,7 @@ pub async fn mcp_add_server(
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
+    policy: crate::mcp::config::ServerPolicy,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2448,7 +2758,7 @@ pub async fn mcp_add_server(
     }
     let cfg = {
         let db = state.db.lock().map_err(lock_err)?;
-        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true)?
+        crate::mcp::config::insert(&db, &name, &command, args, env, workspaces, true, policy)?
     };
     let cwd = mcp_cwd(&state);
     if let Err(e) = crate::mcp::connect_server(&cfg, cwd).await {
@@ -2470,6 +2780,7 @@ pub async fn mcp_update_server(
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     workspaces: Vec<String>,
+    policy: crate::mcp::config::ServerPolicy,
 ) -> Result<McpServerView, String> {
     if let Some(warning) = crate::mcp::config::audit_server(&command, &args)? {
         crate::security::log_simple(
@@ -2491,7 +2802,7 @@ pub async fn mcp_update_server(
         } else {
             env
         };
-        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces)?
+        crate::mcp::config::update(&db, id, &name, &command, args, env, workspaces, policy)?
     };
     crate::mcp::disconnect_server(id).await;
     if cfg.enabled {
@@ -2538,6 +2849,47 @@ pub async fn mcp_set_server_enabled(
     Ok(mcp_view(&cfg).await)
 }
 
+/// 单独调整信任分级 / 连接策略（M2-08）。
+///
+/// 放宽到 `trusted` 会写一条 `mcp_trust_change` 安全事件：这是本机唯一
+/// 能让 MCP 工具脱离最高审批档的入口，必须留痕。策略变化需要重连才生效。
+#[tauri::command]
+pub async fn mcp_set_server_policy(
+    state: State<'_, AppState>,
+    id: i64,
+    policy: crate::mcp::config::ServerPolicy,
+) -> Result<McpServerView, String> {
+    let (cfg, was_trusted) = {
+        let db = state.db.lock().map_err(lock_err)?;
+        let old = crate::mcp::config::get(&db, id)?
+            .ok_or_else(|| "服务器不存在".to_string())?;
+        crate::mcp::config::set_policy(&db, id, policy)?;
+        let cfg = crate::mcp::config::get(&db, id)?
+            .ok_or_else(|| "服务器不存在".to_string())?;
+        (cfg, old.policy.is_trusted())
+    };
+    let now_trusted = cfg.policy.is_trusted();
+    if now_trusted != was_trusted {
+        crate::security::log_simple(
+            crate::security::Kind::McpTrustChange,
+            "",
+            &cfg.name,
+            if now_trusted {
+                "信任等级放宽为 trusted"
+            } else {
+                "信任等级恢复 strict"
+            },
+            "mcp_trust_change",
+        );
+    }
+    crate::mcp::disconnect_server(id).await;
+    if cfg.enabled {
+        let cwd = mcp_cwd(&state);
+        let _ = crate::mcp::connect_server(&cfg, cwd).await;
+    }
+    Ok(mcp_view(&cfg).await)
+}
+
 /// 单服务器状态：状态 + stderr 尾部 + 工具数（排错主通道）。
 #[tauri::command]
 pub async fn mcp_server_status(
@@ -2571,6 +2923,10 @@ pub async fn mcp_server_status(
                         } else {
                             Some(t.input_schema.to_string())
                         },
+                        annotations: t
+                            .annotations
+                            .as_ref()
+                            .and_then(|a| serde_json::to_string(a).ok()),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -2580,6 +2936,7 @@ pub async fn mcp_server_status(
                 stderr: c.stderr_tail(),
                 tool_count: tools.len(),
                 tools,
+                capabilities: c.capabilities().await,
             })
         }
         None => {
@@ -2590,6 +2947,7 @@ pub async fn mcp_server_status(
                 stderr: Vec::new(),
                 tool_count: 0,
                 tools: Vec::new(),
+                capabilities: Default::default(),
             })
         }
     }
@@ -2614,6 +2972,103 @@ pub async fn mcp_rescan_tools(
     Ok(mcp_view(&cfg).await)
 }
 
+/// 资源清单（v0.8.1 M2-04）。每次调用都重扫一遍，前端「刷新」即再次调用。
+/// 服务器未声明 resources 能力时仍允许手动重扫（老实现常漏报能力）。
+#[tauri::command]
+pub async fn mcp_list_resources(
+    id: i64,
+) -> Result<Vec<crate::mcp::resources::McpResource>, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    conn.refresh_resources()
+        .await
+        .map_err(|e| format!("读取资源清单失败：{e}"))?;
+    Ok(conn.resources().await)
+}
+
+/// 读取一条资源（v0.8.1 M2-04）。
+///
+/// 顺带订阅更新：用户看了这条资源，后续 `notifications/resources/updated`
+/// 才有意义；服务器未声明订阅能力时 `subscribe_resource` 会直接返回错误，
+/// 这里静默忽略，绝不影响读取本身。
+#[tauri::command]
+pub async fn mcp_read_resource(
+    state: State<'_, AppState>,
+    id: i64,
+    uri: String,
+    session_id: Option<String>,
+) -> Result<crate::mcp::resources::ResourceReadResult, String> {
+    let started = std::time::Instant::now();
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    let result = conn.read_resource(&uri).await?;
+    let _ = conn.subscribe_resource(&uri).await;
+    record_mcp_activity(
+        &state,
+        session_id.as_deref(),
+        crate::security::Kind::McpResource,
+        &format!("MCP 资源 {uri}"),
+        Some(format!(
+            "{} 字节，截断={}，耗时 {}ms",
+            result.total_bytes,
+            result.truncated,
+            started.elapsed().as_millis()
+        )),
+    );
+    Ok(result)
+}
+
+/// 提示词清单（v0.8.1 M2-06）。每次调用重扫一次，前端刷新即再次调用。
+#[tauri::command]
+pub async fn mcp_list_prompts(
+    id: i64,
+) -> Result<Vec<crate::mcp::prompts::McpPrompt>, String> {
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    conn.refresh_prompts()
+        .await
+        .map_err(|e| format!("读取提示词清单失败：{e}"))?;
+    Ok(conn.prompts().await)
+}
+
+/// 展开一条提示词模板，只返回消息文本（v0.8.1 M2-06）。
+/// 后端不执行、不写 history、不交给模型——由用户看过再决定是否发送。
+#[tauri::command]
+pub async fn mcp_get_prompt(
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    arguments: serde_json::Value,
+    session_id: Option<String>,
+) -> Result<Vec<crate::mcp::prompts::McpPromptMessage>, String> {
+    let started = std::time::Instant::now();
+    let conn = crate::mcp::manager()
+        .get(id)
+        .await
+        .ok_or_else(|| "MCP 服务器未连接".to_string())?;
+    let messages = conn.get_prompt(&name, arguments).await?;
+    let chars: usize = messages.iter().map(|m| m.text.chars().count()).sum();
+    record_mcp_activity(
+        &state,
+        session_id.as_deref(),
+        crate::security::Kind::McpPrompt,
+        &format!("MCP 提示词 {name}"),
+        Some(format!(
+            "{} 条消息、{} 字符，耗时 {}ms",
+            messages.len(),
+            chars,
+            started.elapsed().as_millis()
+        )),
+    );
+    Ok(messages)
+}
+
 /// 添加前试连：不落库，只验证握手并返回工具数。
 #[tauri::command]
 pub async fn mcp_test_connect(
@@ -2633,7 +3088,18 @@ pub async fn mcp_test_connect(
         );
     }
     let cwd = mcp_cwd(&state);
-    match crate::mcp::client::connect(-1, name, command, args, env, Vec::new(), cwd).await {
+    match crate::mcp::client::connect(
+        -1,
+        name,
+        command,
+        args,
+        env,
+        Vec::new(),
+        cwd,
+        crate::mcp::config::ServerPolicy::default(),
+    )
+    .await
+    {
         Ok(conn) => {
             let result = McpTestResult {
                 ok: true,
@@ -2924,4 +3390,146 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+}
+
+/// v0.8.1 P05/P06：文件面板的阻塞部分抽成纯函数后，无需构造 AppState /
+/// SQLite 就能验证排序、路径语义、目录上限与流式分块的 UTF-8 安全性。
+#[cfg(test)]
+mod file_panel_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aura-panel-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn lists_dirs_first_with_case_insensitive_file_names() {
+        let root = scratch();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::write(root.join("beta.txt"), "b").unwrap();
+        std::fs::write(root.join("Alpha.txt"), "a").unwrap();
+
+        let listing = list_directory_blocking(root.clone(), vec![], "/").unwrap();
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["docs", "Alpha.txt", "beta.txt"]);
+        assert!(listing.entries[0].is_dir);
+        assert!(!listing.truncated);
+        assert_eq!(listing.total, 3);
+        // 前端靠这个相对路径下钻，不能被换成带盘符的绝对磁盘路径
+        assert_eq!(listing.entries[0].path, "/docs");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn huge_directory_is_truncated_but_total_is_exact() {
+        let root = scratch();
+        for i in 0..MAX_DIR_ENTRIES + 7 {
+            std::fs::write(root.join(format!("f{i:05}.txt")), "").unwrap();
+        }
+        let listing = list_directory_blocking(root.clone(), vec![], "/").unwrap();
+        assert!(listing.truncated);
+        assert_eq!(listing.entries.len(), MAX_DIR_ENTRIES);
+        assert_eq!(listing.total, MAX_DIR_ENTRIES + 7);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_utf8_and_rejects_directory_or_oversize_file() {
+        let root = scratch();
+        std::fs::write(root.join("a.txt"), "你好 Aura").unwrap();
+        assert_eq!(
+            read_file_text_blocking(root.clone(), vec![], "/a.txt").unwrap(),
+            "你好 Aura"
+        );
+        assert!(read_file_text_blocking(root.clone(), vec![], "/")
+            .unwrap_err()
+            .contains("是目录"));
+
+        std::fs::write(root.join("big.txt"), "x".repeat(256 * 1024 + 1)).unwrap();
+        assert!(read_file_text_blocking(root.clone(), vec![], "/big.txt")
+            .unwrap_err()
+            .contains("文件过大"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn small_stream_is_one_chunk_and_keeps_trailing_text() {
+        let root = scratch();
+        let text = "你好 Aura\n第二行末尾无换行";
+        std::fs::write(root.join("a.txt"), text).unwrap();
+        let batch = read_file_chunks(root.clone(), vec![], "/a.txt").unwrap();
+        assert!(!batch.truncated);
+        assert_eq!(batch.chunks.len(), 1);
+        assert_eq!(batch.chunks[0], text);
+        assert_eq!(batch.sent_bytes, text.len() as u64);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_stream_splits_without_breaking_utf8_and_reports_truncation() {
+        let root = scratch();
+        // 每行含多字节中文，且长度远小于一块：跨块边界必定落在行边界上。
+        let line = format!("{}\n", "中文abc".repeat(200));
+        std::fs::write(root.join("big.txt"), line.repeat(1200)).unwrap();
+        let batch = read_file_chunks(root.clone(), vec![], "/big.txt").unwrap();
+
+        assert!(batch.truncated);
+        assert!(batch.sent_bytes <= MAX_FILE_STREAM_BYTES);
+        assert!(batch.chunks.len() >= 2);
+        let joined = batch.chunks.concat();
+        assert!(joined.starts_with("中文abc"));
+        // lossy 替换会把无效字节吃掉；这里全是合法 UTF-8，字节数应完全一致
+        assert_eq!(joined.len() as u64, batch.sent_bytes);
+        assert!(joined.ends_with('\n'));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unset_workspace_yields_empty_listing_instead_of_error() {
+        // 新建会话尚未选工作区时，面板应该显示空目录而不是弹错误
+        let out = list_directory_blocking(PathBuf::new(), vec![], "/").unwrap();
+        assert!(out.entries.is_empty());
+    }
+
+    #[test]
+    fn compaction_drops_early_messages_but_keeps_system_and_recent() {
+        let mut history = vec![serde_json::json!({"role": "system", "content": "你是 Aura"})];
+        for i in 0..40 {
+            history.push(serde_json::json!({
+                "role": "user",
+                "content": format!("第{}轮问题 {}", i, "内容".repeat(60)),
+            }));
+            history.push(serde_json::json!({
+                "role": "assistant",
+                "content": format!("第{}轮回答 {}", i, "内容".repeat(60)),
+            }));
+        }
+        let (trimmed, result) = plan_compaction(&history, 4000);
+        assert!(result.changed);
+        assert!(result.after_tokens < result.before_tokens);
+        assert_eq!(trimmed.first().unwrap()["role"], "system");
+        assert_eq!(trimmed.last().unwrap(), history.last().unwrap());
+        assert_eq!(result.dropped_messages, history.len() - trimmed.len());
+    }
+
+    #[test]
+    fn short_history_is_left_untouched() {
+        let history = vec![
+            serde_json::json!({"role": "user", "content": "你好"}),
+            serde_json::json!({"role": "assistant", "content": "在的"}),
+        ];
+        let (trimmed, result) = plan_compaction(&history, 100_000);
+        assert!(!result.changed);
+        assert_eq!(trimmed, history);
+    }
 }

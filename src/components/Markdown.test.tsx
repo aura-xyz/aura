@@ -129,3 +129,76 @@ describe("Markdown 代码块文本提取", () => {
     expect(copied).toBe('path = "/projects"');
   });
 });
+
+/**
+ * 稳定片段分段（v0.8.1 P02）。
+ *
+ * 分段是在原有渲染路径上插入的一层，必须保证「看得见的东西没变」：
+ * 片段组件不能包额外的 div（`.md > * + *` 的间距靠直接子元素），
+ * 代码块外壳与复制按钮也要照常出现。
+ */
+describe("Markdown 稳定片段渲染", () => {
+  const longA = "开头".repeat(400);
+  const longB = "中段".repeat(400);
+
+  it("短回答仍按整段解析", async () => {
+    const { container } = await renderMd("你好，Aura");
+    const ps = container.querySelectorAll(".md > p");
+    expect(ps).toHaveLength(1);
+    expect(ps[0].textContent).toBe("你好，Aura");
+  });
+
+  it("长回答切成两段后不引入额外包装元素", async () => {
+    const { container } = await renderMd(`${longA}\n\n${longB}`);
+    const md = container.querySelector(".md");
+    expect(md).not.toBeNull();
+    const children = Array.from(md!.children);
+    expect(children).toHaveLength(2);
+    expect(children.every((el) => el.tagName === "P")).toBe(true);
+    expect(children[0].textContent).toBe(longA);
+    expect(children[1].textContent).toBe(longB);
+  });
+
+  it("围栏代码块随片段渲染出外壳与复制按钮", async () => {
+    const { container } = await renderMd(
+      `${longA}\n\n\`\`\`ts\nconst a = 1;\n\`\`\`\n\n${longB}`,
+    );
+    expect(container.querySelectorAll(".md .md-code")).toHaveLength(1);
+    expect(container.querySelector(".md .md-code-lang")?.textContent).toBeTruthy();
+    expect(container.querySelector(".md .md-code-copy")).not.toBeNull();
+  });
+});
+
+/**
+ * 未闭合代码块延迟高亮（v0.8.1 P03）。
+ *
+ * 流式写到一半时，每帧都拿残缺代码去跑 highlight.js（还带 highlightAuto
+ * 兜底）是纯浪费。降级期间用户仍要能看到语言标签并复制代码；围栏一闭合
+ * 必须立刻恢复高亮，不能因为记忆化而卡在纯文本状态。
+ */
+describe("Markdown 未闭合代码块延迟高亮", () => {
+  it("写到一半的代码块不做高亮，语言标签与复制按钮仍在", async () => {
+    const { container } = await renderMd("```rust\nfn main() {");
+    expect(container.querySelector('code [class*="hljs-"]')).toBeNull();
+    expect(screen.getByText("Rust")).toBeInTheDocument();
+    expect(container.querySelector(".md-code-copy")).not.toBeNull();
+  });
+
+  it("围栏闭合后恢复高亮", async () => {
+    const { container } = await renderMd("```rust\nfn main() {}\n```");
+    expect(container.querySelector('code [class*="hljs-"]')).not.toBeNull();
+  });
+
+  it("长回答里已闭合的代码块保持高亮，只降级尾部未闭合的那段", async () => {
+    const content =
+      `${"前言".repeat(400)}\n\n` +
+      "```rust\nfn main() {}\n```\n\n" +
+      `${"后记".repeat(400)}\n\n` +
+      "```ts\nconst a = ";
+    const { container } = await renderMd(content);
+    const blocks = container.querySelectorAll(".md .md-code");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].querySelector('[class*="hljs-"]')).not.toBeNull();
+    expect(blocks[1].querySelector('[class*="hljs-"]')).toBeNull();
+  });
+});

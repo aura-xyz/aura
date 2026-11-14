@@ -28,7 +28,8 @@ import {
   WrapText,
   X,
 } from "lucide-react";
-import { listDirectory, readFileText, type DirEntry } from "../lib/api";
+import { listDirectory, readFileStream, type DirEntry } from "../lib/api";
+import { directoryNotice, truncationNotice } from "../lib/filePreview";
 import Markdown from "./Markdown";
 import { assetUrl } from "../lib/assetUrl";
 import {
@@ -53,6 +54,9 @@ interface PreviewState {
   content: string;
   /** 图片走 asset protocol 时的绝对路径；非图片为 undefined */
   absolute_path?: string;
+  /** 流式读取的文件总字节数 / 实际送出字节数；两者相等即未截断 */
+  total_bytes?: number;
+  sent_bytes?: number;
 }
 
 function formatSize(bytes: number): string {
@@ -90,6 +94,8 @@ export function FileBrowserPanel({ sessionId }: Props) {
   const [treeLoading, setTreeLoading] = useState<Set<string>>(new Set());
 
   const [entries, setEntries] = useState<DirEntry[]>([]);
+  /** 后端返回的目录真实条目数（超过上限时大于 entries.length） */
+  const [dirTotal, setDirTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
@@ -108,9 +114,12 @@ export function FileBrowserPanel({ sessionId }: Props) {
     setLoading(true);
     setError(null);
     try {
-      setEntries(await listDirectory(sessionId, path));
+      const listing = await listDirectory(sessionId, path);
+      setEntries(listing.entries);
+      setDirTotal(listing.total);
     } catch (e) {
       setEntries([]);
+      setDirTotal(0);
       setError(typeof e === "string" ? e : "读取目录失败");
     } finally {
       setLoading(false);
@@ -121,8 +130,8 @@ export function FileBrowserPanel({ sessionId }: Props) {
   async function loadTreeNode(nodePath: string) {
     setTreeLoading((s) => new Set(s).add(nodePath));
     try {
-      const children = await listDirectory(sessionId, nodePath);
-      setTreeChildren((c) => ({ ...c, [nodePath]: children }));
+      const listing = await listDirectory(sessionId, nodePath);
+      setTreeChildren((c) => ({ ...c, [nodePath]: listing.entries }));
     } catch {
       setTreeChildren((c) => ({ ...c, [nodePath]: [] }));
     } finally {
@@ -185,8 +194,14 @@ export function FileBrowserPanel({ sessionId }: Props) {
       return;
     }
     try {
-      const content = await readFileText(sessionId, entry.path);
-      setPreview({ name: entry.name, content });
+      // v0.8.1 P06：走 Channel 分块通道，大文件不再一次性塞进 invoke 响应
+      const result = await readFileStream(sessionId, entry.path);
+      setPreview({
+        name: entry.name,
+        content: result.content,
+        total_bytes: result.total_bytes,
+        sent_bytes: result.sent_bytes,
+      });
     } catch (e) {
       setPreview({
         name: entry.name,
@@ -197,6 +212,10 @@ export function FileBrowserPanel({ sessionId }: Props) {
 
   const previewKind = preview ? fileKindOf(preview.name) : "text";
   const lineCount = preview ? preview.content.split("\n").length : 0;
+  const previewNotice = preview
+    ? truncationNotice(preview.total_bytes ?? 0, preview.sent_bytes ?? 0)
+    : null;
+  const dirNotice = directoryNotice(dirTotal, entries.length);
   const visible = sortEntries(entries).filter((e) =>
     query.trim() ? e.name.toLowerCase().includes(query.trim().toLowerCase()) : true,
   );
@@ -332,6 +351,12 @@ export function FileBrowserPanel({ sessionId }: Props) {
             </button>
           </div>
 
+          {previewNotice && (
+            <div className="shrink-0 border-b border-line bg-surface-sunken/60 px-3 py-1.5 text-[11px] text-subtle">
+              {previewNotice}
+            </div>
+          )}
+
           {previewKind === "image" && preview.absolute_path ? (
             imgFailed ? (
               <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3 text-[11px] text-danger">
@@ -422,6 +447,9 @@ export function FileBrowserPanel({ sessionId }: Props) {
           </div>
           <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1 pb-2">
             {error && <p className="px-2 py-2 text-[11px] text-danger">{error}</p>}
+            {dirNotice && (
+              <p className="px-2 py-1.5 text-[11px] text-subtle">{dirNotice}</p>
+            )}
             {!error && !loading && visible.length === 0 && (
               <p className="px-2 py-2 text-[11px] text-subtle">
                 {query ? `没有匹配「${query}」的条目` : "空目录"}

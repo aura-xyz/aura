@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useDeferredValue } from "react";
 import { Pencil } from "lucide-react";
 import { useStore, type Block, type ChatMessage } from "../store";
 import { plainTextOf } from "../lib/messageText";
@@ -109,6 +109,19 @@ const AssistantMessage = memo(function AssistantMessage({
 }) {
   const { switchMessageVersion } = useStore();
 
+  /**
+   * 流式正文重渲染是可打断的低优先级工作（v0.8.1 P04）。
+   *
+   * 用 useDeferredValue 而不是在 store 里给 setState 套 startTransition：
+   * 流式 updater 与「动作卡片插在正文之后」的顺序强耦合，transition 被
+   * 高优先级更新中断后会在新 base 上重放，文字可能排到卡片后面
+   * （streamOrder.integration.test.tsx 钉的就是这条）。放在渲染层降级，
+   * store 的提交顺序完全不动，用户输入/滚动仍优先于这一帧的解析。
+   *
+   * 历史消息的 blocks 引用恒定，deferred 值不变，不产生额外渲染。
+   */
+  const deferredBlocks = useDeferredValue(blocks);
+
   const handleRegenerate = useCallback(() => {
     if (userIndex === undefined || question === undefined) return;
     onRegenerate(userIndex, question);
@@ -122,7 +135,7 @@ const AssistantMessage = memo(function AssistantMessage({
     [messageId, switchMessageVersion],
   );
 
-  if (blocks.length === 0) {
+  if (deferredBlocks.length === 0) {
     // 仅等待首字期间显示呼吸光标；历史空消息不渲染
     if (!pending) return null;
     return (
@@ -132,12 +145,14 @@ const AssistantMessage = memo(function AssistantMessage({
     );
   }
   return (
-    <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(blocks)}>
-      {blocks.map((b, i) => renderBlock(b, i, pending && i === blocks.length - 1))}
+    <div className="flex flex-col gap-3" data-ctx-message={plainTextOf(deferredBlocks)}>
+      {deferredBlocks.map((b, i) =>
+        renderBlock(b, i, pending && i === deferredBlocks.length - 1),
+      )}
       {/* 悬停才出现的操作条。放最后一行之下，不占用正文流 */}
       <div className="flex flex-wrap items-center justify-end gap-2">
         {versions && <VersionSwitcher message={versions} onSwitch={handleSwitch} />}
-        <MessageActions blocks={blocks} onRegenerate={handleRegenerate} />
+        <MessageActions blocks={deferredBlocks} onRegenerate={handleRegenerate} />
       </div>
     </div>
   );

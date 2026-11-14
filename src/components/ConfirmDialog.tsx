@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
+import { useOverlay } from "../hooks/useOverlay";
 
 interface ConfirmDialogProps {
   /** 标题 */
@@ -31,6 +32,10 @@ export default function ConfirmDialog({
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
+  // busy（正在处理确认）时不进栈：Esc 本就不该关掉一个处理中的模态框。
+  // 组件自己的 Esc 监听保留，覆盖「栈为空」时的边界。
+  useOverlay("confirm-dialog", !busy, onCancel);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape" && !busy) {

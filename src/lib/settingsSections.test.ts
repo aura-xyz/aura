@@ -7,8 +7,15 @@ import {
 describe("设置分区注册表", () => {
   it("默认分区按 order 排列，外观在第一位", () => {
     const ids = settingsSections().map((s) => s.id);
-    // 安全分区（v0.8.0 C43）插在通用与关于之间
-    expect(ids).toEqual(["appearance", "model", "general", "security", "about"]);
+    // 安全分区（v0.8.0 C43）、快捷键分区（v0.8.1）都按 order 插队
+    expect(ids).toEqual([
+      "appearance",
+      "model",
+      "shortcuts",
+      "general",
+      "security",
+      "about",
+    ]);
   });
 
   it("新增分区按 order 插队，卸载后列表恢复", () => {
@@ -17,6 +24,7 @@ describe("设置分区注册表", () => {
       "appearance",
       "model",
       "plugins",
+      "shortcuts",
       "general",
       "security",
       "about",
