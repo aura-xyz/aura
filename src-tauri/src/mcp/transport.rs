@@ -25,6 +25,16 @@ pub trait Transport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
     fn shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     fn reap(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    /// 入站帧通道（v0.8.2 M3-03）。stdio 由 `stdout_loop` 直接读子进程管道，
+    /// 返回 None；HTTP/SSE 没有「stdout」概念，改为由传输实现把收到的
+    /// JSON-RPC 文本推入此通道，连接层统一消费。
+    ///
+    /// 带默认实现是为了**不改动 M2-01 既有的三个方法与任何既有实现**：
+    /// 只有 `HttpTransport` 需要覆写它。
+    fn take_inbound(&self) -> Option<tokio::sync::mpsc::Receiver<String>> {
+        None
+    }
 }
 
 struct Inner {

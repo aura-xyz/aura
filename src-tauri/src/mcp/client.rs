@@ -20,6 +20,7 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock, Semaphore};
 
 use super::capabilities::{client_capabilities, parse_capabilities, ServerCapabilities};
 use super::config::ServerPolicy;
+use super::http::{HttpSpec, HttpTransport};
 use super::prompts::{parse_prompt_messages, parse_prompt_page, McpPrompt, McpPromptMessage, MAX_PROMPTS};
 use super::reconnect::{reconnect_delay, MAX_CONCURRENT_CALLS, MAX_RECONNECT_ATTEMPTS};
 use super::resources::{
@@ -85,6 +86,8 @@ struct ReconnectSpec {
     workspaces: Vec<String>,
     cwd: Option<PathBuf>,
     policy: ServerPolicy,
+    /// M3-03：远程连接参数，stdio 为 None
+    remote: Option<HttpSpec>,
 }
 
 /// 一条活连接。
@@ -525,6 +528,29 @@ impl Connection {
     }
 }
 
+/// HTTP 入站帧循环（M3-03）：与 `stdout_loop` 语义完全相同，只是帧来自
+/// `HttpTransport` 的通道而不是子进程 stdout。EOF 后的重连/置 Down 分支
+/// 也保持一致，保证两种传输在连接状态机上没有差异。
+async fn inbound_loop(conn: Arc<Connection>, mut rx: tokio::sync::mpsc::Receiver<String>) {
+    while let Some(line) = rx.recv().await {
+        match decode_line(&line) {
+            Ok(Some(v)) => {
+                if let Some((method, params)) = conn.session.dispatch(v) {
+                    conn.on_notification(&method, &params).await;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => conn.push_stderr(e),
+        }
+    }
+    if conn.can_reconnect() {
+        tokio::spawn(attempt_reconnect(conn.clone()));
+    } else {
+        conn.mark_down("远程连接已关闭".to_string()).await;
+    }
+    conn.reap().await;
+}
+
 async fn stdout_loop(conn: Arc<Connection>, stdout: ChildStdout) {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -596,6 +622,7 @@ async fn attempt_reconnect(conn: Arc<Connection>) {
             spec.workspaces.clone(),
             spec.cwd.clone(),
             spec.policy.clone(),
+            spec.remote.clone(),
         )
         .await;
         match result {
@@ -663,10 +690,65 @@ pub fn connect(
     workspaces: Vec<String>,
     cwd: Option<PathBuf>,
     policy: ServerPolicy,
+    remote: Option<HttpSpec>,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<Arc<Connection>, String>> + Send>,
 > {
     Box::pin(async move {
+    // M3-03：远程服务器走 HTTP/SSE，不拉子进程。会话层与后续握手、
+    // 工具/资源/提示词发现、状态机全部复用，与 stdio 完全一致。
+    if let Some(spec) = remote {
+        let reconnect = if policy.auto_reconnect {
+            Some(ReconnectSpec {
+                command: String::new(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                workspaces: workspaces.clone(),
+                cwd: cwd.clone(),
+                policy: policy.clone(),
+                remote: Some(spec.clone()),
+            })
+        } else {
+            None
+        };
+        let transport: Arc<dyn Transport> = Arc::new(HttpTransport::new(spec));
+        let inbound = transport.take_inbound();
+        let conn = Arc::new(Connection::new(
+            server_id,
+            server_name,
+            workspaces,
+            policy,
+            reconnect,
+            transport,
+        ));
+        if let Some(rx) = inbound {
+            tokio::spawn(inbound_loop(conn.clone(), rx));
+        }
+        return match conn.handshake().await {
+            Ok(_) => {
+                conn.set_status(ConnStatus::Running).await;
+                if let Err(e) = conn.refresh_tools().await {
+                    conn.push_stderr(format!("首次拉取工具列表失败：{e}"));
+                }
+                if conn.capabilities().await.resources {
+                    if let Err(e) = conn.refresh_resources().await {
+                        conn.push_stderr(format!("首次拉取资源列表失败：{e}"));
+                    }
+                }
+                if conn.capabilities().await.prompts {
+                    if let Err(e) = conn.refresh_prompts().await {
+                        conn.push_stderr(format!("首次拉取提示词列表失败：{e}"));
+                    }
+                }
+                Ok(conn)
+            }
+            Err(e) => {
+                conn.mark_down(e.clone()).await;
+                conn.shutdown().await;
+                Err(e)
+            }
+        };
+    }
     let mut cmd = Command::new(&command);
     cmd.args(&args)
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -698,6 +780,7 @@ pub fn connect(
             workspaces: workspaces.clone(),
             cwd: cwd.clone(),
             policy: policy.clone(),
+            remote: None,
         })
     } else {
         None

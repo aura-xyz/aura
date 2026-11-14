@@ -11,6 +11,7 @@
 pub mod capabilities;
 pub mod client;
 pub mod config;
+pub mod http;
 pub mod prompts;
 pub mod reconnect;
 pub mod resources;
@@ -104,6 +105,15 @@ pub async fn connect_server(
         cfg.workspaces.clone(),
         cwd,
         cfg.policy.clone(),
+        // M3-03：填了远程地址就走 HTTP/SSE；token 由 M3-04 的授权层注入。
+        if cfg.remote.is_remote() {
+            Some(crate::mcp::http::HttpSpec {
+                url: cfg.remote.server_url.clone(),
+                token: None,
+            })
+        } else {
+            None
+        },
     )
     .await?;
     manager().insert(cfg.id, conn.clone()).await;

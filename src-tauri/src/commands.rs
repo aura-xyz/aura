@@ -3109,6 +3109,7 @@ pub async fn mcp_test_connect(
         Vec::new(),
         cwd,
         crate::mcp::config::ServerPolicy::default(),
+        None,
     )
     .await
     {
