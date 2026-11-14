@@ -142,19 +142,23 @@ describe("Sidebar", () => {
     expect(store.switchWorkspace).not.toHaveBeenCalled();
   });
 
-  /// 折叠时退出所有分组，只剩圆点——此时没有「工作区行」可点
-  it("折叠态点圆点走 switchWorkspace", async () => {
+  /// 折叠时退出所有分组，只剩一枚工作区入口——此时没有「工作区行」可点，
+  /// 切换要经浮层。
+  it("折叠态经浮层切换工作区", async () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     const { store } = await mount();
-    await userEvent.click(screen.getByRole("button", { name: "E:/dev/other" }));
+    await userEvent.click(screen.getByRole("button", { name: /工作区/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /other/ }));
     expect(store.switchWorkspace).toHaveBeenCalledWith("E:/dev/other");
   });
 
-  it("折叠态渲染圆点而非分组标题", async () => {
+  it("折叠态只渲染一枚工作区入口，不渲染会话列表", async () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     await mount();
     expect(screen.queryByText("修 bug")).toBeNull();
-    expect(screen.queryByText("aura")).toBeNull();
+    // 分组里另一个工作区不能直接出现在折叠态里
+    expect(screen.queryByRole("button", { name: "E:/dev/other" })).toBeNull();
+    expect(screen.getByRole("button", { name: /工作区/ })).toBeInTheDocument();
   });
 
   it("折叠偏好写入 localStorage", async () => {
@@ -164,41 +168,30 @@ describe("Sidebar", () => {
   });
 
   /// 折叠后宽度必须有过渡类，否则 DOM 虽然合并了，动画还是不出现。
-  /// min-height 一并过渡：展开态撑满内容区、折叠态收成内容高，
-  /// 高度跳变没有动画会显得生硬。
   it("侧边栏宽度带过渡动画", async () => {
     const { container } = await mount();
     const aside = container.querySelector("aside");
-    expect(aside?.className).toContain("transition-[width,min-height");
+    expect(aside?.className).toContain("transition-[width]");
     expect(aside?.className).toContain("w-64");
     await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
     expect(aside?.className).toContain("w-14");
-    expect(aside?.className).toContain("min-h-0");
   });
 
-  /// 灰色外壳与白色悬浮卡片之间必须平滑过渡。此前只过渡宽高，
-  /// bg-chrome→bg-surface、margin、圆角、边框、阴影都是瞬间切换，
-  /// 折叠一开始灰色块就「啪」地消失（实测反馈的闪一下）。
-  it("折叠时灰底、外边距、圆角、边框与阴影一并过渡", async () => {
+  /// 两态共用 chrome 灰底，靠右侧 1px 细线区分主内容区；折叠态不再有
+  /// 悬浮卡片的外框、圆角、阴影与外边距（用户拍板该形态退役）。
+  it("两态共用灰底与右侧细线，折叠态不再有外框阴影", async () => {
     const { container } = await mount();
     const aside = container.querySelector("aside");
     expect(aside?.className).toContain("bg-chrome");
-    expect(aside?.className).toContain("border-transparent");
-    for (const prop of [
-      "background-color",
-      "margin",
-      "border-color",
-      "border-radius",
-      "box-shadow",
-      "max-height",
-    ]) {
-      expect(aside?.className).toContain(prop);
-    }
-    await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
-    expect(aside?.className).toContain("bg-surface");
+    expect(aside?.className).toContain("border-r");
     expect(aside?.className).toContain("border-line");
-    // 两态都保留 1px 边框，避免 border-width 跳变
-    expect(aside?.className).toContain("border ");
+    await userEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
+    const cls = aside?.className ?? "";
+    expect(cls).toContain("bg-chrome");
+    expect(cls).toContain("border-r");
+    expect(cls).not.toContain("rounded-card");
+    expect(cls).not.toContain("shadow-sm");
+    expect(cls).not.toContain("m-2");
   });
 
   it("不再使用会瞬间清空内容的旧折叠动画", async () => {
@@ -386,19 +379,40 @@ describe("Sidebar", () => {
     expect(store.newSession).toHaveBeenCalled();
   });
 
-  /// C15：折叠态只有 56px，圆点分不清三个工作区——改首字方块 + 会话数角标，
-  /// 当前工作区用品牌色描边而不是换底色。
-  it("折叠态工作区显示首字方块与会话数角标", async () => {
+  /// C15 改版：折叠态只留一枚当前工作区首字方块，数字角标与多工作区
+  /// 堆叠一并撤掉——56px 塞不下，角标也看不清（用户反馈）。
+  it("折叠态工作区入口只有首字方块，无数字角标", async () => {
     localStorage.setItem("aura-sidebar-collapsed", "1");
     await mount();
-    const current = screen.getByRole("button", { name: "E:/dev/aura" });
-    expect(current).toHaveTextContent("A");
-    // 该工作区有 s1/s2 两条真会话，s4 是草稿不计数
-    expect(current.textContent).toContain("2");
-    expect(current.querySelector("span")?.className).toContain("ring-brand");
+    const entry = screen.getByRole("button", { name: /工作区/ });
+    // 该工作区有 s1/s2 两条真会话——数字不该再出现在入口上
+    expect(entry.textContent).toBe("A");
+  });
 
-    const other = screen.getByRole("button", { name: "E:/dev/other" });
-    expect(other).toHaveTextContent("O");
-    expect(other.querySelector("span")?.className).not.toContain("ring-brand");
+  /// 折叠态收窄导航区与设置区的左右内边距，让 15px 图标在 56px 里居中。
+  it("折叠态导航区收窄内边距", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    const { container } = await mount();
+    expect(container.querySelector("nav")?.className).toContain("px-1.5");
+    expect(container.querySelector("footer")?.className).toContain("px-1.5");
+  });
+
+  /// 折叠态没有文字，Tooltip 必须承担「功能名 + 快捷键」的说明职责；
+  /// 键位从可配置键位表下发（App 传 shortcut），不能硬编码。
+  it("折叠态图标带「功能名 · 快捷键」提示", async () => {
+    localStorage.setItem("aura-sidebar-collapsed", "1");
+    const blocks = [
+      { id: "new", label: "新建对话", icon: MessageSquarePlus, onClick: vi.fn(), shortcut: "Ctrl+N" },
+      { id: "skills", label: "Skills", icon: Sparkles, onClick: vi.fn() },
+      { id: "mcp", label: "MCP", icon: Plug, onClick: vi.fn() },
+      { id: "timeline", label: "轨迹", icon: History, onClick: vi.fn() },
+    ];
+    const { container } = await mount({ navBlocks: blocks });
+    const btns = Array.from(container.querySelectorAll("nav button"));
+    expect(btns[0]?.title).toBe("新建对话 · Ctrl+N");
+    // 没有快捷键的项退化为纯功能名
+    expect(btns[1]?.title).toBe("Skills");
+    // 设置按钮由 Sidebar 自己从键位表读默认键位
+    expect(container.querySelector("footer button")?.title).toBe("设置 · Ctrl+,");
   });
 });

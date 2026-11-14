@@ -183,6 +183,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     open: openRightbar,
     close: closeRightbar,
   } = useRightbarTransition();
+  // 可配置全局快捷键（v0.8.1）：键位表由设置页维护，这里只负责查表分发。
+  // 声明在 navBlocks 之前：折叠态侧栏的 Tooltip 要展示实际键位。
+  const shortcuts = useShortcuts();
   // 左侧导航默认区块，由 Shell 拥有 onClick 闭包（newSession / setView 等）。
   const navBlocks: { id: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; onClick: () => void; panel?: string }[] = useMemo(
     () => [
@@ -194,6 +197,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
           newSession();
           setView("chat");
         },
+        // 折叠态侧栏的 Tooltip 展示实际键位（用户改过键位后不能失真）
+        shortcut: shortcuts.newSession,
       },
       {
         id: "skills",
@@ -214,7 +219,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
         onClick: () => setView("timeline"),
       },
     ],
-    [newSession, setView],
+    [newSession, setView, shortcuts],
   );
   const [menu, setMenu] = useState<MenuState | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
@@ -469,8 +474,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useTheme> }) {
     modeRef.current = mode;
   }, [mode]);
 
-  // 可配置全局快捷键（v0.8.1）：键位表由设置页维护，这里只负责查表分发。
-  const shortcuts = useShortcuts();
+  // 全局快捷键已在前方声明；这里只取引用供 keydown 闭包读取最新键位。
   const shortcutsRef = useRef(shortcuts);
   // 直接赋值而非 effect：改完键位的那一帧就该生效，不能落后一个渲染周期
   shortcutsRef.current = shortcuts;

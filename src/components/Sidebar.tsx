@@ -11,6 +11,9 @@ import { useStore } from "../store";
 import { workspaceInitial, workspaceTint } from "../lib/workspaceBadge";
 import { groupSessionsByTime, relativeTime } from "../lib/history";
 import { useShowSessionTime } from "../hooks/useShowSessionTime";
+import { useShortcuts } from "../hooks/useShortcuts";
+import { useAnchoredPanel } from "../hooks/useAnchoredPanel";
+import { useOverlay } from "../hooks/useOverlay";
 import ConfirmDialog from "./ConfirmDialog";
 
 const COLLAPSE_KEY = "aura-sidebar-collapsed";
@@ -26,6 +29,8 @@ export interface NavBlock {
   onClick: () => void;
   /** 点击后打开的右侧面板内容类型（可选，供右侧面板联动） */
   panel?: string;
+  /** 折叠态 Tooltip 里展示的快捷键（键位可配置，由调用方从键位表下发） */
+  shortcut?: string;
 }
 
 interface Props {
@@ -90,6 +95,20 @@ export default function Sidebar({
   );
   const collapsed = controlledCollapsed ?? innerCollapsed;
 
+  // 折叠态 Tooltip 的快捷键从键位表读：用户改过键位后提示不能失真。
+  const shortcuts = useShortcuts();
+
+  // 折叠态工作区浮层：单入口按钮 + anchored 面板。Esc 走全局浮层栈。
+  const [wsOpen, setWsOpen] = useState(false);
+  const wsAnchorRef = useRef<HTMLButtonElement>(null);
+  const wsPanelRef = useRef<HTMLDivElement>(null);
+  const wsPanelPos = useAnchoredPanel(wsAnchorRef, wsPanelRef, wsOpen, "bottom");
+  useOverlay("sidebar-workspaces", wsOpen, () => setWsOpen(false));
+  // 切回展开态时浮层必须收起：anchor 已不在 DOM，留着会显示在旧位置。
+  useEffect(() => {
+    if (!collapsed) setWsOpen(false);
+  }, [collapsed]);
+
   // 是否曾经展开过：折叠态靠它决定是否显示「展开侧边栏」按钮。
   const everWide = useRef(!collapsed);
   if (!collapsed) everWide.current = true;
@@ -131,17 +150,14 @@ function toggleExpand(w: string) {
   const labelOff = "max-w-0 opacity-0";
   const labelOn = "max-w-40 opacity-100";
 
-  // 展开态与标题栏连成灰底，收起态是白色悬浮卡片。这两套外观必须
-  // 一起过渡：此前只过渡 width/min-height，bg-chrome→bg-surface 与
-  // margin/圆角/边框/阴影都是瞬间切换，灰色块「啪」地消失一下。
-  // 两态都保留 1px 边框（展开态透明）避免 border-width 跳变。
+  // 两态共用同一套外壳：chrome 灰底 + 右侧 1px 极细线区分主内容区。
+  // 折叠态不再有外框、圆角、阴影与外边距（用户拍板：悬浮卡片形态退役），
+  // 于是过渡只剩宽度一项，背景/边框不会再有「啪一下」的瞬间切换。
   return (
     <>
     <aside
-      className={`aura-sidebar flex shrink-0 flex-col self-start overflow-hidden transition-[width,min-height,max-height,margin,background-color,border-color,border-radius,box-shadow] duration-200 ease-in-out ${
-        collapsed
-          ? "m-2 max-h-[calc(100%-1rem)] w-14 min-h-0 rounded-card border border-line bg-surface shadow-sm"
-          : "m-0 max-h-full min-h-full w-64 rounded-none border border-transparent bg-chrome shadow-none"
+      className={`aura-sidebar flex shrink-0 flex-col overflow-hidden border-r border-line bg-chrome transition-[width] duration-200 ease-in-out ${
+        collapsed ? "w-14" : "w-64"
       }`}
       style={{ width: collapsed ? undefined : (width ?? undefined) }}
     >
@@ -179,7 +195,7 @@ function toggleExpand(w: string) {
             type="button"
             onClick={toggleCollapsed}
             aria-label="展开侧边栏"
-            title="展开侧边栏"
+            title={`展开侧边栏 · ${shortcuts.toggleSidebar}`}
             className="ml-auto shrink-0 rounded-tag p-1 text-subtle transition-colors hover:bg-bubble hover:text-foreground"
           >
             <PanelLeft size={14} />
@@ -192,20 +208,25 @@ function toggleExpand(w: string) {
 
           pb-3 是刻意留的：此前 nav 与下方会话列表之间一点空隙都没有，
           「轨迹」的下边缘几乎贴着第一条会话，视觉上像挤在一起（实测反馈）。 */}
-      <nav className="shrink-0 px-3 pb-3">
+      <nav className={`shrink-0 pb-3 transition-[padding] duration-200 ease-in-out ${collapsed ? "px-1.5" : "px-3"}`}>
         {navBlocks.map((block) => {
           const active = block.panel
             ? activePanel === block.panel
             : block.id !== "new" && view === block.id;
           // 新会话单独成块：带边框的胶囊，悬停露出快捷键提示
           const isNew = block.id === "new";
+          // 折叠态 Tooltip 要带上快捷键：功能名在前、键位在后，
+          // 键位由调用方从可配置键位表下发，不能硬编码。
+          const hint = block.shortcut
+            ? `${block.label} · ${block.shortcut}`
+            : block.label;
           return (
             <button
               key={block.id}
               type="button"
               onClick={block.onClick}
               aria-current={active ? "page" : undefined}
-              title={isNew ? "新建对话 · Ctrl + N" : collapsed ? block.label : undefined}
+              title={isNew || collapsed ? hint : undefined}
               className={`group flex w-full items-center rounded-tag py-2 text-left text-sm transition-colors ${
                 collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
               } ${
@@ -233,7 +254,7 @@ function toggleExpand(w: string) {
               </span>
               {isNew && !collapsed && (
                 <kbd className="ml-auto hidden shrink-0 text-[10px] text-subtle group-hover:inline">
-                  Ctrl + N
+                  {(block.shortcut ?? "Ctrl+N").replace(/\+/g, " + ")}
                 </kbd>
               )}
             </button>
@@ -247,51 +268,32 @@ function toggleExpand(w: string) {
         </div>
       )}
 
-      {/* 工作区列表。折叠态是圆点指示器、展开态是可折叠分组，
-          两者结构不同构，只能各自渲染；宽度过渡期间被 overflow-hidden 裁切。
-          折叠态不加 flex-1：圆点紧贴下方设置按钮，避免中段被撑出大片空白。 */}
-      <div
-        className={`scrollbar-hidden min-h-0 overflow-y-auto ${
-          collapsed ? "pb-0" : "flex-1 pb-2"
-        }`}
-      >
+      {/* 工作区列表。折叠态只留一枚当前工作区入口，其余收进浮层——
+          56px 塞不下一列首字方块，数字角标堆叠也看不清（用户反馈）；
+          展开态是可折叠分组。两者结构不同构，只能各自渲染。
+          两态都 flex-1：设置按钮天然钉在底部。 */}
+      <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto pb-2">
         {collapsed ? (
-          <div className="px-2 py-1">
-            {workspaces.map((w) => {
-              // 只数真正进侧栏的会话（草稿不进列表，也不该进角标）
-              const count = sessions.filter(
-                (x) => x.workspace === w && x.messages.length > 0,
-              ).length;
-              const isCurrent = w === workspace;
-              return (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => {
-                    switchWorkspace(w);
-                    onNavigate?.();
-                  }}
-                  title={count > 0 ? `${w} · ${count} 个对话` : w}
-                  aria-label={w}
-                  className="mx-auto flex w-full items-center justify-center rounded-tag py-1.5 transition-colors hover:bg-bubble"
-                >
-                  {/* 首字方块替代圆点：56px 宽里只有颜色的话三个工作区分不开。
-                      当前工作区用品牌色描边，不抢底色（底色已经表示「是哪一个」）。 */}
-                  <span
-                    className={`relative flex h-4 w-4 items-center justify-center rounded-[5px] text-[9px] font-semibold leading-none ${workspaceTint(
-                      basename(w),
-                    )} ${isCurrent ? "ring-1 ring-brand" : ""}`}
-                  >
-                    {workspaceInitial(basename(w))}
-                    {count > 0 && (
-                      <span className="absolute -bottom-1.5 -right-1.5 rounded-full bg-surface px-1 text-[9px] leading-[12px] text-subtle ring-1 ring-line">
-                        {count}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="px-1.5 py-1">
+            <button
+              ref={wsAnchorRef}
+              type="button"
+              onClick={() => setWsOpen((v) => !v)}
+              title={`工作区 · ${basename(workspace || "") || "未选择"}`}
+              aria-label={`工作区 · ${basename(workspace || "") || "未选择"}`}
+              aria-haspopup="menu"
+              aria-expanded={wsOpen}
+              className="mx-auto flex w-full items-center justify-center rounded-tag py-1.5 transition-colors hover:bg-bubble"
+            >
+              {/* 首字方块标明当前工作区是哪一个；切换入口收进浮层 */}
+              <span
+                className={`flex h-4 w-4 items-center justify-center rounded-[5px] text-[9px] font-semibold leading-none ${workspaceTint(
+                  basename(workspace || ""),
+                )}`}
+              >
+                {workspaceInitial(basename(workspace || ""))}
+              </span>
+            </button>
           </div>
         ) : (
           <div className="px-3">
@@ -449,16 +451,18 @@ const isOpen = expanded.has(w);
         )}
       </div>
 
-      {/* mt-auto：折叠时列表 DOM 瞬间从分组切换为圆点（短），若无自动
-          外边距，设置按钮会立刻跳到圆点下方，而下边缘还在 min-height
-          过渡中慢慢上升——表现为「先提按钮、再收边缘」。有了 mt-auto，
-          过渡中产生的自由空间被它吸收，按钮钉在底边随下边缘一起上升；
-          静态两态没有自由空间，表现与此前完全一致。 */}
-      <footer className="mt-auto shrink-0 px-3 pb-3">
+      {/* mt-auto：列表 flex-1 已占满中段，这里只是兜底，保证设置按钮
+          在任何异常布局下都贴住底边。 */}
+      <footer
+        className={`mt-auto shrink-0 pb-3 transition-[padding] duration-200 ease-in-out ${
+          collapsed ? "px-1.5" : "px-3"
+        }`}
+      >
         <button
           type="button"
           onClick={onOpenSettings}
           aria-current={view === "settings" ? "page" : undefined}
+          title={collapsed ? `设置 · ${shortcuts.openSettings}` : undefined}
           className={`flex w-full items-center rounded-tag py-1.5 text-sm transition-colors hover:bg-bubble hover:text-foreground ${
             collapsed ? "justify-center gap-0 px-0" : "gap-2.5 pl-1 pr-2"
           } ${
@@ -480,6 +484,63 @@ const isOpen = expanded.has(w);
         </button>
       </footer>
     </aside>
+    {wsOpen &&
+      createPortal(
+        /* 透明遮罩只负责「点外面就关」；面板经 useAnchoredPanel 定位，
+           视口不够时自动翻面（与「在…中打开」菜单同一套语义）。 */
+        <div className="fixed inset-0 z-[1090]" onClick={() => setWsOpen(false)}>
+          <div
+            ref={wsPanelRef}
+            role="menu"
+            aria-label="切换工作区"
+            style={wsPanelPos}
+            onClick={(e) => e.stopPropagation()}
+            className="w-56 rounded-card border border-line bg-surface py-1 shadow-lg"
+          >
+            <p className="px-3 pb-1 pt-2 text-[10px] font-medium tracking-[0.08em] text-subtle">
+              工作区
+            </p>
+            {workspaces.map((w) => {
+              // 只数真正进侧栏的会话（草稿不进列表，也不该计数）
+              const count = sessions.filter(
+                (x) => x.workspace === w && x.messages.length > 0,
+              ).length;
+              const isCurrent = w === workspace;
+              return (
+                <button
+                  key={w}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    switchWorkspace(w);
+                    onNavigate?.();
+                    setWsOpen(false);
+                  }}
+                  title={count > 0 ? `${w} · ${count} 个对话` : w}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
+                    isCurrent
+                      ? "bg-bubble-user font-medium text-foreground"
+                      : "hover:bg-bubble"
+                  }`}
+                >
+                  <span
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[9px] font-semibold leading-none ${workspaceTint(
+                      basename(w),
+                    )}`}
+                  >
+                    {workspaceInitial(basename(w))}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{basename(w)}</span>
+                  {count > 0 && (
+                    <span className="shrink-0 text-[10px] text-subtle">{count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
     {pendingDelete &&
       createPortal(
         <ConfirmDialog
