@@ -372,6 +372,20 @@ impl Connection {
                         .filter(|d| !d.trim().is_empty())
                         .unwrap_or("（服务器未提供描述）")
                         .to_string();
+                    // v0.8.2 任务 3.5：工具描述会被模型读进上下文，对它跑
+                    // 注入检测。只记录不改写——描述是否可信交由用户判断，
+                    // 拦截会让整台服务器静默消失，排查无从下手。
+                    let inj_hits = crate::security::rules::check_injection(&description);
+                    if !inj_hits.is_empty() {
+                        let ids: Vec<&str> = inj_hits.iter().map(|h| h.id).collect();
+                        crate::security::log_simple(
+                            crate::security::Kind::McpInjection,
+                            "",
+                            &format!("{}/{}", self.server_name, name),
+                            &format!("工具描述命中注入规则: {}", ids.join(", ")),
+                            inj_hits[0].id,
+                        );
+                    }
                     let input_schema = t.get("inputSchema").cloned().unwrap_or(Value::Null);
                     // 注解只收对象形式，原样保存供设置页展示；解析层不做任何
                     // 语义判断，避免「readOnlyHint」悄悄流进放行链路。

@@ -47,6 +47,8 @@ pub enum Kind {
     McpPrompt,
     /// 命中 RequireApproval / Warn 规则但未被拦下（审批放行或仅告警，v0.8.2）
     WarnedCommand,
+    /// MCP 工具描述或返回内容命中注入检测（v0.8.2 任务 3.5）
+    McpInjection,
 }
 
 impl Kind {
@@ -63,6 +65,7 @@ impl Kind {
             Kind::McpResource => "mcp_resource",
             Kind::McpPrompt => "mcp_prompt",
             Kind::WarnedCommand => "warned_command",
+            Kind::McpInjection => "mcp_injection",
         }
     }
 
@@ -79,6 +82,7 @@ impl Kind {
             Kind::McpResource => "MCP 资源读取",
             Kind::McpPrompt => "MCP 提示词展开",
             Kind::WarnedCommand => "规则告警",
+            Kind::McpInjection => "注入疑点",
         }
     }
 }
@@ -164,6 +168,7 @@ fn kind_label(kind: &str) -> String {
         "mcp_resource" => "MCP 资源读取".into(),
         "mcp_prompt" => "MCP 提示词展开".into(),
         "warned_command" => "规则告警".into(),
+        "mcp_injection" => "注入疑点".into(),
         other => other.to_string(),
     }
 }
@@ -235,6 +240,8 @@ mod tests {
         assert_eq!(Kind::McpPrompt.as_str(), "mcp_prompt");
         assert_eq!(Kind::WarnedCommand.as_str(), "warned_command");
         assert_eq!(Kind::WarnedCommand.label(), "规则告警");
+        assert_eq!(Kind::McpInjection.as_str(), "mcp_injection");
+        assert_eq!(Kind::McpInjection.label(), "注入疑点");
     }
 
     /// 命令原文里带逗号与引号是常态，导出必须仍是正确的 CSV。

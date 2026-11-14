@@ -332,7 +332,7 @@ pub struct SecurityEvent {
     pub session_id: String,
     /// blocked_command / path_denied / mode_denied / approval_denied /
     /// approval_allowed / risky_install / mcp_call / mcp_trust_change /
-    /// mcp_resource / mcp_prompt / warned_command
+    /// mcp_resource / mcp_prompt / warned_command / mcp_injection
     pub kind: String,
     /// 被拦的对象：命令原文、路径、工具名
     pub subject: String,
