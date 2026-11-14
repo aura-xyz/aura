@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ use super::resources::{
     parse_resource_contents, parse_resource_page, truncate_utf8, validate_resource_uri,
     McpResource, ResourceReadResult, MAX_RESOURCE_BYTES, MAX_RESOURCES,
 };
-use super::session::RpcSession;
+use super::session::{Inbound, RpcSession};
 use super::transport::{StdioTransport, Transport};
 
 // 保持一期对外符号不变：其他模块与既有单测仍从 client 引用这两个函数。
@@ -121,6 +121,62 @@ pub struct Connection {
     stopped: AtomicBool,
     /// 自动重连参数；None 表示保持一期「不自动重启」。
     reconnect: Option<ReconnectSpec>,
+    /// sampling 请求的会话级配额（M3-05）
+    sampling: SamplingGate,
+}
+
+/// 单连接允许的 sampling 请求上限；与信任等级无关，独立计数。
+pub const SAMPLING_LIMIT: usize = 8;
+
+/// 会话级配额闸门。抽成独立类型便于单测「超限即拒」而不必起连接。
+pub struct SamplingGate {
+    used: AtomicUsize,
+    limit: usize,
+}
+
+impl SamplingGate {
+    pub fn new(limit: usize) -> Self {
+        SamplingGate {
+            used: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    /// 返回 false 表示配额已用尽；计数只增不减，重连时连接对象会重建。
+    pub fn try_take(&self) -> bool {
+        self.used.fetch_add(1, Ordering::SeqCst) < self.limit
+    }
+}
+
+/// 模型调用的审批与执行由上层注入（M3-08 接 UI 审批与模型客户端）。
+///
+/// **默认不注入 = 一律拒绝**：MCP 服务器反向请求模型属于授权边界问题，
+/// 在没有任何审批器存在时绝不能静默放行。实现方须把 `params` 当不可信
+/// 文本处理，不写 history、不解析其中协议标签。
+pub trait SamplingHandler: Send + Sync {
+    fn approve(&self, server_name: &str, params: &Value) -> bool;
+    fn complete(&self, params: &Value) -> Result<Value, String>;
+}
+
+fn sampling_handler() -> &'static std::sync::RwLock<Option<Arc<dyn SamplingHandler>>> {
+    static H: std::sync::OnceLock<std::sync::RwLock<Option<Arc<dyn SamplingHandler>>>> =
+        std::sync::OnceLock::new();
+    H.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+pub fn set_sampling_handler(h: Option<Arc<dyn SamplingHandler>>) {
+    if let Ok(mut g) = sampling_handler().write() {
+        *g = h;
+    }
+}
+
+/// 构造 JSON-RPC 错误响应（纯函数，单测钉住格式）。
+pub fn sampling_error(id: u64, code: i32, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message }
+    })
 }
 
 impl Connection {
@@ -147,6 +203,7 @@ impl Connection {
             },
             stopped: AtomicBool::new(false),
             reconnect,
+            sampling: SamplingGate::new(SAMPLING_LIMIT),
             session: RpcSession::new(),
             status: RwLock::new(ConnStatus::Connecting),
             stderr_tail: StdMutex::new(VecDeque::new()),
@@ -353,6 +410,84 @@ impl Connection {
             .await
     }
 
+    /// 回复服务器发起的请求（M3-05）。`encode_message` 是请求格式，
+    /// 这里手写响应帧；`Transport::write_line` 负责帧分隔。
+    async fn respond(
+        &self,
+        id: u64,
+        outcome: Result<Value, (i32, String)>,
+    ) -> Result<(), String> {
+        let msg = match outcome {
+            Ok(v) => json!({ "jsonrpc": "2.0", "id": id, "result": v }),
+            Err((code, message)) => sampling_error(id, code, &message),
+        };
+        let line = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        self.transport.write_line(line).await
+    }
+
+    /// 处理服务器反向请求。当前只认 `sampling/createMessage`，其余一律
+    /// 回 MethodNotFound —— 绝不静默丢弃，也绝不自动放行。
+    ///
+    /// 四道关卡：方法白名单 → 服务器能力声明 → 会话配额 → 独立审批。
+    /// `trusted` 只影响工具审批档位，与这里无关。
+    async fn on_inbound_request(&self, id: u64, method: &str, params: &Value) {
+        let outcome: Result<Value, (i32, String)> = if method != "sampling/createMessage" {
+            Err((-32601, format!("不支持的服务器请求：{method}")))
+        } else if !self.capabilities().await.sampling {
+            Err((-32601, "服务器未声明 sampling 能力".to_string()))
+        } else if !self.sampling.try_take() {
+            crate::security::log_simple(
+                crate::security::Kind::McpSampling,
+                "",
+                &self.server_name,
+                "sampling 配额超限",
+                "mcp_sampling",
+            );
+            Err((-32000, "sampling 配额已用尽".to_string()))
+        } else {
+            let handler = sampling_handler()
+                .read()
+                .ok()
+                .and_then(|g| g.clone());
+            match handler {
+                None => {
+                    crate::security::log_simple(
+                        crate::security::Kind::McpSampling,
+                        "",
+                        &self.server_name,
+                        "未注入审批器，拒绝模型调用",
+                        "mcp_sampling",
+                    );
+                    Err((-32001, "用户未批准模型调用".to_string()))
+                }
+                Some(h) if !h.approve(&self.server_name, params) => {
+                    crate::security::log_simple(
+                        crate::security::Kind::McpSampling,
+                        "",
+                        &self.server_name,
+                        "用户拒绝 sampling 请求",
+                        "mcp_sampling",
+                    );
+                    Err((-32001, "用户拒绝了模型调用".to_string()))
+                }
+                Some(h) => match h.complete(params) {
+                    Ok(v) => {
+                        crate::security::log_simple(
+                            crate::security::Kind::McpSampling,
+                            "",
+                            &self.server_name,
+                            "用户批准 sampling 请求",
+                            "mcp_sampling",
+                        );
+                        Ok(v)
+                    }
+                    Err(e) => Err((-32000, format!("模型调用失败：{e}"))),
+                },
+            }
+        };
+        let _ = self.respond(id, outcome).await;
+    }
+
     /// 拉取工具集：`tools/list` 支持 cursor 翻页，逐页取尽后截断到上限。
     pub async fn refresh_tools(&self) -> Result<Vec<McpToolDef>, String> {
         let mut all: Vec<McpToolDef> = Vec::new();
@@ -508,8 +643,8 @@ impl Connection {
     async fn handshake(&self) -> Result<(), String> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
-            // M2-02：声明 resources / prompts 两个域，服务器才会推对应通知。
-            // sampling 留给三期，不在这里声明。
+            // M2-02 声明 resources / prompts；M3-05 起显式加 sampling，
+            // 由 client_capabilities() 统一维护，协议版本策略不变。
             "capabilities": client_capabilities(),
             "clientInfo": { "name": "aura", "version": env!("CARGO_PKG_VERSION") }
         });
@@ -534,11 +669,15 @@ impl Connection {
 async fn inbound_loop(conn: Arc<Connection>, mut rx: tokio::sync::mpsc::Receiver<String>) {
     while let Some(line) = rx.recv().await {
         match decode_line(&line) {
-            Ok(Some(v)) => {
-                if let Some((method, params)) = conn.session.dispatch(v) {
+            Ok(Some(v)) => match conn.session.dispatch_full(v) {
+                Some(Inbound::Notification(method, params)) => {
                     conn.on_notification(&method, &params).await;
                 }
-            }
+                Some(Inbound::Request(id, method, params)) => {
+                    conn.on_inbound_request(id, &method, &params).await;
+                }
+                None => {}
+            },
             Ok(None) => {}
             Err(e) => conn.push_stderr(e),
         }
@@ -559,11 +698,15 @@ async fn stdout_loop(conn: Arc<Connection>, stdout: ChildStdout) {
         match reader.read_line(&mut line).await {
             Ok(0) => break, // EOF：子进程退出或关闭了 stdout
             Ok(_) => match decode_line(&line) {
-                Ok(Some(v)) => {
-                    if let Some((method, params)) = conn.session.dispatch(v) {
+                Ok(Some(v)) => match conn.session.dispatch_full(v) {
+                    Some(Inbound::Notification(method, params)) => {
                         conn.on_notification(&method, &params).await;
                     }
-                }
+                    Some(Inbound::Request(id, method, params)) => {
+                        conn.on_inbound_request(id, &method, &params).await;
+                    }
+                    None => {}
+                },
                 Ok(None) => {}
                 Err(e) => conn.push_stderr(e),
             },
@@ -864,5 +1007,40 @@ mod tests {
     fn status_label_matches_kind() {
         assert_eq!(ConnStatus::Running.label(), "running");
         assert_eq!(ConnStatus::Down { reason: "x".into() }.label(), "down");
+    }
+}
+
+/// M3-05：配额与错误帧格式是 sampling 安全默认的两道硬约束。
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+
+    #[test]
+    fn quota_stops_after_limit() {
+        let gate = SamplingGate::new(2);
+        assert!(gate.try_take());
+        assert!(gate.try_take());
+        assert!(!gate.try_take());
+        assert!(!gate.try_take());
+    }
+
+    #[test]
+    fn error_frame_keeps_id_code_and_message() {
+        let v = sampling_error(7, -32001, "用户未批准模型调用");
+        assert_eq!(v["jsonrpc"], "2.0");
+        assert_eq!(v["id"], 7);
+        assert_eq!(v["error"]["code"], -32001);
+        assert_eq!(v["error"]["message"], "用户未批准模型调用");
+        assert!(v.get("result").is_none());
+    }
+
+    #[test]
+    fn default_handler_slot_is_empty() {
+        // 未注入审批器时 on_inbound_request 走「默认拒绝」分支；
+        // 这里钉住全局槽位初值，避免某个实现误把默认改成自动放行。
+        assert!(sampling_handler()
+            .read()
+            .map(|g| g.is_none())
+            .unwrap_or(false));
     }
 }

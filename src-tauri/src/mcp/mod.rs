@@ -476,7 +476,8 @@ mod acceptance_tests {
     #[test]
     fn handshake_result_roundtrips_into_domain_flags() {
         let caps = client_capabilities();
-        assert!(caps.get("sampling").is_none());
+        // 二期 §2.4 要求不含 sampling；M3-05 是三期唯一允许的能力声明变更
+        assert!(caps.get("sampling").is_some());
         let result = json!({
             "protocolVersion": "2025-11-25",
             "serverInfo": { "name": "fs", "version": "1.0" },

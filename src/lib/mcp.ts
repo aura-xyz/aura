@@ -84,6 +84,8 @@ export interface McpCapabilities {
   resources_subscribe: boolean;
   prompts: boolean;
   prompts_list_changed: boolean;
+  /** 服务器是否声明 sampling（M3-05） */
+  sampling: boolean;
 }
 
 /** 单服务器状态详情。 */
@@ -105,6 +107,7 @@ export function capabilityDomains(c: McpCapabilities | null | undefined): {
     { label: "tools", on: !!c?.tools },
     { label: "resources", on: !!c?.resources },
     { label: "prompts", on: !!c?.prompts },
+    { label: "sampling", on: !!c?.sampling },
   ];
 }
 

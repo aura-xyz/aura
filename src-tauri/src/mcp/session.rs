@@ -38,6 +38,13 @@ pub fn decode_line(line: &str) -> Result<Option<Value>, String> {
         .map_err(|e| format!("无法解析服务器消息：{e}"))
 }
 
+/// 入站消息分类。请求必须带 id 才能回响应；未注册的请求不应该被静默丢弃。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Inbound {
+    Notification(String, Value),
+    Request(u64, String, Value),
+}
+
 pub struct RpcSession {
     next_id: AtomicU64,
     pending: StdMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
@@ -98,8 +105,17 @@ impl RpcSession {
     ///
     /// params 必须一起带回去：`notifications/resources/updated` 要靠
     /// `params.uri` 判断是哪条资源变了，只给 method 名不够用。
-    pub fn dispatch(&self, v: Value) -> Option<(String, Value)> {
+    /// 完整分发（M3-05）：区分「响应」「通知」「服务器发起的请求」。
+    ///
+    /// 一/二期把带 `id` 的消息一律当响应，`sampling/createMessage` 这类
+    /// 反向请求会被静默丢弃。这里按「有 id 且带 method」识别请求，
+    /// 交给连接层做审批与配额；既有响应投递逻辑一字不改。
+    pub fn dispatch_full(&self, v: Value) -> Option<Inbound> {
         if let Some(id) = v.get("id").and_then(|x| x.as_u64()) {
+            if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
+                let params = v.get("params").cloned().unwrap_or(Value::Null);
+                return Some(Inbound::Request(id, method.to_string(), params));
+            }
             let tx = self.pending.lock().ok().and_then(|mut m| m.remove(&id));
             if let Some(tx) = tx {
                 if let Some(err) = v.get("error") {
@@ -116,7 +132,15 @@ impl RpcSession {
         }
         let method = v.get("method").and_then(|m| m.as_str())?;
         let params = v.get("params").cloned().unwrap_or(Value::Null);
-        Some((method.to_string(), params))
+        Some(Inbound::Notification(method.to_string(), params))
+    }
+
+    /// 兼容入口：只把通知交给上层（一/二期调用方与既有单测保持原语义）。
+    pub fn dispatch(&self, v: Value) -> Option<(String, Value)> {
+        match self.dispatch_full(v) {
+            Some(Inbound::Notification(m, p)) => Some((m, p)),
+            _ => None,
+        }
     }
 
     /// 连接关闭时让所有等待中的请求立刻失败，而不是各自熬到超时。
@@ -217,5 +241,55 @@ mod tests {
             .request(&t, "tools/list", json!({}), Duration::from_millis(1))
             .await;
         assert_eq!(t.lines.lock().unwrap().len(), 2);
+    }
+}
+
+/// M3-05：服务器发起的请求必须与响应、通知分开，否则会被静默丢弃。
+#[cfg(test)]
+mod inbound_tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_full_separates_three_kinds() {
+        let s = RpcSession::new();
+        assert_eq!(
+            s.dispatch_full(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/tools/list_changed",
+                "params": {}
+            })),
+            Some(Inbound::Notification(
+                "notifications/tools/list_changed".to_string(),
+                json!({})
+            ))
+        );
+        assert_eq!(
+            s.dispatch_full(json!({
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "sampling/createMessage",
+                "params": { "messages": [] }
+            })),
+            Some(Inbound::Request(
+                9,
+                "sampling/createMessage".to_string(),
+                json!({ "messages": [] })
+            ))
+        );
+        assert_eq!(
+            s.dispatch_full(json!({ "jsonrpc": "2.0", "id": 9, "result": {} })),
+            None
+        );
+    }
+
+    #[test]
+    fn legacy_dispatch_still_only_returns_notifications() {
+        let s = RpcSession::new();
+        assert!(s
+            .dispatch(json!({ "jsonrpc": "2.0", "id": 3, "method": "sampling/createMessage" }))
+            .is_none());
+        assert!(s
+            .dispatch(json!({ "jsonrpc": "2.0", "method": "ping", "params": {} }))
+            .is_some());
     }
 }

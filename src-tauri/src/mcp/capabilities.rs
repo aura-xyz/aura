@@ -21,6 +21,8 @@ pub struct ServerCapabilities {
     pub resources_subscribe: bool,
     pub prompts: bool,
     pub prompts_list_changed: bool,
+    /// 服务器是否声明 sampling（M3-05）；缺字段一律 false
+    pub sampling: bool,
 }
 
 impl ServerCapabilities {
@@ -35,6 +37,9 @@ impl ServerCapabilities {
         }
         if self.prompts {
             out.push("prompts");
+        }
+        if self.sampling {
+            out.push("sampling");
         }
         out
     }
@@ -71,17 +76,20 @@ pub fn parse_capabilities(result: &Value) -> ServerCapabilities {
         resources_subscribe: flag(&resources, "subscribe"),
         prompts: prompts.is_object(),
         prompts_list_changed: flag(&prompts, "listChanged"),
+        sampling: caps.get("sampling").map(|s| s.is_object()).unwrap_or(false),
     }
 }
 
 /// 客户端在 `initialize` 里声明的能力。
 ///
-/// 只声明 resources（含 subscribe）与 prompts；**不含 sampling**——服务器
-/// 反向请求模型属于授权边界问题，按二期计划留给三期。
+/// 二期 §2.4 的口径是 resources + prompts、**不含 sampling**；M3-05 是三期
+/// 唯一允许的能力声明变更，显式加入 `sampling: {}`。协议版本策略不变：
+/// 仍报 `2025-06-18` 为最低共同版本，以服务器返回值为准。
 pub fn client_capabilities() -> Value {
     serde_json::json!({
         "resources": { "subscribe": true },
-        "prompts": {}
+        "prompts": {},
+        "sampling": {}
     })
 }
 
@@ -132,10 +140,23 @@ mod tests {
     }
 
     #[test]
-    fn client_never_declares_sampling() {
+    fn client_declares_sampling_only_from_phase3() {
         let c = client_capabilities();
-        assert!(c.get("sampling").is_none());
+        assert!(c.get("sampling").is_some());
         assert!(c["resources"]["subscribe"].as_bool().unwrap_or(false));
         assert!(c.get("prompts").is_some());
+    }
+
+    #[test]
+    fn sampling_capability_is_parsed_and_shown_as_domain() {
+        let declared = parse_capabilities(&json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": { "tools": {}, "sampling": {} }
+        }));
+        assert!(declared.sampling);
+        assert!(declared.domains().contains(&"sampling"));
+        let missing = parse_capabilities(&json!({ "capabilities": { "tools": {} } }));
+        assert!(!missing.sampling, "缺字段必须当不支持");
+        assert!(!missing.domains().contains(&"sampling"));
     }
 }

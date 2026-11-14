@@ -28,6 +28,7 @@ function caps(over: Partial<McpCapabilities> = {}): McpCapabilities {
     resources_subscribe: false,
     prompts: false,
     prompts_list_changed: false,
+    sampling: false,
     ...over,
   };
 }
@@ -146,19 +147,20 @@ describe("MCP 提示词契约（M2-06）", () => {
 });
 
 describe("capabilityDomains（M2-02）", () => {
-  it("三个域固定顺序，未声明的域也返回并标为关", () => {
+  it("四个域固定顺序，未声明的域也返回并标为关", () => {
     expect(capabilityDomains(caps({ tools: true }))).toEqual([
       { label: "tools", on: true },
       { label: "resources", on: false },
       { label: "prompts", on: false },
+      { label: "sampling", on: false },
     ]);
   });
 
-  it("全声明时三个都为开", () => {
+  it("全声明时四个都为开", () => {
     expect(
-      capabilityDomains(caps({ tools: true, resources: true, prompts: true })).every(
-        (d) => d.on,
-      ),
+      capabilityDomains(
+        caps({ tools: true, resources: true, prompts: true, sampling: true }),
+      ).every((d) => d.on),
     ).toBe(true);
   });
 

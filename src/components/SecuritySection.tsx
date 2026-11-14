@@ -43,6 +43,7 @@ const KIND_META: Record<string, { label: string; tone: string }> = {
   mcp_resource: { label: "MCP 资源读取", tone: "text-subtle" },
   mcp_prompt: { label: "MCP 提示词展开", tone: "text-subtle" },
   mcp_oauth: { label: "MCP 授权", tone: "text-warning" },
+  mcp_sampling: { label: "MCP 模型请求", tone: "text-warning" },
 };
 
 const POLICIES: Array<{ id: ApprovalPolicyId; label: string; hint: string }> = [

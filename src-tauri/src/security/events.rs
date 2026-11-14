@@ -51,6 +51,8 @@ pub enum Kind {
     McpInjection,
     /// MCP 远程服务器授权 / 刷新 / 撤销（v0.8.2 M3-04）
     McpOAuth,
+    /// MCP sampling 请求的批准 / 拒绝 / 配额超限（v0.8.2 M3-05）
+    McpSampling,
 }
 
 impl Kind {
@@ -69,6 +71,7 @@ impl Kind {
             Kind::WarnedCommand => "warned_command",
             Kind::McpInjection => "mcp_injection",
             Kind::McpOAuth => "mcp_oauth",
+            Kind::McpSampling => "mcp_sampling",
         }
     }
 
@@ -87,6 +90,7 @@ impl Kind {
             Kind::WarnedCommand => "规则告警",
             Kind::McpInjection => "注入疑点",
             Kind::McpOAuth => "MCP 授权",
+            Kind::McpSampling => "MCP 模型请求",
         }
     }
 }
@@ -174,6 +178,7 @@ fn kind_label(kind: &str) -> String {
         "warned_command" => "规则告警".into(),
         "mcp_injection" => "注入疑点".into(),
         "mcp_oauth" => "MCP 授权".into(),
+        "mcp_sampling" => "MCP 模型请求".into(),
         other => other.to_string(),
     }
 }
