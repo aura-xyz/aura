@@ -139,7 +139,9 @@ export default function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="命令面板"
-        className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-card border border-line bg-surface shadow-xl"
+        /* 650px 加宽：快捷键与解释文字有地方放右列；外层 p-6 已保证
+           小屏不溢出，无需额外断点。 */
+        className="flex max-h-[70vh] w-full max-w-[650px] flex-col overflow-hidden rounded-card border border-line bg-surface shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -162,9 +164,14 @@ export default function CommandPalette({
               没有匹配的结果
             </p>
           )}
-          {groups.map((group) => (
-            <section key={group.group}>
-              <p className="px-3 pb-0.5 pt-1.5 text-[10px] uppercase tracking-[0.08em] text-subtle">
+          {groups.map((group, gi) => (
+            /* 区块标题弱化成 9px 浅灰 eyebrow，组间只用一条极细分割线——
+               分组信息保留给键盘用户，但不再打断「全局搜索」的观感。 */
+            <section
+              key={group.group}
+              className={gi > 0 ? "border-t border-line/60" : undefined}
+            >
+              <p className="px-3 pb-0.5 pt-2 text-[9px] font-medium tracking-[0.12em] text-subtle">
                 {GROUP_LABEL[group.group]}
               </p>
               {group.items.map((item) => {
@@ -191,15 +198,35 @@ export default function CommandPalette({
                     ) : (
                       <span className="w-4 shrink-0" />
                     )}
-                    {Icon && <Icon size={13} className="shrink-0 text-subtle" />}
-                    <span className="shrink-0 text-sm">{item.label}</span>
+                    {/* 会话图标加浅色底 + 细描边：13px 的粗描边方框看着
+                        像一枚复选框（用户反馈），弱化后读作「一条会话」。 */}
+                    {Icon && (
+                      <span
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] ${
+                          item.group === "session" ? "bg-bubble" : ""
+                        }`}
+                      >
+                        <Icon
+                          size={13}
+                          strokeWidth={item.group === "session" ? 1.5 : undefined}
+                          className="shrink-0 text-subtle"
+                        />
+                      </span>
+                    )}
+                    {/* 主标题吃掉剩余空间并截断；detail 整体推到右列右对齐 */}
+                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                      {item.label}
+                    </span>
                     {recentIds.has(item.id) && (
                       <span className="shrink-0 rounded-full border border-brand/40 px-1 text-[9px] leading-4 text-brand">
                         最近
                       </span>
                     )}
                     {item.detail && (
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-subtle">
+                      <span
+                        title={item.detail}
+                        className="ml-2 max-w-[45%] shrink-0 truncate text-right text-[11px] text-subtle"
+                      >
                         {item.detail}
                       </span>
                     )}

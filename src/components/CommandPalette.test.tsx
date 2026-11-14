@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MessageSquare, MessageSquarePlus } from "lucide-react";
 import CommandPalette from "./CommandPalette";
 import { recordUse } from "../lib/frecency";
 import type { CommandItem } from "../lib/commandItems";
@@ -8,9 +9,21 @@ import type { CommandItem } from "../lib/commandItems";
 beforeEach(() => localStorage.clear());
 
 const ITEMS: CommandItem[] = [
-  { id: "action:new", label: "新建对话", detail: "", group: "action" },
+  {
+    id: "action:new",
+    label: "新建对话",
+    detail: "",
+    icon: MessageSquarePlus,
+    group: "action",
+  },
   { id: "action:settings", label: "打开设置", detail: "", group: "action" },
-  { id: "session:s1:-1", label: "修登录", detail: "3 条消息", group: "session" },
+  {
+    id: "session:s1:-1",
+    label: "修登录",
+    detail: "3 条消息",
+    icon: MessageSquare,
+    group: "session",
+  },
   { id: "skill:docx", label: "/docx", detail: "处理 Word", group: "skill" },
 ];
 
@@ -96,5 +109,50 @@ describe("CommandPalette", () => {
       (p) => p.textContent,
     );
     expect(labels[0]).toBe("动作");
+  });
+
+  /// v0.8.2 视觉层级改版：面板加宽到 650px，给右列快捷键/解释文字留位置。
+  it("面板最大宽度为 650px", () => {
+    const { getByRole } = setup();
+    expect(getByRole("dialog", { name: "命令面板" }).className).toContain(
+      "max-w-[650px]",
+    );
+  });
+
+  /// detail（快捷键、解释、消息数）统一推到右列右对齐，全文放进 title：
+  /// 长描述截断后悬停仍能看到完整内容。
+  it("detail 右对齐截断，悬停展示全文", () => {
+    setup();
+    const row = screen.getByText("修登录").closest("button")!;
+    const detail = row.querySelectorAll("span");
+    const tail = detail[detail.length - 1];
+    expect(tail.className).toContain("truncate");
+    expect(tail.className).toContain("text-right");
+    expect(tail.getAttribute("title")).toBe("3 条消息");
+  });
+
+  /// 13px 的粗描边 MessageSquare 看着像复选框：会话项加浅底 + 1.5 细描边，
+  /// 其它组图标保持默认粗细。
+  it("会话图标细描边加浅底，动作图标不变", () => {
+    setup();
+    const sessionRow = screen.getByText("修登录").closest("button")!;
+    expect(sessionRow.querySelector("svg")?.getAttribute("stroke-width")).toBe(
+      "1.5",
+    );
+    expect(sessionRow.innerHTML).toContain("bg-bubble");
+
+    const actionRow = screen.getByText("新建对话").closest("button")!;
+    expect(actionRow.querySelector("svg")?.getAttribute("stroke-width")).toBe(
+      "2",
+    );
+  });
+
+  /// 区块标题弱化 + 组间极细分割线：分组信息保留，但保持全局搜索感。
+  it("第一组无分割线，后续组有", () => {
+    const { container } = setup();
+    const sections = container.querySelectorAll("section");
+    expect(sections.length).toBeGreaterThan(1);
+    expect(sections[0].className).not.toContain("border-t");
+    expect(sections[1].className).toContain("border-t");
   });
 });
