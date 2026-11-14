@@ -49,6 +49,8 @@ pub enum Kind {
     WarnedCommand,
     /// MCP 工具描述或返回内容命中注入检测（v0.8.2 任务 3.5）
     McpInjection,
+    /// MCP 远程服务器授权 / 刷新 / 撤销（v0.8.2 M3-04）
+    McpOAuth,
 }
 
 impl Kind {
@@ -66,6 +68,7 @@ impl Kind {
             Kind::McpPrompt => "mcp_prompt",
             Kind::WarnedCommand => "warned_command",
             Kind::McpInjection => "mcp_injection",
+            Kind::McpOAuth => "mcp_oauth",
         }
     }
 
@@ -83,6 +86,7 @@ impl Kind {
             Kind::McpPrompt => "MCP 提示词展开",
             Kind::WarnedCommand => "规则告警",
             Kind::McpInjection => "注入疑点",
+            Kind::McpOAuth => "MCP 授权",
         }
     }
 }
@@ -169,6 +173,7 @@ fn kind_label(kind: &str) -> String {
         "mcp_prompt" => "MCP 提示词展开".into(),
         "warned_command" => "规则告警".into(),
         "mcp_injection" => "注入疑点".into(),
+        "mcp_oauth" => "MCP 授权".into(),
         other => other.to_string(),
     }
 }

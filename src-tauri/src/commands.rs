@@ -2726,6 +2726,193 @@ fn record_mcp_activity(
     let _ = db::add_timeline_entry(&db, &entry);
 }
 
+// ── OAuth 2.1 + PKCE（M3-04）─────────────────────────────────────
+
+/// 发起授权时返回给前端：打开 `authorize_url`，把回调里的 code 与 state 交回完成命令。
+#[derive(serde::Serialize)]
+pub struct McpOAuthBeginView {
+    pub authorize_url: String,
+    pub state: String,
+    pub redirect_uri: String,
+}
+
+fn load_token_set(
+    db: &rusqlite::Connection,
+    id: i64,
+) -> Result<Option<crate::mcp::oauth::TokenSet>, String> {
+    let Some(raw) = crate::mcp::config::oauth_token(db, id)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str(&raw).ok())
+}
+
+fn store_token_set(
+    db: &rusqlite::Connection,
+    id: i64,
+    t: &crate::mcp::oauth::TokenSet,
+) -> Result<(), String> {
+    let json = serde_json::to_string(t).map_err(|e| e.to_string())?;
+    crate::mcp::config::set_oauth_token(db, id, &json)?;
+    crate::mcp::set_cached_token(id, Some(t.access_token.clone()));
+    Ok(())
+}
+
+fn clear_token_set(db: &rusqlite::Connection, id: i64) -> Result<(), String> {
+    crate::mcp::config::set_oauth_token(db, id, "")?;
+    crate::mcp::set_cached_token(id, None);
+    Ok(())
+}
+
+/// token 变化后重连，让 `HttpTransport` 用上新凭据。
+async fn mcp_reconnect(state: &State<'_, AppState>, cfg: &crate::mcp::McpServerConfig) {
+    crate::mcp::disconnect_server(cfg.id).await;
+    if cfg.enabled {
+        let cwd = mcp_cwd(state);
+        let _ = crate::mcp::connect_server(cfg, cwd).await;
+    }
+}
+
+fn mcp_oauth_event(name: &str, what: &str) {
+    crate::security::log_simple(
+        crate::security::Kind::McpOAuth,
+        "",
+        name,
+        what,
+        "mcp_oauth",
+    );
+    crate::mcp::diag(&format!("OAuth {what} server={name}"));
+}
+
+#[tauri::command]
+pub async fn mcp_oauth_begin(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpOAuthBeginView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::config::get(&db, id)?
+    }
+    .ok_or_else(|| "服务器不存在".to_string())?;
+    if !cfg.remote.needs_oauth() {
+        return Err("这台服务器未启用 OAuth 认证".to_string());
+    }
+    let pkce = crate::mcp::oauth::new_pkce()?;
+    let discovery = crate::mcp::oauth::discover(&cfg.remote.server_url).await;
+    let ep = crate::mcp::oauth::resolve_endpoints(
+        &cfg.remote.server_url,
+        discovery.as_deref(),
+    )?;
+    let authorize_url = crate::mcp::oauth::authorization_url(
+        &ep,
+        &cfg.remote.oauth_client_id,
+        &pkce,
+        "mcp:tools mcp:resources",
+    )?;
+    crate::mcp::oauth::remember(
+        pkce.state.clone(),
+        crate::mcp::oauth::Pending {
+            server_id: id,
+            verifier: pkce.verifier.clone(),
+            client_id: cfg.remote.oauth_client_id.clone(),
+            token_url: ep.token.clone(),
+            created_at: crate::mcp::oauth::now_secs(),
+        },
+    );
+    Ok(McpOAuthBeginView {
+        authorize_url,
+        state: pkce.state,
+        redirect_uri: crate::mcp::oauth::REDIRECT_URI.to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn mcp_oauth_complete(
+    state: State<'_, AppState>,
+    id: i64,
+    code: String,
+    auth_state: String,
+) -> Result<McpServerView, String> {
+    let p = crate::mcp::oauth::take(&auth_state, id)?;
+    let form = crate::mcp::oauth::token_form_code(&p.client_id, code.trim(), &p.verifier);
+    let ts = crate::mcp::oauth::exchange(&p.token_url, form).await?;
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        store_token_set(&db, id, &ts)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    mcp_oauth_event(&cfg.name, "授权完成");
+    mcp_reconnect(&state, &cfg).await;
+    Ok(mcp_view(&cfg).await)
+}
+
+#[tauri::command]
+pub async fn mcp_oauth_refresh(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpServerView, String> {
+    let (cfg, existing) = {
+        let db = state.db.lock().map_err(lock_err)?;
+        let cfg = crate::mcp::config::get(&db, id)?
+            .ok_or_else(|| "服务器不存在".to_string())?;
+        (cfg, load_token_set(&db, id)?)
+    };
+    let Some(t) = existing else {
+        return Err("尚无凭据，请先完成授权".to_string());
+    };
+    if !crate::mcp::oauth::is_expired(&t, crate::mcp::oauth::now_secs()) {
+        return Ok(mcp_view(&cfg).await);
+    }
+    let Some(refresh) = t.refresh_token.clone() else {
+        {
+            let db = state.db.lock().map_err(lock_err)?;
+            clear_token_set(&db, id)?;
+        }
+        return Err("凭据已过期且没有刷新令牌，请重新授权".to_string());
+    };
+    let discovery = crate::mcp::oauth::discover(&cfg.remote.server_url).await;
+    let ep = crate::mcp::oauth::resolve_endpoints(
+        &cfg.remote.server_url,
+        discovery.as_deref(),
+    )?;
+    let form = crate::mcp::oauth::token_form_refresh(&cfg.remote.oauth_client_id, &refresh);
+    match crate::mcp::oauth::exchange(&ep.token, form).await {
+        Ok(next) => {
+            // 显式块：MutexGuard 必须在任何 await 之前离开词法作用域，
+            // 否则 Tauri 命令的 future 不是 Send（drop() 不缩短词法作用域）。
+            {
+                let db = state.db.lock().map_err(lock_err)?;
+                store_token_set(&db, id, &next)?;
+            }
+            mcp_oauth_event(&cfg.name, "凭据已刷新");
+            mcp_reconnect(&state, &cfg).await;
+            Ok(mcp_view(&cfg).await)
+        }
+        Err(e) => {
+            // 失败降级为「需重新授权」：清掉失效 token，不静默重试、不无限循环
+            {
+                let db = state.db.lock().map_err(lock_err)?;
+                clear_token_set(&db, id)?;
+            }
+            Err(format!("刷新失败，需重新授权：{e}"))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn mcp_oauth_clear(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<McpServerView, String> {
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        clear_token_set(&db, id)?;
+        crate::mcp::config::get(&db, id)?.ok_or_else(|| "服务器不存在".to_string())?
+    };
+    mcp_oauth_event(&cfg.name, "授权已撤销");
+    mcp_reconnect(&state, &cfg).await;
+    Ok(mcp_view(&cfg).await)
+}
+
 /// 列出全部服务器（含实时状态与工具数）。
 #[tauri::command]
 pub async fn mcp_list_servers(
@@ -2733,7 +2920,16 @@ pub async fn mcp_list_servers(
 ) -> Result<Vec<McpServerView>, String> {
     let list = {
         let db = state.db.lock().map_err(lock_err)?;
-        crate::mcp::config::list(&db)?
+        let list = crate::mcp::config::list(&db)?;
+        // 预热进程内 token 缓存：列表页打开后连接远程服务器就能带上凭据
+        for cfg in &list {
+            if cfg.has_token {
+                if let Some(t) = load_token_set(&db, cfg.id).ok().flatten() {
+                    crate::mcp::set_cached_token(cfg.id, Some(t.access_token));
+                }
+            }
+        }
+        list
     };
     let mut out = Vec::with_capacity(list.len());
     for cfg in &list {

@@ -376,3 +376,35 @@ export function getPrompt(
 ): Promise<McpPromptMessageView[]> {
   return invoke("mcp_get_prompt", { id, name, arguments: args, sessionId });
 }
+
+// ── OAuth 2.1 + PKCE（v0.8.2 M3-04）────────────────────────────
+
+export interface McpOAuthBeginView {
+  authorize_url: string;
+  state: string;
+  redirect_uri: string;
+}
+
+/** 生成 PKCE 与 state，返回待打开的授权页地址。 */
+export function oauthBegin(id: number): Promise<McpOAuthBeginView> {
+  return invoke("mcp_oauth_begin", { id });
+}
+
+/** 用户从回环回调地址复制 code 后交回；state 一次性，后端校验并丢弃。 */
+export function oauthComplete(
+  id: number,
+  code: string,
+  authState: string,
+): Promise<McpServerView> {
+  return invoke("mcp_oauth_complete", { id, code, authState });
+}
+
+/** 过期时自动刷新并重连；失败会清除失效凭据并要求重新授权。 */
+export function oauthRefresh(id: number): Promise<McpServerView> {
+  return invoke("mcp_oauth_refresh", { id });
+}
+
+/** 撤销授权：清除密文 token 与进程内缓存并断开重连。 */
+export function oauthClear(id: number): Promise<McpServerView> {
+  return invoke("mcp_oauth_clear", { id });
+}

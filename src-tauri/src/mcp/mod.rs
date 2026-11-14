@@ -12,6 +12,7 @@ pub mod capabilities;
 pub mod client;
 pub mod config;
 pub mod http;
+pub mod oauth;
 pub mod prompts;
 pub mod reconnect;
 pub mod resources;
@@ -109,7 +110,7 @@ pub async fn connect_server(
         if cfg.remote.is_remote() {
             Some(crate::mcp::http::HttpSpec {
                 url: cfg.remote.server_url.clone(),
-                token: None,
+                token: crate::mcp::cached_token(cfg.id),
             })
         } else {
             None
@@ -319,6 +320,32 @@ fn extract_tool_content(result: &serde_json::Value) -> String {
 /// 失败静默，与更新日志同策略。
 pub fn diag(info: &str) {
     crate::update_log::log_event("mcp", info);
+}
+
+/// 进程内 access_token 缓存（M3-04）。明文只存在内存，库里是 `secure` 密文；
+/// 每次列表/授权/刷新时预热，连接建立时读取，避免把 DB 连接传进连接层。
+fn token_cache() -> &'static std::sync::Mutex<std::collections::HashMap<i64, String>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<i64, String>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn set_cached_token(id: i64, token: Option<String>) {
+    if let Ok(mut m) = token_cache().lock() {
+        match token {
+            Some(t) => {
+                m.insert(id, t);
+            }
+            None => {
+                m.remove(&id);
+            }
+        }
+    }
+}
+
+pub fn cached_token(id: i64) -> Option<String> {
+    token_cache().lock().ok().and_then(|m| m.get(&id).cloned())
 }
 
 /// 关闭全部连接（应用退出时调用）。
