@@ -12,6 +12,7 @@ pub mod capabilities;
 pub mod client;
 pub mod config;
 pub mod http;
+pub mod market;
 pub mod oauth;
 pub mod prompts;
 pub mod reconnect;

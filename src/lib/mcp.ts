@@ -411,3 +411,25 @@ export function oauthRefresh(id: number): Promise<McpServerView> {
 export function oauthClear(id: number): Promise<McpServerView> {
   return invoke("mcp_oauth_clear", { id });
 }
+
+// ── 服务器市场（M3-07）──────────────────────────────────────────
+
+export interface McpMarketEntry {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  server_url: string;
+  /** "builtin" | "remote" */
+  source: string;
+}
+
+export function marketList(): Promise<McpMarketEntry[]> {
+  return invoke("mcp_market_list", {});
+}
+
+/** 只写入配置（默认禁用 + strict），不会自动连接或授权。 */
+export function marketInstall(entryId: string): Promise<McpServerView> {
+  return invoke("mcp_market_install", { entryId });
+}

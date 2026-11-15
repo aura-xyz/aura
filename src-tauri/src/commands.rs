@@ -2726,6 +2726,42 @@ fn record_mcp_activity(
     let _ = db::add_timeline_entry(&db, &entry);
 }
 
+// ── 服务器市场（M3-07）───────────────────────────────────────────
+
+/// 内置清单 + 官方/镜像远端清单；拉取失败静默回退内置。
+#[tauri::command]
+pub async fn mcp_market_list() -> Result<Vec<crate::mcp::market::MarketEntry>, String> {
+    Ok(crate::mcp::market::load_catalog().await)
+}
+
+/// 一键安装 = 写配置 + 禁用 + strict，不连接、不授权、不放宽信任。
+#[tauri::command]
+pub async fn mcp_market_install(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<McpServerView, String> {
+    let catalog = crate::mcp::market::load_catalog().await;
+    let e = catalog
+        .iter()
+        .find(|x| x.id == entry_id)
+        .ok_or_else(|| "市场中找不到这个服务器".to_string())?
+        .clone();
+    let cfg = {
+        let db = state.db.lock().map_err(lock_err)?;
+        crate::mcp::market::install(&db, &e)?
+    };
+    crate::security::log_simple(
+        crate::security::Kind::RiskyInstall,
+        "",
+        &cfg.name,
+        "从服务器市场安装（默认禁用）",
+        "mcp_market",
+    );
+    crate::mcp::diag(&format!("市场安装 {} source={}", cfg.name, e.source));
+    crate::mcp::emit("mcp:status", serde_json::json!({ "serverId": cfg.id }));
+    Ok(mcp_view(&cfg).await)
+}
+
 // ── OAuth 2.1 + PKCE（M3-04）─────────────────────────────────────
 
 /// 发起授权时返回给前端：打开 `authorize_url`，把回调里的 code 与 state 交回完成命令。

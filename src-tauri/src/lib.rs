@@ -41,7 +41,7 @@ use commands::{
     mcp_set_server_enabled, mcp_server_status, mcp_rescan_tools, mcp_test_connect,
     mcp_list_resources, mcp_read_resource, mcp_list_prompts, mcp_get_prompt,
     mcp_set_server_policy, mcp_oauth_begin, mcp_oauth_complete, mcp_oauth_refresh,
-    mcp_oauth_clear,
+    mcp_oauth_clear, mcp_market_list, mcp_market_install,
     get_skill_mirror, set_skill_mirror,
     AppState,
 };
@@ -562,6 +562,8 @@ pub fn run() {
             mcp_oauth_complete,
             mcp_oauth_refresh,
             mcp_oauth_clear,
+            mcp_market_list,
+            mcp_market_install,
             get_skill_mirror,
             set_skill_mirror,
             list_shells,
