@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   ChevronRight,
   CircleAlert,
+  KeyRound,
   Pencil,
+  Store,
   Plug,
   Plus,
   RefreshCw,
@@ -16,6 +18,8 @@ import {
 import Switch from "../components/Switch";
 import McpResourcePanel from "../components/McpResourcePanel";
 import McpPromptPanel from "../components/McpPromptPanel";
+import McpOAuthDialog from "../components/McpOAuthDialog";
+import McpMarketDialog from "../components/McpMarketDialog";
 import { useStore } from "../store";
 import {
   MCP_STATUS_META,
@@ -57,6 +61,9 @@ export default function McpPage({ onClose }: Props) {
     { mode: "add" } | { mode: "edit"; server: McpServerView } | null
   >(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  // M3-08：远程授权与市场安装的浮层
+  const [oauthServer, setOauthServer] = useState<McpServerView | null>(null);
+  const [marketOpen, setMarketOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -122,6 +129,14 @@ export default function McpPage({ onClose }: Props) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setMarketOpen(true)}
+            className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[11px] text-subtle transition-colors hover:border-brand hover:text-brand"
+          >
+            <Store size={11} />
+            服务器市场
+          </button>
           <button
             type="button"
             onClick={() => setEditing({ mode: "add" })}
@@ -197,14 +212,38 @@ export default function McpPage({ onClose }: Props) {
                     >
                       {policyLabel(s.policy)}
                     </span>
+                    {s.remote.server_url && (
+                      <span className="shrink-0 rounded-full border border-line px-1.5 py-0.5 text-[9px] text-subtle">
+                        远程
+                      </span>
+                    )}
+                    {s.remote.auth_mode === "oauth" && (
+                      <span
+                        className={`shrink-0 text-[9px] ${
+                          s.has_token ? "text-success" : "text-warning"
+                        }`}
+                      >
+                        {s.has_token ? "已授权" : "待授权"}
+                      </span>
+                    )}
                   </span>
                   <span className="mt-0.5 block truncate font-mono text-[11px] text-subtle">
-                    {commandSummary(s) || "—"}
+                    {commandSummary(s) || s.remote.server_url || "—"}
                   </span>
                 </button>
                 <span className="shrink-0 text-[10px] text-subtle">
                   {s.tool_count} 工具
                 </span>
+                {s.remote.auth_mode === "oauth" && (
+                  <button
+                    type="button"
+                    onClick={() => setOauthServer(s)}
+                    aria-label={`授权 ${s.name}`}
+                    className="shrink-0 rounded-md p-1 text-subtle transition-colors hover:bg-bubble hover:text-brand"
+                  >
+                    <KeyRound size={13} />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditing({ mode: "edit", server: s })}
@@ -247,6 +286,21 @@ export default function McpPage({ onClose }: Props) {
           server={servers.find((s) => s.id === detailId)}
           onClose={() => setDetailId(null)}
           onChanged={() => void refresh()}
+        />
+      )}
+
+      {oauthServer && (
+        <McpOAuthDialog
+          server={oauthServer}
+          onClose={() => setOauthServer(null)}
+          onDone={() => void refresh()}
+        />
+      )}
+
+      {marketOpen && (
+        <McpMarketDialog
+          onClose={() => setMarketOpen(false)}
+          onInstalled={() => void refresh()}
         />
       )}
 
