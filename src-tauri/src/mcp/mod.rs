@@ -10,6 +10,9 @@
 
 pub mod capabilities;
 pub mod client;
+#[cfg(test)]
+mod acceptance_p3;
+
 pub mod config;
 pub mod http;
 pub mod market;

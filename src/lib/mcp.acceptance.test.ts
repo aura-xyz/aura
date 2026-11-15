@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultPolicy,
   loadAllPrompts,
+  marketInstall,
+  oauthComplete,
   readResource,
   setServerPolicy,
 } from "./mcp";
@@ -70,6 +72,19 @@ describe("命令封装的参数契约", () => {
       id: 7,
       uri: "file:///a.txt",
       sessionId: "s1",
+    });
+  });
+
+  it("M3-07/08 新命令的参数名按 camelCase 传递", async () => {
+    await marketInstall("filesystem");
+    expect(invokeMock).toHaveBeenCalledWith("mcp_market_install", {
+      entryId: "filesystem",
+    });
+    await oauthComplete(7, "CODE", "S1");
+    expect(invokeMock).toHaveBeenCalledWith("mcp_oauth_complete", {
+      id: 7,
+      code: "CODE",
+      authState: "S1",
     });
   });
 });
