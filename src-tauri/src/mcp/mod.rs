@@ -16,6 +16,7 @@ pub mod oauth;
 pub mod prompts;
 pub mod reconnect;
 pub mod resources;
+pub mod scheduler;
 pub mod session;
 pub mod transport;
 
@@ -153,7 +154,9 @@ pub async fn call_tool(
         .get(server_id)
         .await
         .ok_or_else(|| "MCP 服务器未连接".to_string())?;
-    let result = conn.call_tool(original_name, args).await?;
+    // M3-06：在 per-server 串行/信号量之上加全局并发与超时约束；
+    // 关闭 concurrent 时 per-server 行为与 v0.8.1 完全一致。
+    let result = scheduler::with_quota(conn.call_tool(original_name, args)).await?;
     let text = map_tool_result(&result)?;
     Ok(annotate_injection(text, original_name))
 }
